@@ -176,6 +176,17 @@ impl Engine {
             snapshots: snapshots.clone(),
         });
 
+        // On Android the Cefrium SDK owns CEF: its Java layer loads libcef,
+        // starts Chromium and runs the child processes, and the browser is a
+        // `CefriumBrowser` of the activity.  The engine then provides Tor and
+        // the key manager only.
+        if cfg!(target_os = "android") {
+            let engine = Arc::new(Self { state });
+            *ENGINE.get_or_init(|| Mutex::new(None)).lock().unwrap() = Some(engine.state.clone());
+            log::info!("the engine is running (Tor and the key manager)");
+            return Ok(engine);
+        }
+
         let bridge = Arc::new(OvBridge::new(state.clone()));
         let (mut app, mut client) = ov_cef::build_engine(
             config,
@@ -376,6 +387,8 @@ pub mod jni_api {
             Err(err) => log::error!("cannot obtain the Java VM: {err}"),
         }
 
+        native::cache_bridge_class(&mut env);
+
         let started = std::panic::catch_unwind(|| {
             Engine::start(&files_dir, hidden_service_only != 0, require_auth != 0)
         })
@@ -398,6 +411,24 @@ pub mod jni_api {
                     &[native::NativeArg::String(format!("{err:#}"))],
                 );
                 0
+            }
+        }
+    }
+
+    /// The proxy URL of the embedded Tor client (`socks5://127.0.0.1:port`),
+    /// or `null` when the engine is not running.
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeSocksProxy(
+        env: JNIEnv,
+        _this: JObject,
+    ) -> jstring {
+        let Some(state) = engine() else {
+            return std::ptr::null_mut();
+        };
+        match env.new_string(format!("socks5://{}", state.tor.socks_endpoint())) {
+            Ok(value) => value.into_raw(),
+            Err(err) => {
+                log::error!("cannot return the proxy URL: {err}");
+                std::ptr::null_mut()
             }
         }
     }

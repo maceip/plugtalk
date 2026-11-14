@@ -8,15 +8,15 @@ import java.util.Properties
 
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
     // The Compose compiler plugin of Kotlin 2.x; it has to use the version
     // of the Kotlin plugin.
     id("org.jetbrains.kotlin.plugin.compose")
+    id("com.cefrium")
 }
 
 android {
     namespace = "dev.onionvault"
-    compileSdk = 35
+    compileSdk = 37
     ndkVersion = "27.2.12479018"
 
     defaultConfig {
@@ -28,7 +28,9 @@ android {
 
         ndk {
             // Trap ships a single ABI: the arm64 one.
-            abiFilters += listOf("arm64-v8a")
+            // arm64 for phones; x86_64 for emulators (an arm64 Chromium crashes
+            // under the ARM translation of x86_64 emulators).
+            abiFilters += listOf("arm64-v8a", "x86_64")
         }
 
     }
@@ -60,6 +62,12 @@ android {
 
     dependencies {
         // The biometric prompt confirms the use of the master wrapping key.
+        // The CEF port for Android: Chromium's Java layer, libcef.so, the
+        // resources and the child-process services, merged into the APK.
+        implementation("com.cefrium:cefrium-sdk:0.19.0")
+        implementation("androidx.appcompat:appcompat:1.7.0")
+        implementation("androidx.mediarouter:mediarouter:1.7.0")
+        implementation("androidx.browser:browser:1.8.0")
         implementation("androidx.biometric:biometric:1.1.0")
         implementation("androidx.core:core-ktx:1.13.1")
 
@@ -85,7 +93,7 @@ android {
         // integration can prove that every screen inflates without an
         // emulator and without a device.
         testImplementation("junit:junit:4.13.2")
-        testImplementation("org.robolectric:robolectric:4.14.1")
+        testImplementation("org.robolectric:robolectric:4.18")
         testImplementation("androidx.compose.ui:ui-test-junit4")
     }
 
@@ -102,15 +110,10 @@ android {
         }
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-
     packaging {
         jniLibs {
-            useLegacyPackaging = false
-            // The CEF runtime is a shared object with its own resources.
-            pickFirsts += "**/libcef.so"
+            // Chromium reads its native libraries from disk.
+            useLegacyPackaging = true
         }
         resources {
             excludes += setOf("META-INF/*.kotlin_module", "kotlin/**", "DebugProbesKt.bin")
@@ -153,6 +156,7 @@ val cargoBuild by tasks.registering(Exec::class) {
     commandLine(
         "cargo", "ndk",
         "-t", "arm64-v8a",
+        "-t", "x86_64",
         // The API level of the NDK: `libnativewindow`, which carries the
         // `ANativeWindow` of the off-screen rendering, exists from API 24;
         // the application supports API 29 and later.
@@ -170,14 +174,6 @@ val cargoBuild by tasks.registering(Exec::class) {
 }
 
 /** Copy the prebuilt CEF runtime into the APK. */
-val copyCefRuntime by tasks.registering(Copy::class) {
-    group = "build"
-    description = "Copies libcef.so of the CEF Android distribution into the APK."
-
-    from(cefRoot?.let { file("$it/lib/libcef.so") })
-    into(rootProject.file("app/src/main/jniLibs/arm64-v8a"))
-    onlyIf { cefRoot != null }
-}
 
 /**
  * Copy the licence documents into the assets of the APK.
@@ -197,15 +193,16 @@ val copyLegalNotices by tasks.registering(Copy::class) {
     from(rootProject.file("../licenses")) {
         include("*.txt")
     }
-    from(cefRoot?.let { file("$it/NOTICE.txt") }) {
-        rename { "CEFRIUM-NOTICE.txt" }
+    cefRoot?.let { root ->
+        from(file("$root/NOTICE.txt")) {
+            rename { "CEFRIUM-NOTICE.txt" }
+        }
     }
     into(rootProject.file("app/src/main/assets/licenses"))
 }
 
 tasks.named("preBuild") {
     dependsOn(cargoBuild)
-    dependsOn(copyCefRuntime)
     dependsOn(copyLegalNotices)
 }
 

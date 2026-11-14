@@ -47,3 +47,9 @@ pub use aarch64_apple_darwin::*;
 mod aarch64_unknown_linux_gnu;
 #[cfg(all(target_os = "android", target_arch = "aarch64"))]
 pub use aarch64_unknown_linux_gnu::*;
+
+// x86_64 Android emulators: same LP64 C layout as x86_64 Linux.
+#[cfg(all(target_os = "android", target_arch = "x86_64"))]
+mod x86_64_unknown_linux_gnu;
+#[cfg(all(target_os = "android", target_arch = "x86_64"))]
+pub use x86_64_unknown_linux_gnu::*;

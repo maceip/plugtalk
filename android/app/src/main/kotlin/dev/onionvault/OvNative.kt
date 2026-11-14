@@ -18,9 +18,8 @@ object OvNative {
      * letting an [UnsatisfiedLinkError] kill the process.
      */
     val loadError: Throwable? = try {
-        // libcef.so carries the CEF runtime that libonion_vault.so links
-        // against; load it first, then the engine with the JNI entry points.
-        System.loadLibrary("cef")
+        // libcef.so is loaded by Cefrium (TrapApplication) before this runs;
+        // libonion_vault.so links against it and carries the JNI entry points.
         System.loadLibrary("onion_vault")
         null
     } catch (error: Throwable) {
@@ -39,10 +38,13 @@ object OvNative {
         requireAuth: Boolean,
     ): Boolean
 
+    /** The Tor proxy URL (`socks5://127.0.0.1:port`), or `null`. */
+    external fun nativeSocksProxy(): String?
+
     /** Stop the engine. */
     external fun nativeShutdown()
 
-    /** Attach the surface of the [OvSurfaceView] to the renderer. */
+    /** Attach the surface to the renderer. */
     external fun nativeCreateSurface(surface: Surface, width: Int, height: Int)
 
     /** Detach the surface. */
@@ -161,7 +163,7 @@ object OvNative {
     /**
      * Run a CEF subprocess.
      *
-     * The subprocesses are started by [CefService]; the command line is
+     * The subprocesses are started by the CEF service; the command line is
      * passed as a list of switches.
      */
     external fun nativeRunSubprocess(processType: String, switches: Array<String>): Int

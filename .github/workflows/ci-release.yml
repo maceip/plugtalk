@@ -158,7 +158,7 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "25"  # the Cefrium SDK ships Java 25 bytecode (AGP 9.4+, JDK 25)
 
       - name: Set up Gradle
         # `setup-gradle` provides the Gradle caches (~/.gradle/caches, the
@@ -189,7 +189,7 @@ jobs:
           echo "The command line tools of the SDK are ${sdkmanager}."
 
       - name: Install the Android SDK packages
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+        run: sdkmanager "platforms;android-37.0" "build-tools;37.0.0" "platform-tools"
 
       - name: Install the Android NDK
         # NDK r27c, the version the Gradle build declares as `ndkVersion`.
@@ -217,6 +217,9 @@ jobs:
           echo "ANDROID_NDK_HOME=${ndk_root}" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_ROOT=${ndk_root}" >> "$GITHUB_ENV"
           echo "CC_aarch64_linux_android=${ndk_bin}/aarch64-linux-android29-clang" >> "$GITHUB_ENV"
+          echo "CC_x86_64_linux_android=${ndk_bin}/x86_64-linux-android29-clang" >> "$GITHUB_ENV"
+          echo "AR_x86_64_linux_android=${ndk_bin}/llvm-ar" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER=${ndk_bin}/x86_64-linux-android29-clang" >> "$GITHUB_ENV"
           echo "CXX_aarch64_linux_android=${ndk_bin}/aarch64-linux-android29-clang++" >> "$GITHUB_ENV"
           echo "AR_aarch64_linux_android=${ndk_bin}/llvm-ar" >> "$GITHUB_ENV"
           echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${ndk_bin}/aarch64-linux-android29-clang" >> "$GITHUB_ENV"
@@ -231,7 +234,7 @@ jobs:
         # setup is complete.
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android
+          targets: aarch64-linux-android,x86_64-linux-android
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
@@ -264,9 +267,13 @@ jobs:
             "https://codeberg.org/cefrium/cef-android/releases/download/v0.19.0/cefrium-sdk-0.19.0.aar"
           echo "efb3f50dede4485215560455e16836671a7ebae32a35559bcfd4456d6667978b  cef-runtime/cefrium-sdk.aar" \
             | sha256sum --check --strict -
-          unzip -q cef-runtime/cefrium-sdk.aar 'jni/arm64-v8a/libcef.so' 'assets/*' -d cef-runtime/unpacked
-          mkdir -p "${CEF_ANDROID_ROOT}/lib" "${CEF_ANDROID_ROOT}/locales"
+          unzip -q cef-runtime/cefrium-sdk.aar 'jni/arm64-v8a/libcef.so' 'jni/x86_64/libcef.so' 'assets/*' -d cef-runtime/unpacked
+          # One libcef.so per ABI: the Rust library is linked for arm64 (phones)
+          # and x86_64 (emulators).  The APK gets libcef.so from the SDK AAR.
+          mkdir -p "${CEF_ANDROID_ROOT}/lib/arm64-v8a" "${CEF_ANDROID_ROOT}/lib/x86_64" "${CEF_ANDROID_ROOT}/locales"
           cp cef-runtime/unpacked/jni/arm64-v8a/libcef.so "${CEF_ANDROID_ROOT}/lib/"
+          cp cef-runtime/unpacked/jni/arm64-v8a/libcef.so "${CEF_ANDROID_ROOT}/lib/arm64-v8a/"
+          cp cef-runtime/unpacked/jni/x86_64/libcef.so "${CEF_ANDROID_ROOT}/lib/x86_64/"
           # The asset manager renames the resource files; the original names
           # are restored, because Chromium reads them by name.
           for file in cef-runtime/unpacked/assets/*.pak* cef-runtime/unpacked/assets/icudtl.dat*; do
@@ -335,8 +342,9 @@ jobs:
           for entry in \
             "lib/arm64-v8a/libcef.so" \
             "lib/arm64-v8a/libonion_vault.so" \
-            "assets/cef/icudtl.dat" \
-            "assets/cef/resources.pak" \
+            "lib/x86_64/libcef.so" \
+            "lib/x86_64/libonion_vault.so" \
+            "classes.dex" \
             "assets/licenses/LGPL-3.0.txt" \
             "assets/licenses/GPL-3.0.txt" \
             "assets/licenses/LGPL-2.1.txt" \

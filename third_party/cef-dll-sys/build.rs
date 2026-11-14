@@ -33,6 +33,27 @@ fn check_only() -> bool {
         .unwrap_or(false)
 }
 
+/// The directory that holds `libcef.so` for the target: `lib/<abi>/` when
+/// the sysroot carries several ABIs, otherwise `lib/`.
+fn cef_lib_dir(root: &Path) -> PathBuf {
+    let target = env::var("TARGET").unwrap_or_default();
+    let abi = if target.starts_with("aarch64") {
+        "arm64-v8a"
+    } else if target.starts_with("x86_64") {
+        "x86_64"
+    } else if target.starts_with("armv7") {
+        "armeabi-v7a"
+    } else {
+        ""
+    };
+    let per_abi = root.join("lib").join(abi);
+    if !abi.is_empty() && per_abi.join("libcef.so").is_file() {
+        per_abi
+    } else {
+        root.join("lib")
+    }
+}
+
 /// `true` when the target triple is an Android ABI.
 fn is_android(target: &str) -> bool {
     target.contains("android")
@@ -88,7 +109,7 @@ fn build_android(_target: &str, out_dir: &Path) -> anyhow::Result<()> {
         );
     };
 
-    let lib_dir = root.join("lib");
+    let lib_dir = cef_lib_dir(&root);
     let wrapper_lib_dir = root.join("libcef_dll_wrapper");
 
     // The CEF Android SDK ships the shared object directly in `lib/`.

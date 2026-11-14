@@ -10,6 +10,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -178,7 +179,9 @@ fun BrowserScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(OnionPalette.Surface),
+            .background(OnionPalette.Surface)
+            // Keep the address bar above the soft keyboard.
+            .imePadding(),
     ) {
         TopBar(
             state = state,

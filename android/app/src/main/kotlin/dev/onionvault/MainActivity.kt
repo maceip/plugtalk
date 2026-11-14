@@ -2,7 +2,7 @@ package dev.onionvault
 
 import android.os.Bundle
 import android.util.Log
-import android.view.Choreographer
+import com.cefrium.CefriumBrowser
 import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.LaunchedEffect
@@ -43,9 +43,9 @@ import org.json.JSONObject
  *
  * The activity owns
  *
- *   * the off-screen rendered page (a [OvSurfaceView] inside the Compose
+ *   * the page (the surface of a [CefriumBrowser] inside the Compose
  *     hierarchy),
- *   * the message pump of CEF (a [Choreographer] callback), and
+ *   * the Cefrium browser (Chromium; JavaScript off, traffic through Tor), and
  *   * the state of the screen, which is a pure value that the Compose
  *     screen renders.
  *
@@ -70,7 +70,7 @@ class MainActivity : FragmentActivity(), OvBridge.Listener {
     }
 
     /** The off-screen rendered page. */
-    private lateinit var surface: OvSurfaceView
+    private var browser: CefriumBrowser? = null
 
     /** The back stack of the browser. */
     private val backStack = OnionBackStackManager()
@@ -83,14 +83,6 @@ class MainActivity : FragmentActivity(), OvBridge.Listener {
 
     /** Why the engine did not start, shown instead of the browser. */
     private var startupFailure by mutableStateOf<String?>(null)
-
-    /** The message pump of CEF. */
-    private val frameCallback: Choreographer.FrameCallback = Choreographer.FrameCallback {
-        OvNative.nativeDoMessageLoopWork()
-        if (!isFinishing) {
-            Choreographer.getInstance().postFrameCallback(frameCallback)
-        }
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -133,12 +125,13 @@ class MainActivity : FragmentActivity(), OvBridge.Listener {
                 onZoomOut = { zoom(-1) },
                 onLoadLegalLines = { name -> LegalNotices.read(this, name) },
                 surface = {
-                    AndroidView(
-                        factory = { context ->
-                            OvSurfaceView(context).also { view -> surface = view }
-                        },
-                        modifier = Modifier.fillMaxSize(),
-                    )
+                    val page = browser
+                    if (page != null) {
+                        AndroidView(
+                            factory = { page.surfaceContainer },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
                 },
             )
         }
@@ -156,29 +149,22 @@ class MainActivity : FragmentActivity(), OvBridge.Listener {
 
     override fun onResume() {
         super.onResume()
-        if (engineReady) {
-            Choreographer.getInstance().postFrameCallback(frameCallback)
-        }
+        browser?.onResume()
     }
 
     /**
-     * Load the native library, unpack the CEF resources and start the engine.
+     * Check Cefrium, start the native engine (Tor and the key manager) and
+     * create the browser.
      *
      * Returns `null` on success, otherwise a description of the failure.
      * Nothing here may throw: a failure is shown on screen, not a crash.
      */
     private fun startEngine(): String? {
+        // Cefrium (Chromium) is started by TrapApplication before any activity.
+        TrapApplication.cefriumFailure?.let { return it }
+
         OvNative.loadError?.let { error ->
             return "The native library could not be loaded: ${error.message ?: error}"
-        }
-
-        // The CEF resources (pak files, ICU data, locales) are unpacked from
-        // the assets into the private directory of the application.
-        try {
-            CefResources.unpack(this)
-        } catch (error: Throwable) {
-            Log.e(TAG, "cannot unpack the CEF resources", error)
-            return "The browser resources could not be unpacked: ${error.message ?: error}"
         }
 
         val started = try {
@@ -194,7 +180,50 @@ class MainActivity : FragmentActivity(), OvBridge.Listener {
         }
         // The native side reports the reason through showError, which
         // replaces this generic message when it arrives.
-        return if (started) null else getString(R.string.engine_failed)
+        if (!started) {
+            return getString(R.string.engine_failed)
+        }
+
+        // Every request of the page goes through the SOCKS5 listener of the
+        // embedded Tor client; without it nothing is loaded at all.
+        val proxy = try {
+            OvNative.nativeSocksProxy()
+        } catch (error: Throwable) {
+            Log.e(TAG, "nativeSocksProxy threw", error)
+            null
+        } ?: return "The Tor proxy is not available."
+
+        return try {
+            val page = CefriumBrowser.createWithSurface(this)
+            page.setJavaScriptEnabled(false)
+            if (!page.setProxy(proxy)) {
+                page.close()
+                return "The browser refused the Tor proxy $proxy."
+            }
+            page.setCallback(object : CefriumBrowser.Callback() {
+                override fun onUrlChanged(url: String?) {
+                    uiState = uiState.copy(url = url ?: uiState.url)
+                }
+
+                override fun onTitleChanged(title: String?) {
+                    uiState = uiState.copy(title = title ?: uiState.title)
+                }
+
+                override fun onLoadingStateChanged(
+                    isLoading: Boolean,
+                    canGoBack: Boolean,
+                    canGoForward: Boolean,
+                ) {
+                    uiState = uiState.copy(canGoBack = canGoBack)
+                }
+            })
+            browser = page
+            Log.i(TAG, "the browser is ready, proxy $proxy")
+            null
+        } catch (error: Throwable) {
+            Log.e(TAG, "cannot create the browser", error)
+            "The browser could not be created: ${error.message ?: error}"
+        }
     }
 
     /** Show why the engine did not start instead of closing the application. */
@@ -214,7 +243,7 @@ class MainActivity : FragmentActivity(), OvBridge.Listener {
     }
 
     override fun onPause() {
-        Choreographer.getInstance().removeFrameCallback(frameCallback)
+        browser?.onPause()
         super.onPause()
     }
 
@@ -225,6 +254,8 @@ class MainActivity : FragmentActivity(), OvBridge.Listener {
 
     override fun onDestroy() {
         OvBridge.setListener(null)
+        browser?.close()
+        browser = null
         if (engineReady) {
             engineReady = false
             OvNative.nativeShutdown()
@@ -239,15 +270,15 @@ class MainActivity : FragmentActivity(), OvBridge.Listener {
             return
         }
         // A bare host name is a hidden service.
-        val normalized = if (target.contains("://")) target else "http://$target"
-        OvNative.nativeLoadUrl(normalized)
+        val normalized = if (target.contains("://") || target.startsWith("about:")) target else "http://$target"
+        browser?.loadUrl(normalized)
     }
 
     /** Fetch the page again over Tor. */
     private fun reloadLive() {
         val url = uiState.url
         if (url.isNotEmpty()) {
-            OvNative.nativeLoadUrl(url)
+            browser?.loadUrl(url)
         }
     }
 
@@ -259,7 +290,7 @@ class MainActivity : FragmentActivity(), OvBridge.Listener {
      * preview.
      */
     private fun goBack() {
-        OvNative.nativeGoBack()
+        browser?.goBack()
         backStack.refresh()
         uiState = uiState.copy(
             canGoBack = backStack.canGoBack,
@@ -269,7 +300,8 @@ class MainActivity : FragmentActivity(), OvBridge.Listener {
 
     /** Go forward to the next page of the history. */
     private fun goForward() {
-        if (OvNative.nativeGoForward()) {
+        browser?.goForward()
+        run {
             backStack.refresh()
             uiState = uiState.copy(
                 canGoBack = backStack.canGoBack,
@@ -323,7 +355,7 @@ class MainActivity : FragmentActivity(), OvBridge.Listener {
      */
     private fun zoom(direction: Int) {
         val level = (uiState.zoomLevel + direction * ZOOM_STEP).coerceIn(MIN_ZOOM, MAX_ZOOM)
-        OvNative.nativeSetZoom(level.toDouble())
+        browser?.setZoomLevel(level.toDouble())
         uiState = uiState.copy(zoomLevel = level)
     }
 
@@ -453,8 +485,8 @@ class MainActivity : FragmentActivity(), OvBridge.Listener {
             Log.w(TAG, "cannot read the DOM scan report", error)
             return
         }
-        val width = if (::surface.isInitialized) surface.width else 0
-        val height = if (::surface.isInitialized) surface.height else 0
+        val width = browser?.surfaceContainer?.width ?: 0
+        val height = browser?.surfaceContainer?.height ?: 0
         val fields = parseFields(report.optJSONArray("fields"), width, height)
         uiState = uiState.copy(pgp = uiState.pgp.copy(fields = fields))
     }

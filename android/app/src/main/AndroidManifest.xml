@@ -1,12 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-    Trap manifest.
-
-    The CEF subprocesses (renderer, GPU and utility process) run in dedicated
-    Android services: Android does not allow a plain fork()/exec() of a helper
-    binary, the subprocess has to be started through the ActivityManager so
-    that the platform gives it a process with the right SELinux label.
--->
+<!-- Trap manifest. The Chromium child-process services come from the Cefrium SDK AAR. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!-- The Tor transport needs the network; nothing else does. -->
@@ -17,6 +10,7 @@
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
     <application
+        android:name=".TrapApplication"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:enableOnBackInvokedCallback="true"
@@ -40,27 +34,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <!--
-            The CEF subprocesses.  Every process type gets its own service so
-            that the ActivityManager starts it in a separate process; the
-            command line of the subprocess is passed through the intent
-            extras (see CefService.kt).
-        -->
-        <service
-            android:name=".CefRenderService"
-            android:exported="false"
-            android:process=":cef_render" />
-
-        <service
-            android:name=".CefGpuService"
-            android:exported="false"
-            android:process=":cef_gpu" />
-
-        <service
-            android:name=".CefUtilityService"
-            android:exported="false"
-            android:process=":cef_utility" />
 
     </application>
 

@@ -18,33 +18,15 @@
 //!    assets directory so that `./gradlew assembleDebug` picks them up.
 
 use std::{
-    env, fs,
+    env,
     path::{Path, PathBuf},
 };
-
-/// Resources that must end up in `android/app/src/main/assets/cef/`.
-const CEF_RESOURCES: &[&str] = &[
-    "cef.pak",
-    "cef_100_percent.pak",
-    "cef_200_percent.pak",
-    "icudtl.dat",
-    "chrome_100_percent.pak",
-    "chrome_200_percent.pak",
-    // The Chromium names of the resources.  A CEF distribution uses the
-    // `cef_*` names, a plain Chromium build uses the `chrome_*` names and
-    // `resources.pak`; the engine reads the names it was built with, so
-    // every name that exists is copied.
-    "resources.pak",
-];
 
 fn main() {
     println!("cargo::rerun-if-changed=build.rs");
     println!("cargo::rerun-if-env-changed=CEF_ANDROID_ROOT");
     println!("cargo::rerun-if-env-changed=CEF_PATH");
     println!("cargo::rerun-if-env-changed=ONIONVAULT_CEF_CHECK_ONLY");
-
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    let assets_dir = manifest_dir.join("android/app/src/main/assets/cef");
 
     let Some(root) = cef_root() else {
         println!(
@@ -54,8 +36,8 @@ fn main() {
         return;
     };
 
+    // The Chromium resources are packaged by the Cefrium SDK AAR itself.
     link_cef(&root);
-    package_resources(&root, &assets_dir);
 }
 
 /// Root of the pre-extracted CEF distribution.
@@ -67,9 +49,30 @@ fn cef_root() -> Option<PathBuf> {
         .filter(|p| p.is_dir())
 }
 
+/// The directory that holds `libcef.so` for the target: `lib/<abi>/` when
+/// the sysroot carries several ABIs, otherwise `lib/`.
+fn cef_lib_dir(root: &Path) -> PathBuf {
+    let target = env::var("TARGET").unwrap_or_default();
+    let abi = if target.starts_with("aarch64") {
+        "arm64-v8a"
+    } else if target.starts_with("x86_64") {
+        "x86_64"
+    } else if target.starts_with("armv7") {
+        "armeabi-v7a"
+    } else {
+        ""
+    };
+    let per_abi = root.join("lib").join(abi);
+    if !abi.is_empty() && per_abi.join("libcef.so").is_file() {
+        per_abi
+    } else {
+        root.join("lib")
+    }
+}
+
 /// Emit the link directives for the prebuilt CEF shared object.
 fn link_cef(root: &Path) {
-    let lib_dir = root.join("lib");
+    let lib_dir = cef_lib_dir(root);
     let libcef = lib_dir.join("libcef.so");
     if libcef.is_file() {
         println!("cargo::rustc-link-search=native={}", lib_dir.display());
@@ -96,57 +99,5 @@ fn link_cef(root: &Path) {
             println!("cargo::rerun-if-changed={}", candidate.display());
             break;
         }
-    }
-}
-
-/// Copy the CEF resource files into the Gradle assets directory.
-fn package_resources(root: &Path, assets_dir: &Path) {
-    if let Err(err) = fs::create_dir_all(assets_dir) {
-        println!(
-            "cargo::warning=cannot create {}: {err}",
-            assets_dir.display()
-        );
-        return;
-    }
-
-    let mut copied = 0usize;
-    for name in CEF_RESOURCES {
-        let src = root.join(name);
-        if src.is_file() {
-            if let Err(err) = fs::copy(&src, assets_dir.join(name)) {
-                println!("cargo::warning=cannot copy {}: {err}", src.display());
-            } else {
-                copied += 1;
-            }
-        }
-    }
-
-    // Locales live in a separate directory of the distribution.
-    let locales_src = root.join("locales");
-    let locales_dst = assets_dir.join("locales");
-    if locales_src.is_dir() {
-        if let Err(err) = fs::create_dir_all(&locales_dst) {
-            println!(
-                "cargo::warning=cannot create {}: {err}",
-                locales_dst.display()
-            );
-        } else if let Ok(entries) = fs::read_dir(&locales_src) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_file() {
-                    let _ = fs::copy(&path, locales_dst.join(entry.file_name()));
-                    copied += 1;
-                }
-            }
-        }
-    }
-
-    if copied == 0 {
-        println!(
-            "cargo::warning=no CEF resource files found below {}: the APK would not start CEF",
-            root.display()
-        );
-    } else {
-        println!("cargo::warning=packaged {copied} CEF resource file(s) into the APK assets");
     }
 }
