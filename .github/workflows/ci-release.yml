@@ -6,7 +6,15 @@
 #   1. `rust-tests`    — fmt, clippy, check, test and **coverage** of the
 #                        Rust workspace,
 #   2. `android-build` — Compose preview smoke test and debug APK assembly,
-#   3. `release`       — publishes a *new* tagged GitHub Release with the APK.
+#   3. `emulator-gate` — the APK is launched on an emulator and has to stay
+#                        up; nothing is published before that has happened,
+#   4. `release`       — publishes a *new* tagged GitHub Release with the APK.
+#
+# The gate is the point of the pipeline.  A green test suite proves that the
+# code compiles and that the logic is right; it does not prove that the
+# application starts.  The releases of this project crashed on launch while
+# the pipeline was green, because nothing in it ever launched the thing it
+# had built.
 #
 # ## The engine
 #
@@ -274,11 +282,54 @@ jobs:
           path: android/app/build/reports/tests
           if-no-files-found: ignore
 
+  emulator-gate:
+    name: Launch the application on an emulator
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: android-build
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v5
+
+      - name: Download the debug APK
+        uses: actions/download-artifact@v8
+        with:
+          name: trap-debug-apk
+          path: apk
+
+      - name: Set up the Android SDK
+        run: |
+          sdkmanager "platform-tools" "system-images;android-35;google_apis;x86_64"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+
+      - name: Boot the emulator
+        # The engine has to run on the emulator, not only compile.  An arm64
+        # engine crashes under the translation of x86_64, so the emulator is
+        # an x86_64 one and the APK carries the x86_64 build of the engine as
+        # well.
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          script: apk/emulator-gate.sh
+          disable-animations: true
+
+      - name: Upload the screenshot of the running application
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: emulator-screenshot
+          path: emulator-*.png
+          if-no-files-found: ignore
+
   release:
     name: Publish the tagged GitHub release
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: android-build
+    needs: emulator-gate
     permissions:
       contents: write
       actions: read

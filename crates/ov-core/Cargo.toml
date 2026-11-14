@@ -19,6 +19,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.15"
 jni = { workspace = true }
 ndk = { workspace = true }
 ndk-sys = { workspace = true }

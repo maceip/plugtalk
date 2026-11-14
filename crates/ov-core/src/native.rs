@@ -9,6 +9,34 @@ use std::sync::{Mutex, OnceLock};
 #[cfg(target_os = "android")]
 static JAVA_VM: OnceLock<Mutex<Option<usize>>> = OnceLock::new();
 
+/// `dev.onionvault.OvBridge`, resolved once on the main thread.
+///
+/// `FindClass` on a thread that native code attached (Tokio workers, CEF
+/// threads) uses the system class loader, which cannot see the classes of
+/// the application; the class has to be looked up on a Java thread.
+#[cfg(target_os = "android")]
+static BRIDGE_CLASS: OnceLock<jni::objects::GlobalRef> = OnceLock::new();
+
+/// Resolve and keep `OvBridge`; call it from a Java thread (`nativeInit`).
+#[cfg(target_os = "android")]
+pub fn cache_bridge_class(env: &mut jni::JNIEnv) {
+    if BRIDGE_CLASS.get().is_some() {
+        return;
+    }
+    let class = env
+        .find_class("dev/onionvault/OvBridge")
+        .and_then(|class| env.new_global_ref(class));
+    match class {
+        Ok(global) => {
+            let _ = BRIDGE_CLASS.set(global);
+        }
+        Err(err) => {
+            let _ = env.exception_clear();
+            log::error!("cannot resolve dev.onionvault.OvBridge: {err}");
+        }
+    }
+}
+
 /// An argument of a call into the native UI.
 pub enum NativeArg {
     /// A string argument.
@@ -86,18 +114,19 @@ pub fn call_native(name: &str, args: &[NativeArg]) {
         log::error!("cannot attach to the Java VM");
         return;
     };
-    let Ok(class) = env.find_class("dev/onionvault/OvBridge") else {
-        log::error!("cannot find dev.onionvault.OvBridge");
+    let Some(global) = BRIDGE_CLASS.get() else {
+        log::error!("OvBridge is not resolved, dropping the callback {name}");
         return;
     };
+    let class: &jni::objects::JClass = global.as_obj().into();
 
     let result = match name {
-        "onDomScan" => call_with_string(&mut env, &class, "onDomScan", "onDomScan", args),
-        "onNavigation" => call_with_string(&mut env, &class, "onNavigation", "onNavigation", args),
-        "showError" => call_with_string(&mut env, &class, "showError", "showError", args),
+        "onDomScan" => call_with_string(&mut env, class, "onDomScan", "onDomScan", args),
+        "onNavigation" => call_with_string(&mut env, class, "onNavigation", "onNavigation", args),
+        "showError" => call_with_string(&mut env, class, "showError", "showError", args),
         "onMutationResult" => call_with_string(
             &mut env,
-            &class,
+            class,
             "onMutationResult",
             "onMutationResult",
             args,
@@ -113,7 +142,7 @@ pub fn call_native(name: &str, args: &[NativeArg]) {
             let b = string_arg(&mut env, &safe(&strings[1]));
             let c = string_arg(&mut env, &safe(&strings[2]));
             env.call_static_method(
-                &class,
+                class,
                 "showPlaintext",
                 "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Z)V",
                 &[
@@ -136,7 +165,7 @@ pub fn call_native(name: &str, args: &[NativeArg]) {
             };
             let stage = string_arg(&mut env, &stage);
             env.call_static_method(
-                &class,
+                class,
                 "onTorProgress",
                 "(ILjava/lang/String;)V",
                 &[(percent as i32).into(), (&stage).into()],
@@ -151,6 +180,12 @@ pub fn call_native(name: &str, args: &[NativeArg]) {
 
     if let Err(err) = result {
         log::error!("the native callback {name} failed: {err}");
+    }
+    // A Java exception left pending would abort the process at the next JNI
+    // call; report it and clear it instead.
+    if env.exception_check().unwrap_or(false) {
+        let _ = env.exception_describe();
+        let _ = env.exception_clear();
     }
 }
 
