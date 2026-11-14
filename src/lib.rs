@@ -52,15 +52,6 @@ mod jni_entry_points {
         )
     }
 
-    /// The JNI entry point `Java_dev_onionvault_OvNative_nativeSocksProxy`.
-    #[no_mangle]
-    pub extern "system" fn Java_dev_onionvault_OvNative_nativeSocksProxy(
-        env: JNIEnv,
-        this: JObject,
-    ) -> jstring {
-        ov_core::jni_api::Java_dev_onionvault_OvNative_nativeSocksProxy(env, this)
-    }
-
     /// The JNI entry point `Java_dev_onionvault_OvNative_nativeShutdown`.
     #[no_mangle]
     pub extern "system" fn Java_dev_onionvault_OvNative_nativeShutdown(
