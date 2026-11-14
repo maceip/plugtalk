@@ -11,6 +11,47 @@ import androidx.compose.ui.graphics.Color
  * cream are the warmth of the highlights and the purple is the shadow of the
  * mural.  Every surface is a near black, so that the sliced neon glyphs of
  * the board blend into the chrome instead of sitting on a light plate.
+ *
+ * ## The catalogue of the palette
+ *
+ * | name | value | where it is used |
+ * |---|---|---|
+ * | `Teal` | `#00E4C1` | the primary: the border of the plates, the text of the trailing column of the menu, the colour of the cursor |
+ * | `TealDeep` | `#00A88F` | the border of the tab card |
+ * | `Mint` | `#67EEE1` | the text of the tab badge, the cursor, the trace of the crash |
+ * | `Pink` | `#FD96C3` | the accent: the blocked request, the button that clears the address, "Try again" |
+ * | `PinkDeep` | `#B85C8B` | the plate of the crash screen |
+ * | `Amber` | `#E8933E` | the action: the primary button, the chip that encrypts, the state of the transport |
+ * | `Cream` | `#FBD4A9` | the warmth of the highlights: the glyph of the crash screen |
+ * | `Purple` | `#8F55A6` | the shadow of the mural — **nothing uses it** |
+ * | `PurpleDeep` | `#5A3568` | — **nothing uses it** |
+ * | `Surface` | `#15181F` | the background of the application |
+ * | `SurfaceRaised` | `#1E222C` | the bars and the plates |
+ * | `SurfaceHigh` | `#2A2F3C` | the cards, the chips, the buttons |
+ * | `Hairline` | `#3A4050` | the line between two surfaces |
+ * | `TextPrimary` | `#F2EEE6` | the text |
+ * | `TextMuted` | `#A8A2B8` | the text that matters less |
+ * | `OnAmber` | `#2A1608` | the text on the amber |
+ * | `OnTeal` | `#04241F` | the text on the teal |
+ * | `Good` / `Warn` / `Bad` | `#00E4C1` / `#E8933E` / `#FD96C3` | the semantic colours: the signature that is good, the one that is not, the request that was blocked |
+ *
+ * ## The colours that are **not** in this palette
+ *
+ * The palette is the ground truth of the interface, and three things get
+ * out of it:
+ *
+ *   * **the system bars.**  The theme of the platform uses `#FF0B0E11` for
+ *     the window and `#FF101418` for the status bar and the navigation
+ *     bar (`res/values/themes.xml`).  Neither is in this palette, so the
+ *     system is a third dark colour, and it does not match the chrome.
+ *   * **the styles that are written into the page.**  The engine marks the
+ *     fields of the page with four hard-coded colours — `#00E5FF`,
+ *     `#00FF66`, `#FFB300` and `#CE93D8`
+ *     (`crates/ov-cef/src/dom_model.rs`).  They are the loudest colours of
+ *     the whole application and they belong to no palette at all.
+ *   * **the colours of the previews.**  The mocks of the pages in
+ *     `ui/previews/OnionVaultPreviews.kt` carry their own colours, which
+ *     is right: a mock is not the interface.
  */
 object OnionPalette {
 

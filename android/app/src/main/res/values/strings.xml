@@ -1,4 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    The strings of Trap.
+
+    Only the strings that are marked as live are read by the interface;
+    every other visible label of the application is a **literal in the
+    Kotlin code** ("Back", "Forward", "Reload", "New tab", "The tabs of
+    Trap", "Search or enter the address of a hidden service", …).  The
+    interface therefore cannot be translated, and the strings below that
+    are not live are the remains of the first generation of the chrome.
+
+    The live ones:
+      app_name, blocked, crash_copied, start_url, key_created, key_failed,
+      key_copied, no_message, no_key, unknown_field, mutation_applied,
+      mutation_failed, mutation_stale, authenticate_for_key,
+      authentication_failed, hidden_service_only_on,
+      hidden_service_only_off
+
+    The dead ones:
+      address_hint, go, starting, tor_progress, engine_failed,
+      action_decrypt, action_import_key, action_encrypt, action_field,
+      signature_verified, signature_unverified, insert_into_page, close,
+      cancel
+-->
 <resources>
     <string name="app_name">Trap</string>
     <string name="address_hint">onion address</string>
@@ -7,6 +30,7 @@
     <string name="tor_progress">Tor: %1$d%% (%2$s)</string>
     <string name="blocked">The request was blocked by the leak protection.</string>
     <string name="engine_failed">The browser engine could not be started.</string>
+    <string name="crash_copied">The trace was copied into the clipboard.</string>
     <string name="start_url">about:blank</string>
     <string name="key_created">The new key is %1$s</string>
     <string name="key_failed">The key could not be created</string>

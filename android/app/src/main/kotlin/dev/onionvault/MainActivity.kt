@@ -1,5 +1,8 @@
 package dev.onionvault
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.os.Bundle
 import android.util.Log
 import android.view.Choreographer
@@ -18,6 +21,7 @@ import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import dev.onionvault.ui.BackPreviewState
 import dev.onionvault.ui.BrowserScreen
+import dev.onionvault.ui.OvCrashScreen
 import dev.onionvault.ui.BrowserUiState
 import dev.onionvault.ui.CircuitHop
 import dev.onionvault.ui.CircuitState
@@ -72,6 +76,14 @@ class MainActivity : FragmentActivity(), OvBridge.Listener {
     /** The state of the screen. */
     private var uiState by mutableStateOf(BrowserUiState())
 
+    /**
+     * The trace of the crash that stopped the application, if there is one.
+     *
+     * The trace is shown instead of the browser; the user can copy it or
+     * try again.
+     */
+    private var crashReport by mutableStateOf<String?>(null)
+
     /** The message pump of CEF. */
     private val frameCallback: Choreographer.FrameCallback = Choreographer.FrameCallback {
         OvNative.nativeDoMessageLoopWork()
@@ -84,19 +96,26 @@ class MainActivity : FragmentActivity(), OvBridge.Listener {
         super.onCreate(savedInstanceState)
         OvBridge.setListener(this)
 
-        // The CEF resources (pak files, ICU data, locales) are unpacked from
-        // the assets into the private directory of the application.
-        CefResources.unpack(this)
+        // The native library has to be in the process before any of its
+        // functions is called; the loader throws an `UnsatisfiedLinkError`
+        // otherwise.  The load is inside the guard, so that a failure to
+        // load it is reported like any other error: the trace is shown on
+        // the next start instead of the application dying silently.
+        try {
+            OvNative.load()
+        } catch (error: Throwable) {
+            Log.e(TAG, "the native library of Trap could not be loaded", error)
+            CrashGuard.record(this, error)
+            crashReport = CrashGuard.pending(this)
+        }
 
-        val started = OvNative.nativeInit(
-            filesDir.absolutePath,
-            cacheDir.absolutePath,
-            hiddenServiceOnlyMode(),
-            requireUserAuthentication(),
-        )
-        if (!started) {
-            Toast.makeText(this, R.string.engine_failed, Toast.LENGTH_LONG).show()
-            return
+        // The trace of the crash that stopped the application last time.
+        if (crashReport == null) {
+            crashReport = CrashGuard.pending(this)
+        }
+
+        if (crashReport == null) {
+            startEngine()
         }
 
         setContent {
@@ -108,6 +127,16 @@ class MainActivity : FragmentActivity(), OvBridge.Listener {
                     LegalNotices.list(this@MainActivity)
                 }
                 uiState = uiState.copy(legalDocuments = documents)
+            }
+
+            val report = crashReport
+            if (report != null) {
+                OvCrashScreen(
+                    report = report,
+                    onCopy = { copyToClipboard(report) },
+                    onRetry = { retry() },
+                )
+                return@setContent
             }
 
             BrowserScreen(
@@ -138,6 +167,58 @@ class MainActivity : FragmentActivity(), OvBridge.Listener {
             )
         }
 
+        // The page that was shown before the activity was destroyed.
+        val start = savedInstanceState?.getString(STATE_URL)
+        if (start != null) {
+            navigate(start)
+        }
+    }
+
+    /**
+     * Start the engine of the browser.
+     *
+     * The Java half of the engine (the Chromium base of Android) has to be
+     * ready before the native half is initialized; the resources of the
+     * engine are unpacked from the assets of the APK.
+     *
+     * When anything goes wrong the error is written into the private
+     * directory of the application and the screen of the crash is shown:
+     * the application never dies silently.
+     */
+    private fun startEngine() {
+        try {
+            // The engine has to be ready before the native side is
+            // initialized.  The application object already did that when it
+            // was created; the call here makes the order explicit and covers
+            // the case where the activity is the first thing that runs.
+            if (!CefRuntime.prepare(this)) {
+                throw IllegalStateException("the engine refused to start")
+            }
+
+            // The resource files of the engine live inside the APK, where
+            // the bundle put them; Chromium maps them from there.
+
+            val started = OvNative.nativeInit(
+                filesDir.absolutePath,
+                cacheDir.absolutePath,
+                hiddenServiceOnlyMode(),
+                requireUserAuthentication(),
+            )
+            if (!started) {
+                throw IllegalStateException("the engine of the browser refused to start")
+            }
+        } catch (error: Throwable) {
+            Log.e(TAG, "the engine of the browser could not be started", error)
+            CrashGuard.record(this, error)
+            crashReport = CrashGuard.pending(this)
+            return
+        }
+
+        onEngineStarted()
+    }
+
+    /** The interface is shown once the engine is running. */
+    private fun onEngineStarted() {
         // The keys of the keyring are shown by the key manager.
         refreshKeys()
 
@@ -145,8 +226,26 @@ class MainActivity : FragmentActivity(), OvBridge.Listener {
         uiState = uiState.copy(hiddenServiceOnly = hiddenServiceOnlyMode())
 
         // The first page: the start page of the application.
-        val start = savedInstanceState?.getString(STATE_URL) ?: getString(R.string.start_url)
-        navigate(start)
+        navigate(getString(R.string.start_url))
+    }
+
+    /**
+     * Forget the crash and start the browser again.
+     *
+     * The report is deleted, so that a crash that happens again is written
+     * anew.
+     */
+    private fun retry() {
+        CrashGuard.clear(this)
+        crashReport = null
+        startEngine()
+    }
+
+    /** Copy the trace of the crash into the clipboard. */
+    private fun copyToClipboard(report: String) {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        clipboard?.setPrimaryClip(ClipData.newPlainText("Trap", report))
+        Toast.makeText(this, R.string.crash_copied, Toast.LENGTH_SHORT).show()
     }
 
     override fun onResume() {

@@ -15,6 +15,15 @@ pub mod native;
 pub mod state;
 pub mod surface;
 
+/// The native guard against the crashes.
+///
+/// It catches the signals that kill the process — the ones that the
+/// engine of the browser can raise when it stops inside its own code —
+/// and writes a report of them.  The Java handler of the exceptions
+/// cannot see them.
+#[cfg(target_os = "android")]
+pub mod crash;
+
 use std::{
     path::Path,
     sync::{Arc, Mutex, OnceLock},
@@ -154,16 +163,24 @@ impl Engine {
             snapshots.clone(),
         );
 
-        // The CEF resources were unpacked from the APK assets by the Kotlin
-        // side into `filesDir/cef_resources`.
-        let resources_dir = files_dir.join("cef_resources");
-        let locales_dir = resources_dir.join("locales");
-        let settings = ov_cef::cef_settings(
-            Some(&resources_dir),
+        // The resource files of the engine (the pak files with the
+        // translations, the ICU data and the locale files) live inside the
+        // APK: the bundle of the engine puts them there, and Chromium maps
+        // them out of the APK.  Unpacking them into the private directory
+        // is therefore neither needed nor possible.
+        //
+        // The directory of the locales is the one that the engine expects,
+        // and the cache of the profile lives next to it.
+        let locales_dir = files_dir.join("locales");
+        let _ = std::fs::create_dir_all(&locales_dir);
+        let mut settings = ov_cef::cef_settings(
+            None,
             Some(&locales_dir),
             Some(&files_dir.join("cef_cache")),
             true,
         );
+        settings.root_cache_path =
+            CefString::from(files_dir.join("cef_cache").to_str().unwrap_or_default());
 
         let args = build_main_args();
         let result = cef::initialize(
@@ -285,6 +302,29 @@ pub mod jni_api {
         Ok(text)
     }
 
+    /// Install the native guard against the crashes.
+    ///
+    /// The Java side cannot see a crash of the native code: the handler of
+    /// the exceptions of Java is not called when the engine receives a
+    /// signal.  This method arms the guard of the native code, which
+    /// writes a report with the signal into the given file; the report is
+    /// shown to the user on the next start of the application.
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeInstallCrashGuard(
+        mut env: JNIEnv,
+        _this: JObject,
+        report_path: jstring,
+    ) {
+        let path = match read_string(&mut env, report_path) {
+            Ok(value) => value,
+            Err(err) => {
+                log::error!("cannot read the path of the crash report: {err:#}");
+                return;
+            }
+        };
+        crate::crash::install(&path);
+        log::info!("the native guard against the crashes is armed");
+    }
+
     /// Start the engine.
     pub extern "system" fn Java_dev_onionvault_OvNative_nativeInit(
         mut env: JNIEnv,
@@ -332,8 +372,10 @@ pub mod jni_api {
                 }
             }
             state.tor.shutdown();
+            // The shutdown of CEF is only allowed after its initialization;
+            // the engine may never have started.
+            cef::shutdown();
         }
-        cef::shutdown();
     }
 
     /// Attach the Android surface to the renderer.
@@ -1075,56 +1117,5 @@ pub mod jni_api {
                 std::ptr::null_mut()
             }
         }
-    }
-
-    /// Run a CEF subprocess.
-    ///
-    /// The subprocesses are started by the Android services of
-    /// `CefService.kt`; the command line is passed as a list of switches.
-    pub extern "system" fn Java_dev_onionvault_OvNative_nativeRunSubprocess(
-        mut env: JNIEnv,
-        _this: JObject,
-        process_type: jstring,
-        switches: jni::objects::JObjectArray<'static>,
-    ) -> jint {
-        let process_type = match read_string(&mut env, process_type) {
-            Ok(value) => value,
-            Err(_) => return -1,
-        };
-        let mut args: Vec<String> =
-            vec!["onionvault".to_string(), format!("--type={process_type}")];
-        let count = env.get_array_length(&switches).unwrap_or(0);
-        for index in 0..count {
-            let Ok(switch) = env.get_object_array_element(&switches, index) else {
-                continue;
-            };
-            if let Ok(value) = env.get_string(&JString::from(switch)) {
-                args.push(value.into());
-            }
-        }
-
-        let mut owned: Vec<std::ffi::CString> = args
-            .into_iter()
-            .filter_map(|arg| std::ffi::CString::new(arg).ok())
-            .collect();
-        let mut pointers: Vec<*mut std::os::raw::c_char> = owned
-            .iter_mut()
-            .map(|value| value.as_ptr() as *mut std::os::raw::c_char)
-            .collect();
-        let args = cef::MainArgs {
-            argc: pointers.len() as std::os::raw::c_int,
-            argv: pointers.as_mut_ptr(),
-        };
-
-        let (app, _) = ov_cef::build_engine(
-            Arc::new(OvConfig::default()),
-            Arc::new(ov_cef::NullBridge),
-            Arc::new(SurfaceRenderer::new(ov_cef::PixelFormat::Rgba8888)),
-            Arc::new(BrowserSlot::new()),
-            ov_cef::pending_actions(),
-            Arc::new(ov_cef::SnapshotCollector::new()),
-        );
-        let mut app = app;
-        cef::execute_process(Some(&args), Some(&mut app), std::ptr::null_mut())
     }
 }

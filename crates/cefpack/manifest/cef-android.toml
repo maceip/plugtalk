@@ -1,0 +1,134 @@
+# The pinned description of the CEF Android bundle.
+#
+# This file is the single source of truth for the bundling service.  It names
+# the CEF revision that is built, the target it is built for and the
+# toolchain that builds it.  It contains no path: paths belong to the machine
+# that runs the service and are discovered from the environment.
+#
+# The revision is a full git SHA.  The Chromium revision that belongs to it
+# is not written here: it lives in CEF's own DEPS file, which gclient reads
+# and verifies.  A bundle is therefore reproducible from this file alone, and
+# no third party archive is trusted at any point.
+
+schema = 1
+
+[engine]
+# The CEF release.  The `g6028375` is the CEF revision, the tail is the
+# Chromium revision that CEF tracks.
+cef_version = "156.0.30+g6028375+chromium-156.0.8078.96"
+chromium_version = "156.0.8078.96"
+# The branch the revision belongs to.
+branch = "156"
+
+[source]
+repo = "https://github.com/chromiumembedded/cef.git"
+branch = "156"
+# The pinned revision.  `cefpack fetch` checks this out and refuses to build
+# anything else.
+commit = "6028375a4532fb89d23b58635f5c0d3a82c93959"
+
+[target]
+os = "android"
+cpu = "arm64"
+abi = "arm64-v8a"
+min_sdk = 29
+
+[toolchain]
+# The NDK that has to build the engine.  `cefpack plan` refuses a host whose
+# NDK carries another version.
+ndk_version = "27.2.12479018"
+# The clang that the NDK ships.
+clang_version = "18"
+
+[gn]
+# The arguments of the Chromium build.  `cefpack build` prints them before it
+# runs, so a wrong argument shows up in the log of the build.
+args = [
+  "target_os=\"android\"",
+  "target_cpu=\"arm64\"",
+  "is_android=true",
+  "use_cef=true",
+  "is_client=false",
+  "is_server=false",
+  "is_official_build=true",
+  "use_sysroot=false",
+  "use_custom_libcxx=true",
+  "use_lld=true",
+  "is_clang=true",
+  "is_debug=false",
+  "symbol_level=0",
+  "treat_warnings_as_errors=false",
+  "enable_nacl=false",
+  "enable_plugin=false",
+  "chrome_pgo_phase=0",
+  "android_min_sdk_version=29",
+]
+# The arguments of a debug build, on top of the ones above.
+debug_args = [
+  "is_debug=true",
+  "symbol_level=1",
+  "is_official_build=false",
+]
+
+# The headers of Chromium that the public headers of CEF include.  They are
+# fetched from the Chromium revision that CEF tracks and their checksums are
+# pinned, so that the bindings are generated against the headers of the very
+# engine that is shipped.
+[chromium]
+# CEF is built on top of a Chromium release branch; the branch head of that
+# version is the revision that the engine is built from.
+ref = "156.0.8078.96"
+base_url = "https://raw.githubusercontent.com/chromium/chromium"
+
+[[chromium.headers]]
+path = "net/base/net_error_list.h"
+sha256 = "8647b49488fbd0856ff03056c459ddfd115a89533637ddb8037637e9c7def243"
+
+[[chromium.headers]]
+path = "ui/color/color_id.h"
+sha256 = "687497263a48891c1f5a7592c8304a63fea55162d2dc9b43cf0731f099143b95"
+
+[[chromium.headers]]
+path = "components/color/color_id.h"
+sha256 = "ee89a89f8ae04db661597c1f2f1326e3f49e147072e4be3628a549b757db1021"
+
+[[chromium.headers]]
+path = "chrome/browser/ui/color/chrome_color_id.h"
+sha256 = "395eb8561b8cedf6bd4133aa29f05a2d0fd0c8f91b968388c5753dfb8582affd"
+
+[[chromium.headers]]
+path = "chrome/app/chrome_command_ids.h"
+sha256 = "c5432d82477f61bb6815f4f0aa46ee3c006bc986560f2a241ac1d759c0036e52"
+
+[assets]
+# The resource files that the engine reads at runtime.  They are collected
+# from the build output, never downloaded.
+required = [
+  "icudtl.dat",
+  "resources.pak",
+  "chrome_100_percent.pak",
+  "chrome_200_percent.pak",
+]
+# The locales that the engine needs.
+locales = ["en-US.pak"]
+
+[contents]
+# The public headers that the Rust bindings are generated from.
+required_headers = [
+  "cef_api_hash.h",
+  "cef_app.h",
+  "cef_browser.h",
+  "cef_client.h",
+  "cef_frame.h",
+  "cef_settings.h",
+  "cef_string.h",
+]
+# The libraries that the application links against.
+required_libraries = [
+  "libcef.so",
+  "libcef_dll_wrapper.a",
+]
+# The licence documents that travel with the binary.
+required_licences = [
+  "LICENSE.txt",
+]

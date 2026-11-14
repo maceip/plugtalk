@@ -12,6 +12,28 @@
 //! The visitor of the render process maps the real DOM onto this model, and
 //! the tests drive the model with the HTML of a hidden service.  Both paths
 //! therefore use the same code.
+//!
+//! # The styles that are written into the page
+//!
+//! These are the colours of the interface **inside the page**: they are
+//! written as an inline style on the node, so that they survive the CSS of
+//! the hidden service.  They are hard-coded here and they are **not** the
+//! palette of the application — the palette lives in Kotlin, in
+//! `ui/OnionPalette.kt`, and the four colours below are a fourth set,
+//! beside the palette, the system bars of the theme and the colours of the
+//! previews.
+//!
+//! | what it is | the style |
+//! |---|---|
+//! | a field that can be encrypted | a cyan outline |
+//! | the focused field | a green outline and an inset shadow |
+//! | a PGP message that was found | a dashed amber outline |
+//! | a PGP public key that was found | a dotted violet outline |
+//! | a field that Trap has changed | a green outline and a green wash |
+//!
+//! The green of "the field that Trap has changed" is also the green of the
+//! focused field, so that the user sees at a glance that the field holds
+//! what was put in it.
 
 use crate::ipc::FieldKind;
 

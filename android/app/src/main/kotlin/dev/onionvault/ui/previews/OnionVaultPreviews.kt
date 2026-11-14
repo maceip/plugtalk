@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.onionvault.R
 import dev.onionvault.ui.BrowserScreen
+import dev.onionvault.ui.OvCrashScreen
 import dev.onionvault.ui.BrowserUiState
 import dev.onionvault.ui.CircuitHop
 import dev.onionvault.ui.CircuitState
@@ -45,6 +46,24 @@ import dev.onionvault.ui.TorBootstrapState
  * without the native library: the same code paths are used by the
  * application, by the previews of Android Studio and by the screenshot tests
  * of the continuous integration.
+ *
+ * ## The catalogue of the previews
+ *
+ * | # | preview | what it shows |
+ * |---|---|---|
+ * | 1 | `TorBootstrapPreview` | the bootstrap at 65 %, the circuit with the time of every hop, the token of the isolation |
+ * | 2 | `PgpActionChipsPreview` | a form without JavaScript with the three chips on it |
+ * | 3 | `PredictiveBackPreview` | the gesture of the back at 65 % of its length |
+ * | 4 | `PgpDecryptionModalPreview` | the key manager and the sheet with the decrypted message |
+ * | 5 | `LegalNoticesPreview` | the licences that travel with the application |
+ * | 6 | `BrowserChromePreview` | the chrome on the start page |
+ * | 7 | `TorTaxiPreview` | the chrome on a page that was loaded over Tor |
+ * | 8 | `BrowserMenuPreview` | the menu of the browser |
+ * | 9 | `CrashScreenPreview` | the screen of a crash |
+ *
+ * **The ninth preview is not in `ScreenshotTest.kt`.**  The crash screen is
+ * the one screen that must never be wrong, and it is the only one without
+ * a screenshot test.
  */
 private object Previews {
     /** The color of the background of the hidden service page. */
@@ -338,7 +357,7 @@ fun LegalNoticesPreview() {
                     sizeBytes = 26_001,
                 ),
                 LegalDocument(
-                    name = "CEFRIUM-NOTICE.txt",
+                    name = "CEF-LICENSE.txt",
                     title = "The notice of the CEF engine",
                     sizeBytes = 2_273_727,
                 ),
@@ -495,9 +514,8 @@ fun torTaxiState(): BrowserUiState = BrowserUiState(
 /**
  * The sixth preview: the chrome of the browser.
  *
- * The top bar with the wordmark of the brand, the dock with the tiles of the
- * features, the address pill with the shield of the leak protection and the
- * row of the navigation, above the start page of the browser.
+ * The chrome of Safari on iOS: the page fills the screen, the buttons float
+ * above it and the field of the address lies at the bottom.
  */
 @Preview(name = "6. The Browser Chrome of Trap", heightDp = 640)
 @Composable
@@ -511,9 +529,8 @@ fun BrowserChromePreview() {
 /**
  * The seventh preview: the browser after it has loaded tor.taxi.
  *
- * The address pill carries the address of the page, the badge of the top bar
- * shows that the transport is up, and the dock shows that the browser only
- * reaches hidden services.
+ * The field of the address carries the address of the page and the line of
+ * the transport shows that the client of Tor is up.
  */
 @Preview(name = "7. tor.taxi Loaded over Tor", heightDp = 640)
 @Composable
@@ -538,5 +555,38 @@ fun BrowserMenuPreview() {
         state = chromeState(),
         showMenu = true,
         surface = { MockStartPage() },
+    )
+}
+
+/**
+ * The ninth preview: the screen of a crash.
+ *
+ * The application never dies silently: the trace of the error that stopped
+ * it is shown, it can be copied into the clipboard and the browser can be
+ * started again.
+ */
+@Preview(name = "9. The Screen of a Crash", heightDp = 640)
+@Composable
+fun CrashScreenPreview() {
+    OvCrashScreen(
+        report = """
+            Trap stopped with an error.
+
+            When:  2025-01-14T18:42:07Z
+            Type:  java.lang.IllegalStateException
+            Why:   the runtime of the engine refused to start
+
+            java.lang.IllegalStateException: the runtime of the engine refused to start
+            	at dev.onionvault.CefRuntime.initialize(CefRuntime.kt:64)
+            	at dev.onionvault.MainActivity.startEngine(MainActivity.kt:181)
+            	at dev.onionvault.MainActivity.onCreate(MainActivity.kt:103)
+            	at android.app.Activity.performCreate(Activity.java:8305)
+            	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1417)
+            	at android.app.Activity.performCreate(Activity.java:8305)
+            	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1417)
+            	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1417)
+        """.trimIndent(),
+        onCopy = {},
+        onRetry = {},
     )
 }

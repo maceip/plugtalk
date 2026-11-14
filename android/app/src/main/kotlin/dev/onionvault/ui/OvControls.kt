@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -24,6 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.Painter
@@ -47,117 +49,29 @@ import dev.onionvault.R
  * whose border carries the teal of the brand.  The controls are never the
  * stock icons of the material library: the board is the style of the
  * application.
+ *
+ * ## The catalogue of the controls
+ *
+ * | control | what it is | used by |
+ * |---|---|---|
+ * | `OvMenuRow` | a line of the menu: a glyph, a name and, when the action has a state, that state at the right | the menu of the browser |
+ * | `OvGlassButton` | a round plate of glass that floats above the page | the row of the buttons, the button that clears the address |
+ * | `OvAddressPlate` | the rounded plate of the field of the address | the field of the address |
+ * | `OvIconButton` | a small round plate with a thin outline | the export of a public key |
+ * | `OvPrimaryButton` | the amber of the board, full of paint | the key manager |
+ * | `OvSecondaryButton` | an outlined plate with the teal of the brand | "Insert into the page", the close of a licence |
+ * | `OvActionChip` | the mark of the spray can that says what the action does | the overlay of the PGP fields |
+ * | `OvBadge` | a small number or a small word on a plate | the tabs, the state of a key, the state of a signature |
+ * | `OvProgressBar` | the paint that fills up while the client bootstraps | the line of the transport |
+ * | `OvBrandMark` | the wordmark of the board and the two onions | **nothing** — it is dead |
+ * | `OvTabBadge` | the number of the tabs of the old top bar | **nothing** — it is dead |
+ *
+ * The two dead controls are the remains of the top bar of the first
+ * generation of the chrome, the one that the board had and that Safari on
+ * iOS does not have.  They are kept here because their artwork is part of
+ * the identity of the board, and they are the natural place to start when
+ * the brand has to be shown again somewhere.
  */
-
-/**
- * A button of the chrome with a neon glyph.
- *
- * The glyph keeps its own colour, so it is drawn as an image and not as a
- * tinted icon.
- *
- * @param icon the glyph of the button.
- * @param contentDescription the description of the button.
- * @param onClick the user tapped the button.
- * @param modifier the modifier of the button.
- * @param enabled `false` dims the button and stops the taps.
- * @param accent the colour of the border of the plate.
- * @param plate the size of the plate of the button.
- * @param glyph the size of the glyph.
- */
-@Composable
-fun OvNeonButton(
-    icon: Painter,
-    contentDescription: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    enabled: Boolean = true,
-    accent: Color = OnionPalette.Teal,
-    plate: Dp = 38.dp,
-    glyph: Dp = 24.dp,
-) {
-    val shape = CircleShape
-    Box(
-        modifier = modifier
-            .size(plate)
-            .clip(shape)
-            .background(OnionPalette.SurfaceHigh.copy(alpha = 0.55f))
-            .border(1.dp, if (enabled) accent.copy(alpha = 0.75f) else OnionPalette.Hairline, shape)
-            .clickable(enabled = enabled, onClick = onClick)
-            .semantics { this.contentDescription = contentDescription },
-        contentAlignment = Alignment.Center,
-    ) {
-        Image(
-            painter = icon,
-            contentDescription = null,
-            contentScale = ContentScale.Fit,
-            modifier = Modifier
-                .size(glyph)
-                .alpha(if (enabled) 1f else 0.35f),
-        )
-    }
-}
-
-/**
- * A button of the chrome with a neon glyph and a label under it.
- *
- * The tile is one of the tiles of the dock of the design board: a square
- * plate with the border of the brand and the name of the feature below it.
- *
- * @param icon the glyph of the tile.
- * @param label the name of the feature.
- * @param onClick the user tapped the tile.
- * @param modifier the modifier of the tile.
- * @param active `true` when the feature is on.
- */
-@Composable
-fun OvNeonTile(
-    icon: Painter,
-    label: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    active: Boolean = false,
-) {
-    val accent = if (active) OnionPalette.Mint else OnionPalette.Teal
-    Column(
-        modifier = modifier
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
-            .semantics { contentDescription = label }
-            .padding(vertical = 4.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(46.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(
-                    if (active) {
-                        OnionPalette.Teal.copy(alpha = 0.16f)
-                    } else {
-                        OnionPalette.SurfaceHigh.copy(alpha = 0.55f)
-                    },
-                )
-                .border(1.dp, accent.copy(alpha = if (active) 1f else 0.7f), RoundedCornerShape(12.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Image(
-                painter = icon,
-                contentDescription = null,
-                contentScale = ContentScale.Fit,
-                modifier = Modifier.size(28.dp),
-            )
-        }
-        Spacer(Modifier.height(3.dp))
-        Text(
-            text = label,
-            color = if (active) OnionPalette.Mint else OnionPalette.TextMuted,
-            fontSize = 9.sp,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
 
 /**
  * A row of the menu of the browser.
@@ -183,7 +97,7 @@ fun OvMenuRow(
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
             .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 9.dp),
+            .padding(horizontal = 18.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Image(
@@ -191,14 +105,14 @@ fun OvMenuRow(
             contentDescription = null,
             contentScale = ContentScale.Fit,
             modifier = Modifier
-                .size(22.dp)
+                .size(26.dp)
                 .alpha(if (enabled) 1f else 0.4f),
         )
-        Spacer(Modifier.width(12.dp))
+        Spacer(Modifier.width(14.dp))
         Text(
             text = label,
             color = if (enabled) OnionPalette.TextPrimary else OnionPalette.TextMuted,
-            fontSize = 14.sp,
+            fontSize = 16.sp,
             fontWeight = FontWeight.Medium,
             modifier = Modifier.weight(1f),
         )
@@ -206,7 +120,7 @@ fun OvMenuRow(
             Text(
                 text = trailing,
                 color = OnionPalette.Teal,
-                fontSize = 12.sp,
+                fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
             )
         }
@@ -249,26 +163,117 @@ fun OvBrandMark(
 }
 
 /**
+ * A button of the chrome in the style of Safari on iOS.
+ *
+ * The button is a round plate of glass that floats above the page: a
+ * translucent fill, a thin line around it and a soft shadow.  The glyph is
+ * the one of the icon system of the design board and keeps its own colour.
+ *
+ * @param icon the glyph of the button.
+ * @param contentDescription the description of the button.
+ * @param onClick the user tapped the button.
+ * @param modifier the modifier of the button.
+ * @param enabled `false` dims the button and stops the taps.
+ * @param accent the colour of the border of the plate.
+ * @param size the size of the plate of the button.
+ * @param glyph the size of the glyph.
+ * @param elevation the shadow under the plate.
+ * @param badge the number that the button carries; it is `0` when there is
+ * no badge.
+ */
+@Composable
+fun OvGlassButton(
+    icon: Painter,
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    accent: Color = OnionPalette.Hairline,
+    size: Dp = 44.dp,
+    glyph: Dp = 26.dp,
+    elevation: Dp = 8.dp,
+    badge: Int = 0,
+) {
+    val shape = CircleShape
+    Box(
+        modifier = modifier.size(size),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(size)
+                .shadow(
+                    elevation = elevation,
+                    shape = shape,
+                    ambientColor = Color.Black.copy(alpha = 0.55f),
+                    spotColor = Color.Black.copy(alpha = 0.55f),
+                )
+                .clip(shape)
+                .background(OnionPalette.SurfaceRaised.copy(alpha = 0.86f))
+                .border(1.dp, accent.copy(alpha = 0.9f), shape)
+                .clickable(enabled = enabled, onClick = onClick)
+                .semantics { this.contentDescription = contentDescription },
+            contentAlignment = Alignment.Center,
+        ) {
+            Image(
+                painter = icon,
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .size(glyph)
+                    .alpha(if (enabled) 1f else 0.3f),
+            )
+        }
+        if (badge > 0) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .offset(x = 3.dp, y = (-3).dp)
+                    .size(15.dp)
+                    .clip(CircleShape)
+                    .background(OnionPalette.Mint)
+                    .border(1.5.dp, OnionPalette.SurfaceRaised, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = badge.toString(),
+                    color = OnionPalette.OnTeal,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    lineHeight = 10.sp,
+                )
+            }
+        }
+    }
+}
+
+/**
  * The plate of the address of the browser.
  *
- * The plate is the pill of the design board: a rounded field with the border
- * of the brand, the shield of the leak protection on the left and the button
- * that clears the address on the right.
+ * The plate is the field of Safari: a rounded field that floats above the
+ * bottom of the screen, with a translucent fill and a thin line around it.
  *
  * @param content the content of the field.
  * @param modifier the modifier of the plate.
+ * @param border the colour of the line around the plate.
  */
 @Composable
 fun OvAddressPlate(
     modifier: Modifier = Modifier,
-    border: Color = OnionPalette.TealDeep,
+    border: Color = OnionPalette.Hairline,
     content: @Composable () -> Unit,
 ) {
-    val shape = RoundedCornerShape(22.dp)
+    val shape = RoundedCornerShape(16.dp)
     Box(
         modifier = modifier
+            .shadow(
+                elevation = 10.dp,
+                shape = shape,
+                ambientColor = Color.Black.copy(alpha = 0.55f),
+                spotColor = Color.Black.copy(alpha = 0.55f),
+            )
             .clip(shape)
-            .background(OnionPalette.SurfaceHigh.copy(alpha = 0.6f))
+            .background(OnionPalette.SurfaceRaised.copy(alpha = 0.92f))
             .border(1.dp, border, shape),
         contentAlignment = Alignment.CenterStart,
     ) {

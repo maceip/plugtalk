@@ -386,22 +386,6 @@ mod jni_entry_points {
             fingerprint,
         )
     }
-
-    /// The JNI entry point `Java_dev_onionvault_OvNative_nativeRunSubprocess`.
-    #[no_mangle]
-    pub extern "system" fn Java_dev_onionvault_OvNative_nativeRunSubprocess(
-        env: JNIEnv,
-        _this: JObject,
-        process_type: jstring,
-        switches: jni::objects::JObjectArray<'static>,
-    ) -> jint {
-        ov_core::jni_api::Java_dev_onionvault_OvNative_nativeRunSubprocess(
-            env,
-            _this,
-            process_type,
-            switches,
-        )
-    }
 }
 
 #[cfg(test)]

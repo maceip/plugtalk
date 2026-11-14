@@ -87,14 +87,6 @@ wrap_app! {
             command_line.append_switch(Some(&CefString::from("disable-background-networking")));
             command_line.append_switch(Some(&CefString::from("no-first-run")));
             command_line.append_switch(Some(&CefString::from("disable-sync")));
-
-            // Android cannot fork a helper process: the CEF subprocesses are
-            // started as Android services (see `CefService.kt`), and CEF's
-            // Android port looks the service up by this switch.
-            command_line.append_switch_with_value(
-                Some(&CefString::from("service-class")),
-                Some(&CefString::from("dev.onionvault.CefService")),
-            );
         }
 
         // The render process handler.

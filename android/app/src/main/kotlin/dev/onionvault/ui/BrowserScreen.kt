@@ -61,16 +61,13 @@ import kotlinx.coroutines.withContext
 /**
  * The screen of the browser.
  *
- * The chrome is the one of the design board of Trap:
+ * The chrome is the one of Safari on iOS: the page fills the screen and the
+ * controls float above it, at the bottom — the row of the buttons and, under
+ * it, the field of the address.  There is no rail at the top of the screen.
  *
- *   * the top bar carries the menu, the wordmark, the two onions of the brand,
- *     the number of the tabs and the menu of the browser,
- *   * the dock holds the tiles of the features that exist: the routing over
- *     Tor, the leak protection, the keyring and the licences,
- *   * the address is the pill of the board: the shield of the leak
- *     protection, the address and the button that clears it,
- *   * the navigation row carries the buttons of the history, the start page,
- *     a new tab and the reload.
+ * The glyphs are the ones of the icon system of the design board of Trap:
+ * every button of the chrome is drawn with them, and never with the icons
+ * of the material library.
  *
  * The screen is driven by a pure [BrowserUiState]: the surface of the
  * off-screen rendered page is injected, so that the screen can be rendered
@@ -79,6 +76,62 @@ import kotlinx.coroutines.withContext
  * The predictive back gesture shows the frame of the previous page while the
  * finger is on the screen.  The gesture does not wait for the hidden
  * service: the frame was rendered before and is kept in the back stack.
+ *
+ * ## The catalogue of the chrome
+ *
+ * Every surface of the browser, and the glyph it is drawn with.  This is
+ * the one list; the detail of each part is in the documentation of the
+ * composable that draws it.
+ *
+ * | surface | glyph | what it does |
+ * |---|---|---|
+ * | the line of the transport | — | the state of the client of Tor, the token of the circuit, the progress of the bootstrap |
+ * | the row of the buttons | `ic_neon_back` | back, dimmed when the stack is empty |
+ * | | `ic_neon_forward` | forward; there is **no** `canGoForward` in the state, so the button is never dimmed |
+ * | | `ic_neon_reload` | fetch the page again over Tor |
+ * | | `ic_neon_new_tab` | a new tab, with the number of the tabs on it |
+ * | | `ic_neon_menu` | the menu of the browser |
+ * | the field of the address | `ov_trap_mark` | the mark of the brand |
+ * | | `ic_neon_shield` | the shield of the leak protection |
+ * | | — | the field itself; the hint is "Search or enter the address of a hidden service", but there is **no** search |
+ * | | `ic_neon_cancel` | clear the field; it only appears when the field is not empty |
+ * | the menu of the browser | `ic_neon_new_tab` | New Tab |
+ * | | `ic_neon_home` | Start Page; it navigates to `about:blank` |
+ * | | `ic_neon_new_partial_tab` | Tabs, with the number of the tabs |
+ * | | `ic_neon_key` | the PGP keyring |
+ * | | `ic_neon_shield` | Security; it **toggles** the traffic policy and closes the sheet |
+ * | | `ic_neon_zoom_in` | zoom in, with the zoom in percent |
+ * | | `ic_neon_zoom_out` | zoom out |
+ * | | `ic_ov_legal` | the licences that travel with the application |
+ * | the overlay of the page | `ic_ov_encrypt` | the chip of a field that can be encrypted |
+ * | | `ic_ov_decrypt` | the chip of a PGP message |
+ * | | `ic_ov_keys` | the chip of a PGP public key |
+ * | the sheet of the plaintext | `ic_ov_insert` | write the plaintext back into the page |
+ * | the key manager | `ic_ov_keys` | copy the public key of a certificate |
+ * | | `ic_ov_new_key` | create a key |
+ *
+ * ## What is **not** here
+ *
+ * The catalogue is as much about the absences as about the presences, and
+ * the absences are deliberate:
+ *
+ *   * **there is no start page.**  The application starts on `about:blank`
+ *     (`R.string.start_url`).  There are no bookmarks, no shortcuts and no
+ *     search.
+ *   * **there is no settings screen.**  Two preferences are persisted —
+ *     `hidden_service_only` and `require_user_authentication` — and the
+ *     first of them is toggled by the row "Security" of the menu.  The
+ *     second one is **read but never written**: there is no screen that
+ *     turns the confirmation of the user on.
+ *   * **there is no context menu.**  A long press on the page, on a link
+ *     or on a selection does nothing; the ⋮ of the chrome is the menu of
+ *     the *browser*, not of the *page*.
+ *   * **there is no forward gesture**, only the forward button.
+ *   * **there is no wallet, no bookmarks, no downloads and no
+ *     microphone.**  The board carries `ic_neon_wallet`, `ic_neon_monero`,
+ *     `ic_neon_usd`, `ic_neon_mic` and `ic_neon_microphone`, and none of
+ *     them is in the application: there is no feature behind them, and a
+ *     button that does nothing is worse than a missing button.
  *
  * @param state the state of the browser.
  * @param modifier the modifier of the screen.
@@ -180,11 +233,6 @@ fun BrowserScreen(
             .fillMaxSize()
             .background(OnionPalette.Surface),
     ) {
-        TopBar(
-            state = state,
-            onMenu = { menuOpen = true },
-        )
-
         Box(modifier = Modifier.weight(1f)) {
             // The cached frame of the previous page.
             BackPreviewLayer(state = state, progress = progress)
@@ -206,26 +254,14 @@ fun BrowserScreen(
             PgpFieldOverlay(state = state, onFieldAction = onFieldAction)
         }
 
-        Dock(
+        BottomChrome(
             state = state,
-            onRouting = { onToggleRouting(!state.hiddenServiceOnly) },
-            onKeys = { keysOpen = true },
-            onLegal = { legalOpen = true },
-        )
-
-        AddressRow(
             address = address,
             onAddressChange = { address = it },
             onNavigate = { onNavigate(address) },
             onClear = { address = "" },
-            blocked = state.blocked,
-        )
-
-        NavigationRow(
-            canGoBack = state.canGoBack,
             onBack = onBack,
             onForward = onForward,
-            onHome = onHome,
             onNewTab = {
                 address = ""
                 onNewTab()
@@ -233,8 +269,6 @@ fun BrowserScreen(
             onReload = onReload,
             onMenu = { menuOpen = true },
         )
-
-        TorStatusBar(state = state)
 
         state.pgp.plaintext?.let { plaintext ->
             PlaintextSheet(
@@ -251,6 +285,10 @@ fun BrowserScreen(
                 menuOpen = false
                 address = ""
                 onNewTab()
+            },
+            onHome = {
+                menuOpen = false
+                onHome()
             },
             onTabs = {
                 menuOpen = false
@@ -317,245 +355,229 @@ fun BrowserScreen(
 }
 
 /**
- * The top bar of the browser.
+ * The chrome of the browser, at the bottom of the screen.
  *
- * It carries the menu, the wordmark of the brand, the two onions, the number
- * of the tabs and the menu of the browser.
+ * It is the chrome of Safari on iOS: the page fills the screen, and the
+ * controls float above it — the row of the buttons and, under it, the field
+ * of the address.  There is no rail at the top: the brand of Trap lives in
+ * the field of the address, and the state of the transport is a thin line
+ * above the buttons.
+ *
+ * Every glyph is the one of the icon system of the design board; the
+ * material icons of the library are never used.
  *
  * @param state the state of the browser.
+ * @param address the address that is shown.
+ * @param onAddressChange the user typed in the address.
+ * @param onNavigate the user wants to go to the address.
+ * @param onClear the user cleared the address.
+ * @param onBack the user wants to go back.
+ * @param onForward the user wants to go forward.
+ * @param onNewTab the user wants a new tab.
+ * @param onReload the user wants the page again.
  * @param onMenu the user wants the menu of the browser.
  */
 @Composable
-private fun TopBar(
+private fun BottomChrome(
     state: BrowserUiState,
+    address: String,
+    onAddressChange: (String) -> Unit,
+    onNavigate: () -> Unit,
+    onClear: () -> Unit,
+    onBack: () -> Unit,
+    onForward: () -> Unit,
+    onNewTab: () -> Unit,
+    onReload: () -> Unit,
     onMenu: () -> Unit,
 ) {
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(OnionPalette.SurfaceRaised)
-            .padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .background(OnionPalette.Surface),
     ) {
-        OvNeonButton(
-            icon = painterResource(R.drawable.ic_neon_menu),
-            contentDescription = "The menu of Trap",
-            onClick = onMenu,
-        )
-        Spacer(Modifier.width(10.dp))
-        OvBrandMark(modifier = Modifier.weight(1f))
-        TorPill(state = state)
-        Spacer(Modifier.width(6.dp))
-        OvTabBadge(count = state.tabCount)
-        Spacer(Modifier.width(6.dp))
-        OvNeonButton(
-            icon = painterResource(R.drawable.ic_neon_dots),
-            contentDescription = "The menu of Trap",
-            onClick = onMenu,
-        )
-    }
-}
+        TorStatusLine(state = state)
 
-/** The small plate that shows the state of the transport. */
-@Composable
-private fun TorPill(state: BrowserUiState) {
-    val tor = state.tor
-    OvBadge(
-        text = if (tor.ready) "TOR" else "${tor.percent}%",
-        accent = if (tor.ready) OnionPalette.Good else OnionPalette.Amber,
-        container = if (tor.ready) {
-            OnionPalette.Good.copy(alpha = 0.14f)
-        } else {
-            OnionPalette.Amber.copy(alpha = 0.14f)
-        },
-    )
-}
+        // The row of the buttons, floating above the page.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 6.dp, start = 12.dp, end = 12.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OvGlassButton(
+                icon = painterResource(R.drawable.ic_neon_back),
+                contentDescription = "Back",
+                onClick = onBack,
+                enabled = state.canGoBack,
+            )
+            Spacer(Modifier.width(22.dp))
+            OvGlassButton(
+                icon = painterResource(R.drawable.ic_neon_forward),
+                contentDescription = "Forward",
+                onClick = onForward,
+            )
+            Spacer(Modifier.width(22.dp))
+            OvGlassButton(
+                icon = painterResource(R.drawable.ic_neon_reload),
+                contentDescription = "Reload",
+                onClick = onReload,
+            )
+            Spacer(Modifier.width(22.dp))
+            OvGlassButton(
+                icon = painterResource(R.drawable.ic_neon_new_tab),
+                contentDescription = "New tab",
+                onClick = onNewTab,
+                badge = state.tabCount,
+            )
+            Spacer(Modifier.width(22.dp))
+            OvGlassButton(
+                icon = painterResource(R.drawable.ic_neon_menu),
+                contentDescription = "The menu of Trap",
+                onClick = onMenu,
+            )
+        }
 
-/**
- * The dock of the browser.
- *
- * The tiles are the ones of the board that have a real function behind them:
- * the routing over Tor, the leak protection, the keyring and the licences.
- * The wallet, the bookmarks, the downloads and the microphone of the board
- * are not shown: there is no feature behind them.
- *
- * @param state the state of the browser.
- * @param onRouting the user changed the traffic policy.
- * @param onKeys the user wants the key manager.
- * @param onLegal the user wants the licences.
- */
-@Composable
-private fun Dock(
-    state: BrowserUiState,
-    onRouting: () -> Unit,
-    onKeys: () -> Unit,
-    onLegal: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(OnionPalette.Surface)
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.Top,
-    ) {
-        OvNeonTile(
-            icon = painterResource(R.drawable.ic_neon_onion),
-            label = "ONION",
-            onClick = onRouting,
-            active = state.hiddenServiceOnly,
-            modifier = Modifier.width(62.dp),
+        Spacer(Modifier.height(8.dp))
+
+        // The field of the address, at the bottom of the screen.
+        AddressField(
+            address = address,
+            onAddressChange = onAddressChange,
+            onNavigate = onNavigate,
+            onClear = onClear,
+            blocked = state.blocked,
+            modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 18.dp),
         )
-        OvNeonTile(
-            icon = painterResource(R.drawable.ic_neon_key),
-            label = "PGP",
-            onClick = onKeys,
-            modifier = Modifier.width(62.dp),
-        )
-        OvNeonTile(
-            icon = painterResource(R.drawable.ic_ov_legal),
-            label = "LICENCES",
-            onClick = onLegal,
-            modifier = Modifier.width(62.dp),
-        )
+
     }
 }
 
 /**
- * The row with the address of the page.
+ * The field of the address.
+ *
+ * It is the field of Safari: a rounded plate with the mark of the brand and
+ * the shield of the leak protection on the left, the address in the middle
+ * and the button that clears it on the right.
  *
  * @param address the address that is shown.
  * @param onAddressChange the user typed in the address.
  * @param onNavigate the user wants to go to the address.
  * @param onClear the user cleared the address.
  * @param blocked `true` when the last request was blocked.
+ * @param modifier the modifier of the field.
  */
 @Composable
-private fun AddressRow(
+private fun AddressField(
     address: String,
     onAddressChange: (String) -> Unit,
     onNavigate: () -> Unit,
     onClear: () -> Unit,
     blocked: Boolean,
+    modifier: Modifier = Modifier,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(OnionPalette.Surface)
-            .padding(horizontal = 10.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    OvAddressPlate(
+        modifier = modifier,
+        border = if (blocked) OnionPalette.Bad else OnionPalette.Hairline,
     ) {
-        OvAddressPlate(
-            modifier = Modifier.weight(1f),
-            border = if (blocked) OnionPalette.Bad else OnionPalette.TealDeep,
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 10.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 12.dp, end = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Image(
-                    painter = painterResource(R.drawable.ic_neon_shield),
-                    contentDescription = null,
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.size(18.dp),
+            Image(
+                painter = painterResource(R.drawable.ov_trap_mark),
+                contentDescription = "Trap",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.size(22.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            Image(
+                painter = painterResource(R.drawable.ic_neon_shield),
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.size(16.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            BasicTextField(
+                value = address,
+                onValueChange = onAddressChange,
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                textStyle = TextStyle(
+                    color = OnionPalette.TextPrimary,
+                    fontSize = 15.sp,
+                    fontFamily = FontFamily.Monospace,
+                ),
+                cursorBrush = SolidColor(OnionPalette.Mint),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                keyboardActions = KeyboardActions(onGo = { onNavigate() }),
+                decorationBox = { inner ->
+                    if (address.isEmpty()) {
+                        Text(
+                            text = "Search or enter the address of a hidden service",
+                            color = OnionPalette.TextMuted,
+                            fontSize = 14.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    inner()
+                },
+            )
+            if (address.isNotEmpty()) {
+                OvGlassButton(
+                    icon = painterResource(R.drawable.ic_neon_cancel),
+                    contentDescription = "Clear the address",
+                    onClick = onClear,
+                    size = 28.dp,
+                    glyph = 15.dp,
+                    accent = OnionPalette.Pink,
+                    elevation = 0.dp,
                 )
-                Spacer(Modifier.width(8.dp))
-                BasicTextField(
-                    value = address,
-                    onValueChange = onAddressChange,
-                    modifier = Modifier.weight(1f),
-                    singleLine = true,
-                    textStyle = TextStyle(
-                        color = OnionPalette.TextPrimary,
-                        fontSize = 13.sp,
-                        fontFamily = FontFamily.Monospace,
-                    ),
-                    cursorBrush = SolidColor(OnionPalette.Mint),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                    keyboardActions = KeyboardActions(onGo = { onNavigate() }),
-                    decorationBox = { inner ->
-                        if (address.isEmpty()) {
-                            Text(
-                                text = "onion address",
-                                color = OnionPalette.TextMuted,
-                                fontSize = 13.sp,
-                                fontFamily = FontFamily.Monospace,
-                            )
-                        }
-                        inner()
-                    },
-                )
-                if (address.isNotEmpty()) {
-                    OvNeonButton(
-                        icon = painterResource(R.drawable.ic_neon_cancel),
-                        contentDescription = "Clear the address",
-                        onClick = onClear,
-                        plate = 28.dp,
-                        glyph = 16.dp,
-                        accent = OnionPalette.Pink,
-                    )
-                }
             }
         }
     }
 }
 
 /**
- * The row with the buttons of the navigation.
+ * The thin line with the state of the transport.
  *
- * @param canGoBack `true` when the back button is enabled.
+ * It is the line that Safari draws above the toolbar: one line of text and
+ * the progress of the bootstrap while the client is not ready.
+ *
+ * @param state the state of the browser.
  */
 @Composable
-private fun NavigationRow(
-    canGoBack: Boolean,
-    onBack: () -> Unit,
-    onForward: () -> Unit,
-    onHome: () -> Unit,
-    onNewTab: () -> Unit,
-    onReload: () -> Unit,
-    onMenu: () -> Unit,
-) {
-    Row(
+private fun TorStatusLine(state: BrowserUiState) {
+    val tor = state.tor
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(OnionPalette.Surface)
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(start = 16.dp, end = 16.dp, top = 4.dp),
     ) {
-        OvNeonButton(
-            icon = painterResource(R.drawable.ic_neon_back),
-            contentDescription = "Back",
-            onClick = onBack,
-            enabled = canGoBack,
-        )
-        OvNeonButton(
-            icon = painterResource(R.drawable.ic_neon_forward),
-            contentDescription = "Forward",
-            onClick = onForward,
-        )
-        OvNeonButton(
-            icon = painterResource(R.drawable.ic_neon_home),
-            contentDescription = "The start page of Trap",
-            onClick = onHome,
-        )
-        OvNeonButton(
-            icon = painterResource(R.drawable.ic_neon_new_tab),
-            contentDescription = "New tab",
-            onClick = onNewTab,
-        )
-        OvNeonButton(
-            icon = painterResource(R.drawable.ic_neon_reload),
-            contentDescription = "Reload",
-            onClick = onReload,
-        )
-        OvNeonButton(
-            icon = painterResource(R.drawable.ic_neon_dots),
-            contentDescription = "The menu of Trap",
-            onClick = onMenu,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = if (tor.ready) "Tor ready" else "Tor: ${tor.percent}% ${tor.stage}",
+                color = if (tor.ready) OnionPalette.Good else OnionPalette.TextMuted,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.weight(1f),
+            )
+            tor.isolationToken?.let {
+                Text(
+                    text = it,
+                    color = OnionPalette.Teal,
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                )
+            }
+        }
+        if (!tor.ready) {
+            Spacer(Modifier.height(4.dp))
+            OvProgressBar(progress = tor.percent / 100f, modifier = Modifier.fillMaxWidth())
+        }
     }
 }
 
@@ -578,6 +600,7 @@ private fun NavigationRow(
 private fun MenuSheet(
     state: BrowserUiState,
     onNewTab: () -> Unit,
+    onHome: () -> Unit,
     onTabs: () -> Unit,
     onKeys: () -> Unit,
     onLegal: () -> Unit,
@@ -589,23 +612,41 @@ private fun MenuSheet(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.55f))
+            .background(Color.Black.copy(alpha = 0.45f))
             .clickable(onClick = onDismiss),
-        contentAlignment = Alignment.TopEnd,
+        contentAlignment = Alignment.BottomCenter,
     ) {
         Column(
             modifier = Modifier
-                .padding(top = 54.dp, end = 10.dp)
-                .width(250.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .background(OnionPalette.SurfaceRaised)
-                .border(1.dp, OnionPalette.TealDeep, RoundedCornerShape(16.dp))
-                .padding(vertical = 6.dp),
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
+                .background(OnionPalette.SurfaceRaised.copy(alpha = 0.97f))
+                .border(
+                    1.dp,
+                    OnionPalette.Hairline,
+                    RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp),
+                )
+                .padding(vertical = 8.dp),
         ) {
+            // The grabber of the sheet, the way iOS draws it.
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterHorizontally)
+                    .padding(bottom = 8.dp)
+                    .width(36.dp)
+                    .height(5.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(OnionPalette.Hairline),
+            )
             OvMenuRow(
                 icon = painterResource(R.drawable.ic_neon_new_tab),
                 label = "New Tab",
                 onClick = onNewTab,
+            )
+            OvMenuRow(
+                icon = painterResource(R.drawable.ic_neon_home),
+                label = "Start Page",
+                onClick = onHome,
             )
             OvMenuRow(
                 icon = painterResource(R.drawable.ic_neon_new_partial_tab),
@@ -761,65 +802,6 @@ private fun ActionChip(field: PgpFieldState, onClick: () -> Unit) {
         onClick = onClick,
         icon = painterResource(icon),
         kind = kind,
-    )
-}
-
-/**
- * The status line with the state of the Tor client.
- *
- * @param state the state of the browser.
- */
-@Composable
-private fun TorStatusBar(state: BrowserUiState) {
-    val tor = state.tor
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(OnionPalette.SurfaceRaised)
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = if (tor.ready) "Tor ready" else "Tor: ${tor.percent}% ${tor.stage}",
-                color = if (tor.ready) OnionPalette.Good else OnionPalette.TextMuted,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier.weight(1f),
-            )
-            tor.isolationToken?.let {
-                Text(
-                    text = it,
-                    color = OnionPalette.Teal,
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace,
-                )
-            }
-        }
-        if (!tor.ready) {
-            Spacer(Modifier.height(5.dp))
-            OvProgressBar(progress = tor.percent / 100f, modifier = Modifier.fillMaxWidth())
-        }
-        tor.circuit?.let { circuit ->
-            Spacer(Modifier.height(6.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                circuit.hops.forEach { hop ->
-                    HopBadge(hop)
-                }
-            }
-        }
-    }
-}
-
-/**
- * The badge of a hop of the circuit.
- *
- * @param hop the hop of the circuit.
- */
-@Composable
-private fun HopBadge(hop: CircuitHop) {
-    OvBadge(
-        text = "${hop.role} ${hop.latencyMillis}ms",
-        accent = OnionPalette.TextMuted,
     )
 }
 

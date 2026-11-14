@@ -10,6 +10,7 @@ build = "build.rs"
 
 [workspace]
 members = [
+    "crates/cefpack",
     "crates/ov-core",
     "crates/ov-cef",
     "crates/ov-pgp",
@@ -40,6 +41,9 @@ ov-tor = { path = "crates/ov-tor" }
 jni = "0.21"
 ndk = { version = "0.9", features = ["nativewindow", "api-level-29"] }
 ndk-sys = "0.6"
+# The C library of the platform: the native guard against the crashes needs
+# the signal handling of it.
+libc = "0.2"
 
 # Tor
 arti-client = { version = "0.47", default-features = false, features = [

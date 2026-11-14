@@ -171,9 +171,10 @@ pub fn build_engine(
 
 /// Append the Trap switches to a command line.
 ///
-/// This is used for the CEF subprocesses that Trap starts itself (the
-/// renderer, the GPU and the utility process are started through Android
-/// services, see `CefService.kt`).
+/// The child processes of the engine (the renderer, the GPU and the utility
+/// process) are started by the engine itself, through the services that its
+/// own manifest declares; Chromium passes them the command line of the
+/// browser process, so the switches of Trap are already there.
 pub fn apply_command_line(command_line: &mut CommandLine, config: &OvConfig) {
     command_line.append_switch_with_value(
         Some(&CefString::from("proxy-server")),

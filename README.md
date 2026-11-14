@@ -55,7 +55,7 @@ below always point at the newest build:
 | [`LGPL-3.0.txt`](https://github.com/maceip/trap/releases/latest/download/LGPL-3.0.txt) | the licence of the CEF engine, with the GPL-3.0 that it incorporates |
 | [`GPL-3.0.txt`](https://github.com/maceip/trap/releases/latest/download/GPL-3.0.txt) | the GNU GPL on its own |
 | [`LGPL-2.1.txt`](https://github.com/maceip/trap/releases/latest/download/LGPL-2.1.txt) | the licence of sequoia-openpgp |
-| [`CEFRIUM-NOTICE.txt`](https://github.com/maceip/trap/releases/latest/download/CEFRIUM-NOTICE.txt) | the notice of the engine, with the licences of the Chromium sources |
+| [`CEF-LICENSE.txt`](https://github.com/maceip/trap/releases/latest/download/CEF-LICENSE.txt) | the licence of the engine |
 | [`SHA256SUMS.txt`](https://github.com/maceip/trap/releases/latest/download/SHA256SUMS.txt) | the checksums of the licence documents |
 
 The list of every release is at
@@ -193,15 +193,32 @@ rendering, like the pipeline of the icons does.
 | purple | `#8F55A6` | the shadow of the mural |
 | near black | `#15181F` | the background of the application and of the panels |
 
-The chrome follows the board:
+The chrome is the chrome of **Safari on iOS**: the page fills the screen and
+the controls float above it, at the bottom.  There is **no rail at the top**
+— the brand of Trap lives in the field of the address, and the state of the
+transport is a thin line above the buttons.
 
-| part of the board | what it is in the application |
+```
+┌─────────────────────────────┐
+│                             │
+│         the page            │
+│                             │
+│ Tor ready      iso-3f7c…    │
+│   ←    →    ⟳    ⊕    ☰      │
+│ [TRAP ▾ https://example.onion ✕] │
+└─────────────────────────────┘
+```
+
+| part | what it is |
 |---|---|
-| the top bar: menu, wordmark, two onions, tab badge, ⋮ | the same, in the same order |
-| the dock of the tiles | the tiles that have a real function behind them: the routing over Tor, the keyring and the licences |
-| the address pill: shield, address, ✕, microphone | the shield, the address and the button that clears it; the microphone is not shown, because there is no speech engine behind it |
-| the navigation row: back, forward, home, new tab, reload, ⋮ | the same, in the same order |
-| the menu of the browser | New Tab, Tabs, PGP Keyring, Security, Zoom In, Zoom Out and the licences |
+| the row of the buttons | back, forward, reload, the new tab (with the number of the tabs on it) and the menu, in round plates of glass that float above the page |
+| the field of the address | the mark of the brand, the shield of the leak protection, the address and the button that clears it |
+| the line of the transport | the state of the Tor client and the token of the circuit |
+| the menu of the browser | a sheet at the bottom, the way iOS draws it: New Tab, Start Page, Tabs, PGP Keyring, Security, Zoom In, Zoom Out and the licences |
+
+Every glyph of the chrome comes from the icon system of the board — the
+arrows, the reload, the window with a plus, the hamburger, the shield and
+the cross.  The icons of the material library are never used.
 
 The wallet, the bookmarks, the downloads, the settings and the microphone of
 the board are **not** in the application: there is no feature behind them,
@@ -253,9 +270,9 @@ Android Studio and on the JVM:
 | `PredictiveBackPreview` | the back gesture at 65 % of its length |
 | `PgpDecryptionModalPreview` | the key manager and the decryption dialog |
 | `LegalNoticesPreview` | the licences that travel with the engine |
-| `BrowserChromePreview` | the browser chrome with the mark of the application |
+| `BrowserChromePreview` | the chrome of the browser: the floating buttons and the field of the address |
 | `TorTaxiPreview` | tor.taxi, fetched over the Tor client |
-| `BrowserMenuPreview` | the menu of the browser, with the traffic policy and the zoom |
+| `BrowserMenuPreview` | the menu of the browser as a sheet, with the traffic policy and the zoom |
 
 `OnionVaultPreviewsTest` renders all eight previews with Robolectric, which
 runs the real Compose runtime on the JVM; the continuous integration runs it
@@ -297,54 +314,112 @@ entry points have to be defined there.
 
 * Rust 1.82 or newer with the `aarch64-linux-android` target,
 * the Android NDK (r27c is used in development) and `cargo-ndk`,
-* JDK 17 and the Android SDK (platform 35, build-tools 35.0.0),
-* **the CEF Android distribution** for `arm64-v8a`.
+* **JDK 17 or newer** and the Android SDK (platform 37, build-tools 37.0.0),
+* a bundle of the engine, built by `cefpack` (see below).
 
-### The CEF runtime
+### The engine of the browser
 
-`cef-rs` does not ship Android bindings and its build script downloads a
-*desktop* CEF distribution. `third_party/cef` and `third_party/cef-dll-sys`
-are patched copies that
+The engine of the browser is **CEF**, the Chromium Embedded Framework, built
+from its own sources with the Android NDK by the **bundling service** of this
+repository (`crates/cefpack`).
 
-* alias the `aarch64-linux-gnu` bindings to `aarch64-linux-android`, and
-* build against a CEF distribution that is provided through
-  `CEF_ANDROID_ROOT` (or `CEF_PATH`).
+CEF publishes binary distributions for Windows, Linux and macOS.  There is
+**no Android distribution**: the sources of CEF have no Android browser code,
+and the build script of CEF knows only `windows`, `mac` and `linux`.  An
+Android build of CEF is therefore something that has to be made, not
+something that can be downloaded — and that is what the service does.
 
-CEF itself publishes binary distributions for Windows, Linux and macOS only;
-there is no official Android build.  The engine for Trap comes from
-[Cefrium](https://codeberg.org/cefrium/cef-android), the port of CEF to
-`aarch64-linux-android`; its release 0.19.0 is built on Chromium
-156.0.8078.80, the same Chromium release that the CEF 156 bindings of this
-project expect.  The engine is inside the SDK of the release:
+The service is the counterpart of what `cef-rs` does for the desktop: it
+resolves the sources of a pinned version, drives the build of Chromium with
+the NDK, collects the result into a bundle with the shape of a CEF binary
+distribution and checks that the bundle is sound.  It is a crate of this
+workspace, so it is versioned and tested with it.
 
 ```sh
-# The SDK of the release: the shared object and the resource files.
-curl -L -o cefrium-sdk.aar \
-  https://codeberg.org/cefrium/cef-android/releases/download/v0.19.0/cefrium-sdk-0.19.0.aar
-echo "efb3f50dede4485215560455e16836671a7ebae32a35559bcfd4456d6667978b  cefrium-sdk.aar" \
-  | sha256sum --check --strict -
-unzip -q cefrium-sdk.aar 'jni/arm64-v8a/libcef.so' 'assets/*' -d cefrium
+# the pinned version, the target and the toolchain
+cargo run -p cefpack -- plan
 
-export CEF_ANDROID_ROOT=$PWD/cef-root
-mkdir -p "$CEF_ANDROID_ROOT/lib" "$CEF_ANDROID_ROOT/locales"
-cp cefrium/jni/arm64-v8a/libcef.so "$CEF_ANDROID_ROOT/lib/"
-for file in cefrium/assets/*.pak* cefrium/assets/icudtl.dat*; do
-    cp "$file" "$CEF_ANDROID_ROOT/$(basename "${file%+com.cefrium+}")"
-done
-cp cefrium/assets/stored-locales/en-US.pak* "$CEF_ANDROID_ROOT/locales/en-US.pak"
+# the sources of the pinned CEF commit
+cargo run -p cefpack -- fetch
+
+# the engine, the C API shim, the headers and the resources
+cargo run -p cefpack -- build
+
+# the verdict on a bundle
+cargo run -p cefpack -- audit /path/to/bundle
+
+# the Rust declarations of the C API, for the engine that is shipped
+cargo run -p cefpack -- bindgen /path/to/bundle
+
+# the staging tree for the Gradle build
+cargo run -p cefpack -- pack /path/to/bundle /path/to/staging
+
+# the verdict on an APK
+cargo run -p cefpack -- apk android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-The checksum is the one that the release publishes in `SHA256SUMS-0.19.0`;
-the continuous integration verifies it before it links against the engine.
+The pin lives in
+[`crates/cefpack/manifest/cef-android.toml`](crates/cefpack/manifest/cef-android.toml):
+the CEF revision (a full git SHA), the Chromium revision it tracks, the
+target, the version of the NDK and the arguments of the build.  It contains
+no path — the paths belong to the machine and are discovered from the
+environment — and no package: the CEF revision is the only input, and the
+Chromium revision that belongs to it is read from CEF's own `DEPS` file.
 
-The engine of Cefrium is free software under the **LGPL-3.0-or-later**, and
-the upstream Chromium Embedded Framework under the BSD-3-Clause.  The engine
-is a shared library: it is loaded at run time and can be replaced by the
-user of the application.  The sources of Cefrium are published at
-<https://codeberg.org/cefrium/cef-android> and the notices of the engine
-travel with the release
-(`cefrium-sdk-0.19.0-NOTICE.txt`); the third party dependencies of Trap
-are listed in [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
+A bundle has the shape of a CEF binary distribution, so that the consumers
+need no special case for Android:
+
+```
+CEF_ANDROID_ROOT/
+├── include/                  the public headers of the version that was built
+│   ├── cef_app.h, cef_browser.h, …
+│   └── capi/                 the C API, generated by the translator of CEF
+├── lib/
+│   ├── libcef.so             the engine (packaged into the APK)
+│   └── libcef_dll_wrapper.a  the C API shim (linked into the library of Trap)
+├── Resources/                resources.pak, chrome_100_percent.pak,
+│                             chrome_200_percent.pak, icudtl.dat, locales/…
+├── LICENSE.txt                the licence of the engine
+└── bundle.json               the provenance: versions, checksums, arguments
+```
+
+The build of Gradle only **consumes** a bundle; it never starts the build of
+the engine, which takes hours.  The path of the bundle comes from the
+environment:
+
+```sh
+export CEF_ANDROID_ROOT=/path/to/cef-bundle
+./android/gradlew --project-dir android :app:assembleDebug
+```
+
+### The declarations of the C API
+
+The Rust declarations of the C API are generated from the headers of the
+engine that is shipped, by `cefpack bindgen`.  They used to be the
+declarations of a *desktop* distribution, reused for Android without a
+check — which is the kind of mistake that only shows up on a device.
+
+The C API of CEF is versioned, and the version is the contract: two engines
+of the same API version have the same C API, whatever the platform they were
+built for.  The build script of `cef-dll-sys` therefore reads the API version
+of the engine from the headers of the bundle and the API version of the
+declarations from the declarations themselves, and **refuses to build when
+the two differ**:
+
+```
+the bindings are for the API version CEF_API_VERSION_14000, the engine is
+CEF_API_VERSION_15600; run `cefpack bindgen <bundle>` to regenerate them
+```
+
+### The licences
+
+The engine of the browser is free software under the **LGPL-3.0-or-later**,
+and the upstream Chromium Embedded Framework under the BSD-3-Clause.  The
+engine is a shared library: it is loaded at run time and can be replaced by
+the user of the application.  The sources of CEF are published at
+<https://github.com/chromiumembedded/cef> and the notices of the engine
+travel with the release; the third party dependencies of Trap are listed in
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
 
 The licence of the engine has to be readable by the recipient of the binary.
 The full text of every licence is therefore
@@ -353,24 +428,6 @@ The full text of every licence is therefore
   * inside the APK, under `assets/licenses/`, where the application shows it
     (the tile of the licences in the dock),
   * and attached to every release of the project, next to the APK.
-
-The notice of the engine is 2.2 MiB and belongs to the exact build of the
-engine, so it is not kept in the repository: the continuous integration
-downloads it from the release of Cefrium, verifies it against the published
-`SHA256SUMS-0.19.0` and puts it into the APK next to the other texts.
-
-The sysroot has to provide the shared object and the resource files; the C++
-wrapper is optional, because a distribution that ships one self-contained
-`libcef.so` (as Cefrium does) exports every C API function from it:
-
-```
-$CEF_ANDROID_ROOT/
-├── lib/
-│   └── libcef.so       the Chromium runtime (packaged into the APK)
-├── NOTICE.txt          the notice of the engine (packaged into the APK)
-└── Resources/          resources.pak, chrome_100_percent.pak,
-                        chrome_200_percent.pak, icudtl.dat, locales/…
-```
 
 `build.rs` copies the resource files into
 `android/app/src/main/assets/cef/`, the Gradle build copies `libcef.so` into

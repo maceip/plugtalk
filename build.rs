@@ -1,40 +1,40 @@
-//! Build script for the `onion-vault` Android library.
+//! Build script of the `onion-vault` Android library.
 //!
-//! Two jobs:
+//! The engine of the browser is CEF, built from its own sources with the
+//! Android NDK by the `cefpack` service of the workspace.  The service
+//! produces a bundle with the shape of a CEF binary distribution:
 //!
-//! 1. **Link the prebuilt CEF runtime.**  CEF for Android is distributed as a
-//!    prebuilt `libcef.so` plus a cross-compiled C++ wrapper
-//!    (`libcef_dll_wrapper.a`).  Neither can be produced by Cargo, so the
-//!    sysroot is located through `CEF_ANDROID_ROOT` (falling back to
-//!    `CEF_PATH`) and the link directives are emitted from here.  The
-//!    vendored `cef-dll-sys` build script performs the same lookup, this one
-//!    additionally covers the `onion-vault` cdylib itself.
+//! ```text
+//! <bundle>/
+//!   include/                  the public headers of the built version
+//!   lib/libcef.so             the engine
+//!   lib/libcef_dll_wrapper.a  the C API shim
+//!   Resources/                the resource files of the engine
+//!   LICENSE.txt                the licence of the engine
+//! ```
 //!
-//! 2. **Package the CEF resources.**  `cef.pak`, `cef_100_percent.pak`,
-//!    `icudtl.dat` and `locales/en-US.pak` have to be shipped inside the APK
-//!    (`assets/cef/`) and unpacked to `filesDir/cef_resources` on first boot,
-//!    because Android's asset manager cannot hand Chromium a memory mapped
-//!    file descriptor for them.  This script copies them into the Gradle
-//!    assets directory so that `./gradlew assembleDebug` picks them up.
+//! The root of the bundle comes from `CEF_ANDROID_ROOT`.  This script emits
+//! the link directives for the two libraries and copies the resource files
+//! into the assets of the application, where the engine maps them out of the
+//! APK.
 
 use std::{
     env, fs,
     path::{Path, PathBuf},
 };
 
-/// Resources that must end up in `android/app/src/main/assets/cef/`.
+/// The resources that have to end up in the assets of the APK.
+///
+/// The engine reads them out of the APK and maps them, therefore they must
+/// not be compressed there.
 const CEF_RESOURCES: &[&str] = &[
+    "icudtl.dat",
+    "resources.pak",
+    "chrome_100_percent.pak",
+    "chrome_200_percent.pak",
     "cef.pak",
     "cef_100_percent.pak",
     "cef_200_percent.pak",
-    "icudtl.dat",
-    "chrome_100_percent.pak",
-    "chrome_200_percent.pak",
-    // The Chromium names of the resources.  A CEF distribution uses the
-    // `cef_*` names, a plain Chromium build uses the `chrome_*` names and
-    // `resources.pak`; the engine reads the names it was built with, so
-    // every name that exists is copied.
-    "resources.pak",
 ];
 
 fn main() {
@@ -47,10 +47,17 @@ fn main() {
     let assets_dir = manifest_dir.join("android/app/src/main/assets/cef");
 
     let Some(root) = cef_root() else {
-        println!(
-            "cargo::warning=CEF_ANDROID_ROOT is not set: the CEF runtime is neither linked nor \
-             packaged.  Set CEF_ANDROID_ROOT to a CEF Android distribution to build an APK."
-        );
+        if check_only() {
+            println!(
+                "cargo::warning=ONIONVAULT_CEF_CHECK_ONLY=1: the engine is neither linked nor \
+                 packaged"
+            );
+        } else {
+            println!(
+                "cargo::warning=CEF_ANDROID_ROOT is not set: the engine is neither linked nor \
+                 packaged.  Set CEF_ANDROID_ROOT to a bundle built by `cefpack build`."
+            );
+        }
         return;
     };
 
@@ -58,7 +65,14 @@ fn main() {
     package_resources(&root, &assets_dir);
 }
 
-/// Root of the pre-extracted CEF distribution.
+/// `true` when the build must not require a bundle.
+fn check_only() -> bool {
+    env::var("ONIONVAULT_CEF_CHECK_ONLY")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// Root of the bundle of the engine.
 fn cef_root() -> Option<PathBuf> {
     env::var("CEF_ANDROID_ROOT")
         .ok()
@@ -67,7 +81,7 @@ fn cef_root() -> Option<PathBuf> {
         .filter(|p| p.is_dir())
 }
 
-/// Emit the link directives for the prebuilt CEF shared object.
+/// Emit the link directives for the engine and the C API shim.
 fn link_cef(root: &Path) {
     let lib_dir = root.join("lib");
     let libcef = lib_dir.join("libcef.so");
@@ -77,29 +91,28 @@ fn link_cef(root: &Path) {
         println!("cargo::rerun-if-changed={}", libcef.display());
     } else {
         println!(
-            "cargo::warning={} not found: libcef.so will not be linked",
+            "cargo::warning={} not found: the engine will not be linked",
             libcef.display()
         );
     }
 
-    // The C++ wrapper static library, as produced by the NDK toolchain build
-    // of the CEF `libcef_dll` wrapper.
-    for candidate in [
-        root.join("libcef_dll_wrapper.a"),
-        root.join("libcef_dll_wrapper/libcef_dll_wrapper.a"),
-        root.join("build/libcef_dll_wrapper.a"),
-    ] {
-        if candidate.is_file() {
-            let dir = candidate.parent().unwrap();
-            println!("cargo::rustc-link-search=native={}", dir.display());
-            println!("cargo::rustc-link-lib=static=cef_dll_wrapper");
-            println!("cargo::rerun-if-changed={}", candidate.display());
-            break;
-        }
+    // The C API shim: the C functions of CEF are implemented on top of the
+    // C++ API by this static archive.  A distribution that carries the shim
+    // inside the shared object does not need it.
+    let wrapper = lib_dir.join("libcef_dll_wrapper.a");
+    if wrapper.is_file() {
+        println!("cargo::rustc-link-lib=static=cef_dll_wrapper");
+        println!("cargo::rerun-if-changed={}", wrapper.display());
+    } else {
+        println!(
+            "cargo::warning={} not found: the shared object is expected to carry the C API \
+             itself",
+            wrapper.display()
+        );
     }
 }
 
-/// Copy the CEF resource files into the Gradle assets directory.
+/// Copy the resource files of the engine into the assets of the application.
 fn package_resources(root: &Path, assets_dir: &Path) {
     if let Err(err) = fs::create_dir_all(assets_dir) {
         println!(
@@ -111,7 +124,7 @@ fn package_resources(root: &Path, assets_dir: &Path) {
 
     let mut copied = 0usize;
     for name in CEF_RESOURCES {
-        let src = root.join(name);
+        let src = root.join("Resources").join(name);
         if src.is_file() {
             if let Err(err) = fs::copy(&src, assets_dir.join(name)) {
                 println!("cargo::warning=cannot copy {}: {err}", src.display());
@@ -121,8 +134,8 @@ fn package_resources(root: &Path, assets_dir: &Path) {
         }
     }
 
-    // Locales live in a separate directory of the distribution.
-    let locales_src = root.join("locales");
+    // The locales live in their own directory.
+    let locales_src = root.join("Resources/locales");
     let locales_dst = assets_dir.join("locales");
     if locales_src.is_dir() {
         if let Err(err) = fs::create_dir_all(&locales_dst) {
@@ -143,10 +156,11 @@ fn package_resources(root: &Path, assets_dir: &Path) {
 
     if copied == 0 {
         println!(
-            "cargo::warning=no CEF resource files found below {}: the APK would not start CEF",
-            root.display()
+            "cargo::warning=no resource file of the engine was found below {}: the browser will \
+             not be able to render anything",
+            root.join("Resources").display()
         );
     } else {
-        println!("cargo::warning=packaged {copied} CEF resource file(s) into the APK assets");
+        println!("cargo::warning=packaged {copied} resource file(s) of the engine");
     }
 }

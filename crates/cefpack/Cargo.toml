@@ -1,0 +1,36 @@
+[package]
+name = "cefpack"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "Apache-2.0 OR MIT"
+description = "CEF Android bundling service: composes a CEF distribution for Android out of the CEF sources and the Android NDK"
+publish = false
+
+[[bin]]
+name = "cefpack"
+path = "src/bin/cefpack.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+log = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = "0.10"
+toml = "0.8"
+ureq = { version = "2", features = ["tls"] }
+tar = "0.4"
+flate2 = "1"
+xz2 = "0.1"
+walkdir = "2"
+which = "7"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+bindgen = { version = "0.71", optional = true }
+
+[features]
+default = ["bindgen"]
+# The generator of the Rust FFI.  It needs libclang at run time.
+bindgen = ["dep:bindgen"]
+
+[dev-dependencies]
+tempfile = "3"

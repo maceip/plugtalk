@@ -64,6 +64,19 @@ data class OnionBackStackEntry(
  * finger is on the screen.
  *
  * The stack is bounded: the oldest page falls out of it.
+ *
+ * ## The catalogue of the back surfaces
+ *
+ * | surface | where it is | what it does |
+ * |---|---|---|
+ * | the back button | the row of the buttons of the chrome | `nativeGoBack`, then the stack is read again |
+ * | the forward button | the row of the buttons of the chrome | `nativeGoForward`; it is **never dimmed**, because the state has no `canGoForward` |
+ * | the predictive back gesture | `PredictiveBackHandler` in `BrowserScreen` | the live page shrinks and slides, the cached frame of the previous page comes back behind it |
+ * | the cancellation of the gesture | `BrowserScreen` | the live page grows back over 180 ms |
+ * | the manifest | `android:enableOnBackInvokedCallback="true"` | the gesture is handed to the application instead of the system |
+ *
+ * **There is no forward gesture.**  The forward button is the only way
+ * forward, and it gives no sign that there is nothing to go forward to.
  */
 class OnionBackStackManager(
     /** The maximum number of entries of the stack. */

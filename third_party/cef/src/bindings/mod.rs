@@ -39,10 +39,11 @@ mod aarch64_apple_darwin;
 pub use aarch64_apple_darwin::*;
 
 // ---------------------------------------------------------------- Android --
-// OnionVault targets `aarch64-linux-android`.  CEF's C API is identical on
-// Android and Linux; only the platform glue (zygote host, windowing) differs
-// and that lives in the C++ wrapper rather than in these declarations, so the
-// aarch64 Linux bindings are reused verbatim for the Android ABI.
+// The safe bindings are a transformation of the raw declarations and do not
+// depend on the platform, so the ones of the aarch64 Linux target are used
+// for the Android ABI as well.  They do depend on the *version* of the C
+// API, and the build script of `cef-dll-sys` refuses to build when the
+// bindings and the shipped engine disagree on it.
 #[cfg(all(target_os = "android", target_arch = "aarch64"))]
 mod aarch64_unknown_linux_gnu;
 #[cfg(all(target_os = "android", target_arch = "aarch64"))]

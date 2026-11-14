@@ -20,7 +20,7 @@ untouched.
 
 | component | origin | licence |
 |---|---|---|
-| Chromium Embedded Framework | [Chromium Embedded Framework](https://github.com/chromiumembedded/cef) 156.0.26, via the Android port [cefrium/cef-android](https://codeberg.org/cefrium/cef-android) 0.19.0 (Chromium 156.0.8078.80) | LGPL-3.0-or-later (the port), BSD-3-Clause (the upstream CEF and Chromium) |
+| Chromium Embedded Framework | [Chromium Embedded Framework](https://github.com/chromiumembedded/cef) 156.0.30, built from its own sources for `aarch64-linux-android` by the bundling service of this repository (Chromium 156.0.8078.96) | LGPL-3.0-or-later (CEF), BSD-3-Clause (Chromium) |
 | sequoia-openpgp | [sequoia-pgp/sequoia-openpgp](https://gitlab.com/sequoia-pgp/sequoia-openpgp) 1.22 | LGPL-2.0-or-later |
 | arti-client, tor-rtcompat | [artifacts.gitlab.torproject.org/tpo/core/arti](https://gitlab.torproject.org/tpo/core/arti) 0.47 | MIT OR Apache-2.0 |
 | rustls | [rustls/rustls](https://github.com/rustls/rustls) | Apache-2.0 OR ISC OR MIT |
@@ -40,12 +40,14 @@ of this repository together with the crates that the lock file pins, so that
 the native library can be rebuilt and relinked; the build script of the
 application (`build.rs` and the crates of `crates/`) is part of it.
 
-The engine of Cefrium (LGPL-3.0-or-later) is loaded as a shared library at
-run time and can be replaced by the user of the application.  Its sources
-are published at <https://codeberg.org/cefrium/cef-android>, its notices
-travel with the release as `cefrium-sdk-0.19.0-NOTICE.txt`, and the
-continuous integration verifies the checksum of the download before it links
-against it.
+The engine of the browser (LGPL-3.0-or-later) is loaded as a shared library
+at run time and can be replaced by the user of the application.  It is CEF,
+the Chromium Embedded Framework, built from its own sources for
+`aarch64-linux-android` by the bundling service of this repository
+(`crates/cefpack`); the sources are published at
+<https://github.com/chromiumembedded/cef>, the revision that was built is
+pinned in `crates/cefpack/manifest/cef-android.toml`, and the licence of the
+engine travels with the release as `CEF-LICENSE.txt`.
 
 ## The licence texts
 
@@ -54,7 +56,7 @@ The full text of every licence that applies to a component is in the
 
 | file | component | licence |
 |---|---|---|
-| `LGPL-3.0.txt` | the CEF engine of Cefrium | LGPL-3.0-or-later |
+| `LGPL-3.0.txt` | the CEF engine of the browser | LGPL-3.0-or-later |
 | `GPL-3.0.txt` | the GNU GPL that the LGPL-3.0 incorporates | GPL-3.0-or-later |
 | `LGPL-2.1.txt` | sequoia-openpgp | LGPL-2.0-or-later |
 

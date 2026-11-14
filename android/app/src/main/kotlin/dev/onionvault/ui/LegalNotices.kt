@@ -45,6 +45,16 @@ import kotlinx.coroutines.withContext
  * to read the licence of the library.  The documents are therefore shown by
  * the application itself and not only shipped in the archive of the release.
  *
+ * ## The catalogue of the surfaces
+ *
+ * | surface | what it is |
+ * |---|---|
+ * | the sheet | an `AlertDialog` whose title is "The licences of Trap"; it opens with a paragraph that says that the engine is CEF and that it can be replaced |
+ * | a row of the list | the title of the document, its size, and the word "read" in the teal of the brand |
+ * | the reader | a `Dialog` with the title of the document, the text in the monospace of the machine, and a "Close" button |
+ * | the reading | the notice of the engine is 2.2 MiB long; it is read in blocks on a worker thread and shown in a `LazyColumn` that only builds the visible rows |
+ * | the spinner | a `CircularProgressIndicator` in the teal of the brand, while the document is being read |
+ *
  * @param documents the documents that are packaged into the application.
  * @param onOpenDocument the user wants to read a document.
  * @param onDismiss the user closed the list.
@@ -76,8 +86,8 @@ fun LegalNoticesDialog(
                     .heightIn(max = 320.dp),
             ) {
                 Text(
-                    text = "The engine of the browser is the CEF port of " +
-                        "Cefrium, which is free software under the LGPL-3.0-or-later. " +
+                    text = "The engine of the browser is the Chromium Embedded " +
+                        "Framework, which is free software under the LGPL-3.0-or-later. " +
                         "It is loaded as a shared library and can be replaced.",
                     fontSize = 12.sp,
                     modifier = Modifier.padding(bottom = 10.dp),

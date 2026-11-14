@@ -70,90 +70,154 @@ fn main() -> anyhow::Result<()> {
     desktop_build(&target, &out_dir)
 }
 
-/// Android build: link against a pre-extracted CEF Android sysroot.
-fn build_android(_target: &str, out_dir: &Path) -> anyhow::Result<()> {
+/// Android build: link against the bundle of the engine.
+///
+/// The bundle is produced by the `cefpack` service of the workspace, which
+/// builds CEF from its own sources with the Android NDK.  It has the shape of
+/// a CEF binary distribution:
+///
+/// ```text
+/// <bundle>/include/                  the public headers of that version
+/// <bundle>/lib/libcef.so             the engine
+/// <bundle>/lib/libcef_dll_wrapper.a  the C API shim
+/// <bundle>/Resources/                the resource files
+/// ```
+///
+/// Two things are checked here, because both of them fail silently
+/// otherwise:
+///
+/// * the bindings that are used have to be the ones of the **version that is
+///   shipped**.  The bindings of another version have the same names and
+///   another layout of the structures, and the result is not a compile error
+///   but a program that writes into the wrong place.
+/// * the library of the application has to declare the engine as a
+///   dependency, so that the dynamic linker finds it at load time.
+fn build_android(target: &str, out_dir: &Path) -> anyhow::Result<()> {
     let Some(root) = cef_root() else {
         if check_only() {
             println!(
                 "cargo::warning=ONIONVAULT_CEF_CHECK_ONLY=1: skipping the CEF link step; \
-                 set CEF_ANDROID_ROOT to a CEF Android distribution to build a binary"
+                 set CEF_ANDROID_ROOT to a bundle built by `cefpack build` to build a binary"
             );
             return Ok(());
         }
         anyhow::bail!(
-            "no CEF Android distribution found.\n\
-             Set CEF_ANDROID_ROOT to a directory that contains the CEF Android SDK, e.g.\n    \
-             export CEF_ANDROID_ROOT=$HOME/cef/android-arm64\n\
-             It must provide libcef.so, the C++ wrapper static library and the CEF headers."
+            "no bundle of the engine found.\n\
+             Set CEF_ANDROID_ROOT to a bundle built by `cefpack build`, e.g.\n    \
+             export CEF_ANDROID_ROOT=/workspace/.research/cef-bundle\n\
+             The bundle has to carry include/, lib/libcef.so and \
+             lib/libcef_dll_wrapper.a."
         );
     };
 
     let lib_dir = root.join("lib");
-    let wrapper_lib_dir = root.join("libcef_dll_wrapper");
-
-    // The CEF Android SDK ships the shared object directly in `lib/`.
     let libcef = lib_dir.join("libcef.so");
     if !libcef.exists() {
+        if check_only() {
+            println!(
+                "cargo::warning=ONIONVAULT_CEF_CHECK_ONLY=1: {} does not exist; the link step is \
+                 skipped",
+                libcef.display()
+            );
+            check_api_version(&root)?;
+            return Ok(());
+        }
         anyhow::bail!("{} does not exist", libcef.display());
     }
     println!("cargo::rerun-if-changed={}", libcef.display());
     println!("cargo::rustc-link-search=native={}", lib_dir.display());
     println!("cargo::rustc-link-lib=dylib=cef");
 
-    // The C++ wrapper (`libcef_dll_wrapper.a`) is the shim that implements the
-    // `cef_*` C API on top of the C++ API.  It is cross-compiled with the NDK
-    // toolchain; OnionVault accepts a prebuilt copy inside the sysroot.
-    let wrapper = find_wrapper_archive(&wrapper_lib_dir, &root);
-    match wrapper {
-        Some(archive) => {
-            let dir = archive.parent().unwrap_or(&root).to_path_buf();
-            println!("cargo::rustc-link-search=native={}", dir.display());
-            println!("cargo::rustc-link-lib=static=cef_dll_wrapper");
-            println!("cargo::rerun-if-changed={}", archive.display());
-        }
-        None if check_only() => {
-            println!(
-                "cargo::warning=ONIONVAULT_CEF_CHECK_ONLY=1: {} has no libcef_dll_wrapper.a; \
-                 the link step is skipped",
-                root.display()
-            );
-        }
-        None => {
-            // A CEF Android distribution can ship the C++ wrapper as a
-            // separate static archive (`libcef_dll_wrapper.a`) or as part of
-            // the shared object itself.  The second form is complete on its
-            // own: every C API function is exported by `libcef.so`.
-            println!(
-                "cargo::warning={} has no libcef_dll_wrapper.a: the shared object is expected \
-                 to contain the C++ wrapper as well",
-                root.display()
-            );
-        }
+    // The C API shim: the C functions of CEF are implemented on top of the
+    // C++ API by this static archive.  A distribution that carries the shim
+    // inside the shared object does not need it.
+    let wrapper = lib_dir.join("libcef_dll_wrapper.a");
+    if wrapper.exists() {
+        println!("cargo::rerun-if-changed={}", wrapper.display());
+        println!("cargo::rustc-link-lib=static=cef_dll_wrapper");
+    } else {
+        println!(
+            "cargo::warning={} does not exist: the shared object is expected to carry the C \
+             API itself",
+            wrapper.display()
+        );
     }
 
-    // Expose the resource directory so the app can hand it to
-    // `CefSettings.resources_dir_path` / `locales_dir_path`.
+    // The bindings have to be the ones of the version that is shipped.
+    check_api_version(&root)?;
+
     println!("cargo::metadata=CEF_ANDROID_ROOT={}", root.display());
     let _ = out_dir;
+    let _ = target;
     Ok(())
 }
 
-/// Locate `libcef_dll_wrapper.a` below the sysroot.
-fn find_wrapper_archive(dir: &Path, root: &Path) -> Option<PathBuf> {
-    let direct = dir.join("libcef_dll_wrapper.a");
-    if direct.is_file() {
-        return Some(direct);
+/// The API version of the engine, as the headers of the bundle name it.
+fn bundle_api_version(root: &Path) -> Option<String> {
+    let header = root.join("include/cef_api_versions.h");
+    let contents = std::fs::read_to_string(header).ok()?;
+    contents.lines().find_map(|line| {
+        line.strip_prefix("#define CEF_API_VERSION_LAST ")
+            .map(|value| value.trim().to_string())
+    })
+}
+
+/// Check that the bindings are the ones of the shipped version.
+///
+/// The generated bindings carry the API version they were made for.  The
+/// headers of the bundle carry the API version of the engine.  When the two
+/// differ, the structures of the C API have another layout and every call
+/// into the engine reads the wrong place — a failure that no compiler and no
+/// test notices.
+fn check_api_version(root: &Path) -> anyhow::Result<()> {
+    let Some(expected) = bundle_api_version(root) else {
+        anyhow::bail!(
+            "{} does not name the API version of the engine; the bundle is incomplete",
+            root.join("include/cef_api_versions.h").display()
+        );
+    };
+
+    let bindings = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/bindings")
+        .join("aarch64_linux_android.rs");
+    if !bindings.exists() {
+        anyhow::bail!(
+            "{} does not exist; run `cefpack bindgen <bundle>` to generate the bindings of \
+             the engine",
+            bindings.display()
+        );
     }
-    let nested = root.join("libcef_dll_wrapper.a");
-    if nested.is_file() {
-        return Some(nested);
+    println!("cargo::rerun-if-changed={}", bindings.display());
+
+    let contents = std::fs::read_to_string(&bindings)?;
+    // The value is written as `CEF_API_VERSION_15600` in the headers and as
+    // `15600` in the generated bindings; it is normalised to the first form.
+    let found = contents.lines().find_map(|line| {
+        let line = line.trim();
+        let rest = line.strip_prefix("pub const CEF_API_VERSION_LAST:")?;
+        let value = rest.split('=').nth(1)?.trim().trim_end_matches(';');
+        let digits: String = value.chars().filter(|c| c.is_ascii_digit()).collect();
+        if digits.is_empty() {
+            return None;
+        }
+        Some(format!("CEF_API_VERSION_{digits}"))
+    });
+    match found {
+        Some(found) if found == expected => {
+            println!(
+                "cargo::warning=the bindings and the engine agree on the API version {expected}"
+            );
+            Ok(())
+        }
+        Some(found) => anyhow::bail!(
+            "the bindings are for the API version {found}, the engine is {expected}; run \
+             `cefpack bindgen <bundle>` to regenerate them"
+        ),
+        None => anyhow::bail!(
+            "{} does not name the API version it was made for",
+            bindings.display()
+        ),
     }
-    // `build/libcef_dll_wrapper.a` is where the upstream CMake build leaves it.
-    let cmake = root.join("build/libcef_dll_wrapper.a");
-    if cmake.is_file() {
-        return Some(cmake);
-    }
-    None
 }
 
 /// Desktop build: unchanged upstream behaviour (download + CMake + Ninja).

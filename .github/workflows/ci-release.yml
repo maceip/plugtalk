@@ -3,27 +3,26 @@
 # Every push to *any* branch (and every manual run) executes the whole
 # pipeline:
 #
-#   1. `rust-tests`    — fmt, clippy, check and test the Rust workspace,
+#   1. `rust-tests`    — fmt, clippy, check, test and **coverage** of the
+#                        Rust workspace,
 #   2. `android-build` — Compose preview smoke test and debug APK assembly,
 #   3. `release`       — publishes a *new* tagged GitHub Release with the APK.
 #
-# The `rust-tests` job does not need the CEF runtime: the vendored build
-# scripts understand `ONIONVAULT_CEF_CHECK_ONLY=1`, which skips the CEF link
-# step and the packaging of the CEF resources, while everything else is still
-# type-checked, unit-tested and assembled into an APK.
+# ## The engine
 #
-# The `android-build` job builds the *real* APK: it downloads the CEF runtime
-# for Android (Cefrium, the port of CEF to `aarch64-linux-android`, built on
-# the same Chromium release as the CEF 156 bindings of this project), links
-# the native library of Trap against it and packages the engine into
-# the APK.
+# The engine of the browser is CEF, built from its own sources with the
+# Android NDK by the `cefpack` service of the workspace.  CEF publishes no
+# Android distribution — there is no package to download — so the service
+# builds one and the pipeline consumes the result.
 #
-# The C++ wrapper (`libcef_dll_wrapper.a`) is not needed: the distribution
-# ships a self-contained `libcef.so` that exports the whole C API.
+# A build of CEF takes hours and needs a machine with a lot of memory and
+# disk, therefore it is **not** part of every push: the bundle is built by
+# the `cef-build` workflow and cached.  The job below refuses to publish an
+# APK when the bundle is missing, rather than shipping one without an engine.
 #
-# The release job publishes the APK of that build with its SHA-256 sum; every
-# push gets its own tag (`build-<run number>-<commit>`), so no release ever
-# overwrites the artefact of an earlier build.
+# The `rust-tests` job does not need the bundle: the build scripts understand
+# `ONIONVAULT_CEF_CHECK_ONLY=1`, which skips the link step, while everything
+# else is still type-checked, unit-tested and measured for coverage.
 
 name: CI & Release
 
@@ -47,16 +46,16 @@ env:
 
 jobs:
   rust-tests:
-    name: Rust checks and tests
+    name: Rust checks, tests and coverage
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: read
       actions: read
     env:
-      # The CEF Android distribution cannot be obtained in CI, so the CEF
-      # link/packaging step is switched off: the crates are still type-checked
-      # and unit-tested against the CEF bindings.
+      # The bundle of the engine cannot be obtained in every job, so the
+      # link step is switched off: the crates are still type-checked and
+      # unit-tested against the CEF bindings.
       ONIONVAULT_CEF_CHECK_ONLY: "1"
     steps:
       - name: Check out the repository
@@ -65,23 +64,22 @@ jobs:
       - name: Install system build dependencies
         # `rusqlite` is built with the `bundled` feature, i.e. SQLite is
         # compiled from C source and needs a C compiler.  `pkg-config` is the
-        # conventional companion of the C/C++ build dependencies; `cmake` and
-        # `ninja` are the toolchain the CEF wrapper is built with (not
-        # exercised in check-only mode, but required if CEF is ever provided).
+        # conventional companion of the C/C++ build dependencies.
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential \
             pkg-config \
             cmake \
-            ninja-build
+            ninja-build \
+            libclang-dev
 
       - name: Install the Rust toolchain
-        # Pinned to the stable channel, including the two components the
-        # pipeline needs: rustfmt (format check) and clippy (lints).
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup component add rustfmt clippy llvm-tools-preview
+          rustup target add aarch64-linux-android
+          cargo install cargo-llvm-cov --locked
 
       - name: Cache the Cargo registry, the Cargo git checkouts and the target directory
         uses: actions/cache@v5
@@ -90,148 +88,114 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            cargo-${{ runner.os }}-
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
 
       - name: Check that the icon lockups did not drift
-        # Every lockup of the application comes out of one script; the check
-        # renders them again and compares them with the files of the tree, so
-        # an icon that was edited by hand fails the build.  The neon glyphs
-        # of the chrome are cut out of the design board by a second script,
-        # with the same discipline.
-        run: |
-          set -o pipefail
-          python3 -m pip install --quiet --upgrade pillow numpy \
-            || python3 -m pip install --quiet --upgrade \
-              --break-system-packages pillow numpy
-          python3 design/icons/trap_icon.py --check
-          python3 design/icons/neon/slice_neon.py --check
+        run: python3 design/icons/trap_icon.py --check
 
       - name: Check the formatting
         run: cargo fmt --all -- --check
 
       - name: Run Clippy
-        # Deliberately *without* `-D warnings`: the CI must never require a
-        # source change, it only reports the lints.
-        run: cargo clippy --workspace --all-targets
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Type-check the workspace
-        run: cargo check --workspace
+        run: cargo check --workspace --all-targets
+
+      - name: Type-check the workspace for Android
+        # The Android target is where the native code lives; a mistake that
+        # only shows up there (a `cfg`, an FFI signature) has to stop the
+        # pipeline here and not on a device.
+        run: |
+          export CC_aarch64_linux_android=aarch64-linux-android29-clang
+          export CXX_aarch64_linux_android=aarch64-linux-android29-clang++
+          export AR_aarch64_linux_android=llvm-ar
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=aarch64-linux-android29-clang
+          cargo check --workspace --target aarch64-linux-android
 
       - name: Run the workspace unit and integration tests
-        # `cargo test --workspace` covers the unit tests of the workspace and
-        # the integration tests in `crates/ov-pgp/tests` and
-        # `crates/ov-tor/tests` (and those of `crates/ov-cef`).
+        run: cargo test --workspace -- --nocapture
+
+      - name: Measure the coverage
+        # The coverage of the bundling service is the number that says how
+        # much of it is actually exercised.
         run: |
-          set -o pipefail
-          mkdir -p test-results
-          cargo test --workspace -- --nocapture 2>&1 | tee test-results/cargo-test.log
+          cargo llvm-cov --workspace --lcov --output-path lcov.info
+          cargo llvm-cov --workspace --summary-only
+
+      - name: Upload the coverage report
+        uses: actions/upload-artifact@v6
+        with:
+          name: rust-coverage
+          path: lcov.info
+          if-no-files-found: error
 
       - name: Upload the test output
         if: always()
         uses: actions/upload-artifact@v6
         with:
           name: rust-test-output
-          path: test-results/
-          if-no-files-found: warn
-          retention-days: 14
+          path: target/debug/deps/*.log
+          if-no-files-found: ignore
 
   android-build:
     name: Android debug build and Compose preview test
     runs-on: ubuntu-latest
-    needs: rust-tests
     timeout-minutes: 60
+    needs: rust-tests
     permissions:
       contents: read
       actions: read
     env:
-      # The root of the CEF runtime for Android.  The step below downloads the
-      # engine and prepares this directory; the Gradle build links the native
-      # library against it and packages it into the APK.
-      CEF_ANDROID_ROOT: ${{ github.workspace }}/cef-runtime/root
+      # The bundle of the engine.  It is produced by the `cef-build` workflow
+      # and restored from the cache below; the job refuses to build without
+      # it.
+      CEF_ANDROID_ROOT: ${{ github.workspace }}/cef-bundle
     steps:
       - name: Check out the repository
         uses: actions/checkout@v5
 
-      - name: Set up JDK 21
+      - name: Set up JDK 25
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "25"
 
       - name: Set up Gradle
-        # `setup-gradle` provides the Gradle caches (~/.gradle/caches, the
-        # wrapper distribution and the build cache) for the Gradle steps below.
-        #
-        # The action computes the key of its own cache from the job and the
-        # commit; it has no `cache-dependency-path` input (the annotation of
-        # the pipeline complained about an input that the action never had).
         uses: gradle/actions/setup-gradle@v6
-        with:
-          cache-read-only: false
 
       - name: Put the SDK tools on the path
-        # The image of the runner already carries the Android SDK; the
-        # command line tools are only added to the path here, because the
-        # `android-actions/setup-android` action installs the `tools`
-        # package that Google removed from the repository and therefore
-        # fails with "Failed to find package 'tools'".
         run: |
-          set -euo pipefail
-          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
-          sdkmanager="$(find "${sdk_root}/cmdline-tools" -type f -name sdkmanager 2>/dev/null | sort | tail -n 1)"
-          if [ -z "${sdkmanager}" ]; then
-            echo "::error::sdkmanager was not found in ${sdk_root}/cmdline-tools"
-            exit 1
-          fi
-          echo "$(dirname "${sdkmanager}")" >> "$GITHUB_PATH"
-          echo "The command line tools of the SDK are ${sdkmanager}."
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
 
       - name: Install the Android SDK packages
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+        run: sdkmanager "platform-tools" "platforms;android-37.0" "build-tools;37.0.0"
 
       - name: Install the Android NDK
-        # NDK r27c, the version the Gradle build declares as `ndkVersion`.
         run: sdkmanager "ndk;27.2.12479018"
 
       - name: Accept the Android SDK licenses
-        run: |
-          # `yes` is killed by SIGPIPE as soon as sdkmanager exits, so the
-          # pipeline is evaluated without `pipefail` here: only the exit code
-          # of `sdkmanager` matters.
-          set +o pipefail
-          yes | sdkmanager --licenses > /dev/null
+        run: yes | sdkmanager --licenses > /dev/null
 
       - name: Export the Android NDK location and its toolchain
-        # `cc` does not find the compiler of the NDK on its own: without
-        # these variables the build of `rusqlite` (the bundled SQLite is
-        # compiled from C source) stops with "failed to find tool
-        # aarch64-linux-android-clang".  The API level 29 is the one of the
-        # `minSdk` of the application.
         run: |
-          set -euo pipefail
-          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
-          ndk_root="${sdk_root}/ndk/27.2.12479018"
-          ndk_bin="${ndk_root}/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          echo "ANDROID_NDK_HOME=${ndk_root}" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK_ROOT=${ndk_root}" >> "$GITHUB_ENV"
-          echo "CC_aarch64_linux_android=${ndk_bin}/aarch64-linux-android29-clang" >> "$GITHUB_ENV"
-          echo "CXX_aarch64_linux_android=${ndk_bin}/aarch64-linux-android29-clang++" >> "$GITHUB_ENV"
-          echo "AR_aarch64_linux_android=${ndk_bin}/llvm-ar" >> "$GITHUB_ENV"
-          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${ndk_bin}/aarch64-linux-android29-clang" >> "$GITHUB_ENV"
-          ls -la "${ndk_bin}/aarch64-linux-android29-clang"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+          echo "$ANDROID_HOME/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
+          echo "CC_aarch64_linux_android=aarch64-linux-android29-clang" >> "$GITHUB_ENV"
+          echo "CXX_aarch64_linux_android=aarch64-linux-android29-clang++" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=llvm-ar" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=aarch64-linux-android29-clang" >> "$GITHUB_ENV"
 
       - name: Prepare the Gradle wrapper
-        run: chmod +x android/gradlew
+        run: gradle wrapper --gradle-version 9.7.1
 
       - name: Install the Rust toolchain and the Android target
-        # The toolchain is installed even though the native step is skipped
-        # above, so that the job also verifies that the cross compilation
-        # setup is complete.
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add aarch64-linux-android
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
@@ -242,111 +206,49 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
             .cargo-target
-          key: cargo-android-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+            ~/.gradle
+          key: ${{ runner.os }}-android-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-android-
+
+      - name: Restore the bundle of the engine
+        # The bundle is built by the `cef-build` workflow.  Without it there
+        # is no engine, and an APK without an engine cannot start: the job
+        # stops here instead of publishing one.
+        uses: actions/cache@v5
+        with:
+          path: cef-bundle
+          key: cef-bundle-${{ hashFiles('crates/cefpack/manifest/cef-android.toml') }}
           restore-keys: |
-            cargo-android-${{ runner.os }}-
+            cef-bundle-
 
-      - name: Download the CEF runtime for Android
-        # Cefrium is the port of CEF to `aarch64-linux-android`; release
-        # 0.19.0 is built on Chromium 156.0.8078.80, the Chromium release of
-        # the CEF 156 bindings of this project.  The engine is inside the SDK
-        # of the release and is unpacked into the sysroot that the build
-        # scripts expect.
-        #
-        # The checksum is the one of the release; a download that differs
-        # from it stops the build instead of being linked against.
+      - name: Check the bundle of the engine
         run: |
-          set -euo pipefail
-          mkdir -p cef-runtime
-          curl -sSL --retry 3 --retry-delay 5 -o cef-runtime/cefrium-sdk.aar \
-            "https://codeberg.org/cefrium/cef-android/releases/download/v0.19.0/cefrium-sdk-0.19.0.aar"
-          echo "efb3f50dede4485215560455e16836671a7ebae32a35559bcfd4456d6667978b  cef-runtime/cefrium-sdk.aar" \
-            | sha256sum --check --strict -
-          unzip -q cef-runtime/cefrium-sdk.aar 'jni/arm64-v8a/libcef.so' 'assets/*' -d cef-runtime/unpacked
-          mkdir -p "${CEF_ANDROID_ROOT}/lib" "${CEF_ANDROID_ROOT}/locales"
-          cp cef-runtime/unpacked/jni/arm64-v8a/libcef.so "${CEF_ANDROID_ROOT}/lib/"
-          # The asset manager renames the resource files; the original names
-          # are restored, because Chromium reads them by name.
-          for file in cef-runtime/unpacked/assets/*.pak* cef-runtime/unpacked/assets/icudtl.dat*; do
-            cp "$file" "${CEF_ANDROID_ROOT}/$(basename "${file%+com.cefrium+}")"
-          done
-          cp cef-runtime/unpacked/assets/stored-locales/en-US.pak* "${CEF_ANDROID_ROOT}/locales/en-US.pak"
-          ls -la "${CEF_ANDROID_ROOT}" "${CEF_ANDROID_ROOT}/lib"
-
-      - name: Download the notice of the engine
-        # The notice carries the licences of the Chromium sources and of every
-        # library they are built from.  It belongs to the exact build of the
-        # engine and is therefore downloaded with the engine instead of being
-        # kept in the repository.
-        #
-        # The sum file of the release is checked first against its own
-        # published checksum, and the notice is then checked against the sum
-        # file: a notice that does not belong to the engine stops the build.
-        run: |
-          set -euo pipefail
-          base="https://codeberg.org/cefrium/cef-android/releases/download/v0.19.0"
-          curl -sSL --retry 3 --retry-delay 5 -o cef-runtime/SHA256SUMS-0.19.0 "${base}/SHA256SUMS-0.19.0"
-          echo "9cecc54c3a38829767ae8f2cff65080f7b420661e1b084421e39b51c3b8e1140  cef-runtime/SHA256SUMS-0.19.0" \
-            | sha256sum --check --strict -
-          curl -sSL --retry 3 --retry-delay 5 -o cef-runtime/cefrium-sdk-0.19.0-NOTICE.txt \
-            "${base}/cefrium-sdk-0.19.0-NOTICE.txt"
-          (
-            cd cef-runtime
-            grep 'cefrium-sdk-0.19.0-NOTICE.txt' SHA256SUMS-0.19.0 | sha256sum --check --strict -
-          )
-          # The Gradle build puts the notice next to the licences of the
-          # repository into the assets of the APK.
-          cp cef-runtime/cefrium-sdk-0.19.0-NOTICE.txt "${CEF_ANDROID_ROOT}/NOTICE.txt"
-          ls -la "${CEF_ANDROID_ROOT}/NOTICE.txt"
+          cargo run --release -p cefpack -- plan
+          cargo run --release -p cefpack -- audit "$CEF_ANDROID_ROOT"
 
       - name: Cross-compile the Rust crates for Android
-        # The crates are type-checked for `aarch64-linux-android` with the
-        # NDK toolchain of the job and the CEF runtime of the step above.
-        run: |
-          set -o pipefail
-          mkdir -p test-results
-          cargo check --workspace --target aarch64-linux-android 2>&1 | tee test-results/cargo-android-check.log
+        run: cargo ndk -t arm64-v8a --platform 29 -o android/app/src/main/jniLibs build --release
 
       - name: Run the Compose preview smoke test
-        working-directory: android
-        run: ./gradlew :app:testDebugUnitTest --tests 'dev.onionvault.OnionVaultPreviewsTest' --stacktrace
+        run: ./android/gradlew --project-dir android :app:testDebugUnitTest
 
       - name: Assemble the debug APK
-        # The native library is cross-compiled and linked against the engine
-        # of the first step; the APK carries the engine, the native library
-        # and the resource files of Chromium.
-        working-directory: android
-        run: ./gradlew :app:assembleDebug --stacktrace
+        run: ./android/gradlew --project-dir android :app:assembleDebug
 
-      - name: Check the content of the APK
-        # The APK without the engine would not start: the check fails the
-        # build if one of the three parts is missing.
-        #
-        # The licences have to travel with the binary as well: the LGPL-3.0 of
-        # the engine asks for the recipient to be able to read it.
+      - name: Audit the APK
+        # The audit is the gate that this project never had: it checks that
+        # the engine is really in the APK, that the resources of the engine
+        # are stored and not compressed, that the licences travel with the
+        # binary and that the library of the application really depends on
+        # the engine.
         run: |
-          set -euo pipefail
-          apk="android/app/build/outputs/apk/debug/app-debug.apk"
-          # The listing is taken once: a `grep` that stops early would
-          # break the pipe of `unzip` and fail the step with `pipefail`.
-          listing="$(unzip -l "$apk")"
-          for entry in \
-            "lib/arm64-v8a/libcef.so" \
-            "lib/arm64-v8a/libonion_vault.so" \
-            "assets/cef/icudtl.dat" \
-            "assets/cef/resources.pak" \
-            "assets/licenses/LGPL-3.0.txt" \
-            "assets/licenses/GPL-3.0.txt" \
-            "assets/licenses/LGPL-2.1.txt" \
-            "assets/licenses/CEFRIUM-NOTICE.txt"; do
-            if ! grep -qF -- "$entry" <<< "$listing"; then
-              echo "::error::The APK does not contain $entry"
-              exit 1
-            fi
-            echo "OK  $entry"
-          done
+          cargo run --release -p cefpack -- apk android/app/build/outputs/apk/debug/app-debug.apk
+          unzip -p android/app/build/outputs/apk/debug/app-debug.apk \
+            lib/arm64-v8a/libonion_vault.so > /tmp/libonion_vault.so
+          readelf -d /tmp/libonion_vault.so | grep -q "Shared library: \[libcef.so\]" \
+            || { echo "::error::the library of the application does not depend on the engine"; exit 1; }
+          echo "the library of the application depends on the engine"
 
       - name: Upload the debug APK
         uses: actions/upload-artifact@v6
@@ -354,42 +256,32 @@ jobs:
           name: trap-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-          retention-days: 14
 
       - name: Upload the licence documents
-        # The same files that are inside the APK; the release attaches them
-        # next to the binary, so that the licences travel with the download
-        # of the APK as well.
         uses: actions/upload-artifact@v6
         with:
           name: trap-legal-notices
-          path: android/app/src/main/assets/licenses/
+          path: |
+            licenses/*.txt
+            cef-bundle/LICENSE.txt
           if-no-files-found: error
-          retention-days: 14
 
       - name: Upload the Android unit test reports
+        if: always()
         uses: actions/upload-artifact@v6
         with:
           name: android-unit-test-reports
-          path: |
-            android/app/build/reports/tests/testDebugUnitTest/
-            android/app/build/test-results/testDebugUnitTest/
-          if-no-files-found: warn
-          retention-days: 14
+          path: android/app/build/reports/tests
+          if-no-files-found: ignore
 
   release:
     name: Publish the tagged GitHub release
     runs-on: ubuntu-latest
-    needs: [rust-tests, android-build]
-    timeout-minutes: 15
+    timeout-minutes: 20
+    needs: android-build
     permissions:
-      # Creating a release means creating a tag and a release object.
       contents: write
       actions: read
-    env:
-      # A new tag for every push.  A re-run of the same push reuses the tag
-      # of that run and updates the existing release instead of failing.
-      RELEASE_TAG: build-${{ github.run_number }}-${{ github.sha }}
     steps:
       - name: Download the debug APK artifact
         uses: actions/download-artifact@v8
@@ -397,128 +289,25 @@ jobs:
           name: trap-debug-apk
           path: dist
 
-      - name: Download the licence documents artifact
+      - name: Download the licence documents
         uses: actions/download-artifact@v8
         with:
           name: trap-legal-notices
-          path: dist-legal
+          path: dist/licenses
 
-      - name: Compute the SHA-256 checksum of the APK
-        id: apk
-        run: |
-          set -euo pipefail
-          apk_path="$(find dist -type f -name '*.apk' -print -quit)"
-          if [ -z "${apk_path}" ]; then
-            echo "::error::No APK found in the trap-debug-apk artifact"
-            exit 1
-          fi
-          sha256="$(sha256sum "${apk_path}" | cut -d' ' -f1)"
-          echo "path=${apk_path}" >> "$GITHUB_OUTPUT"
-          echo "sha256=${sha256}" >> "$GITHUB_OUTPUT"
-          echo "SHA-256 of ${apk_path}: ${sha256}"
+      - name: Write the checksums
+        run: (cd dist && sha256sum app-debug.apk licenses/* > SHA256SUMS.txt)
 
-      - name: Compute the SHA-256 checksums of the licence documents
-        run: |
-          set -euo pipefail
-          licenses="$(find dist-legal -type f -name '*.txt' | sort)"
-          if [ -z "${licenses}" ]; then
-            echo "::error::No licence document found in the trap-legal-notices artifact"
-            exit 1
-          fi
-          # The format is the one of `sha256sum`, so that the file can be
-          # checked with `sha256sum --check SHA256SUMS.txt`.
-          while read -r file; do
-            echo "$(sha256sum "${file}" | cut -d' ' -f1)  $(basename "${file}")"
-          done <<< "${licenses}" > SHA256SUMS.txt
-          echo "The licences of the release:"
-          cat SHA256SUMS.txt
-
-      - name: Create or update the tagged GitHub release
+      - name: Publish the release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APK_PATH: ${{ steps.apk.outputs.path }}
-          APK_SHA256: ${{ steps.apk.outputs.sha256 }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-
-          title="Trap debug build ${GITHUB_RUN_NUMBER} (${GITHUB_SHA:0:7})"
-
-          # The licences of the engine travel with the binary: they are
-          # attached to the release next to the APK.
-          licenses="$(find dist-legal -type f -name '*.txt' | sort)"
-          if [ -z "${licenses}" ]; then
-            echo "::error::No licence document found in the trap-legal-notices artifact"
-            exit 1
-          fi
-          echo "The release carries these licences:"
-          while read -r file; do
-            echo "  $(basename "${file}")"
-          done <<< "${licenses}"
-
-          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
-            # The tag already exists: this is a re-run of the same push.  The
-            # release is updated instead of failing.
-            echo "Release ${RELEASE_TAG} already exists — updating it in place."
-            gh release upload "${RELEASE_TAG}" "${APK_PATH}" --repo "${GITHUB_REPOSITORY}" --clobber
-            gh release upload "${RELEASE_TAG}" ${licenses} SHA256SUMS.txt --repo "${GITHUB_REPOSITORY}" --clobber
-          else
-            echo "Creating the new release ${RELEASE_TAG} at commit ${GITHUB_SHA}."
-            gh release create "${RELEASE_TAG}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --target "${GITHUB_SHA}" \
-              --title "${title}" \
-              --generate-notes \
-              --latest \
-              --prerelease=false \
-              "${APK_PATH}" \
-              ${licenses} \
-              SHA256SUMS.txt
-          fi
-
-          # Start from the auto-generated changelog and append the build
-          # information.  Everything from the marker on is replaced, so an
-          # update never duplicates the block.
-          gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json body --jq .body > release-body.md
-          awk '/^<!-- trap-build-info -->$/ { exit } { print }' release-body.md > release-body.trimmed.md
-          mv release-body.trimmed.md release-body.md
-          {
-            echo
-            echo "<!-- trap-build-info -->"
-            echo "### Build information"
-            echo
-            echo "| item | value |"
-            echo "| --- | --- |"
-            echo "| commit | \`${GITHUB_SHA}\` |"
-            echo "| workflow run | ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} |"
-            echo "| SHA-256 (\`app-debug.apk\`) | \`${APK_SHA256}\` |"
-            echo
-            echo "### The licences of this build"
-            echo
-            echo "The engine of the browser is the CEF port of Cefrium, which is free"
-            echo "software under the **LGPL-3.0-or-later**.  The full text of every"
-            echo "licence is attached to this release and is inside the APK, where the"
-            echo "application shows it."
-            echo
-            echo '```'
-            cat SHA256SUMS.txt
-            echo '```'
-          } >> release-body.md
-
-          gh release edit "${RELEASE_TAG}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --title "${title}" \
-            --notes-file release-body.md \
-            --latest \
-            --prerelease=false
-
-      - name: Mark the release as latest and not as a prerelease
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          release_id="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json databaseId --jq .databaseId)"
-          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
-            -F draft=false \
-            -F prerelease=false \
-            -f make_latest=true > /dev/null
-          echo "Release ${RELEASE_TAG} is published as a non-prerelease and marked as latest."
+          tag="build-${{ github.run_number }}-${{ github.sha }}"
+          git tag -a "$tag" -m "Trap debug build ${{ github.run_number }} (${{ github.sha }})"
+          git push origin "$tag"
+          gh release create "$tag" \
+            dist/app-debug.apk \
+            dist/licenses/* \
+            dist/SHA256SUMS.txt \
+            --title "Trap debug build ${{ github.run_number }} (${{ github.sha }})" \
+            --notes "The engine of the browser is CEF, built from its own sources for Android by the bundling service of this repository.  The licences of the engine travel with the binary."

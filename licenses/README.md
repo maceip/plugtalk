@@ -7,7 +7,7 @@ release of the project.
 
 | file | component | licence |
 |---|---|---|
-| `LGPL-3.0.txt` | the CEF engine of [Cefrium](https://codeberg.org/cefrium/cef-android) | LGPL-3.0-or-later |
+| `LGPL-3.0.txt` | the CEF engine of [Chromium Embedded Framework](https://github.com/chromiumembedded/cef) | LGPL-3.0-or-later |
 | `GPL-3.0.txt` | the GNU GPL that the LGPL-3.0 incorporates | GPL-3.0-or-later |
 | `LGPL-2.1.txt` | [sequoia-openpgp](https://gitlab.com/sequoia-pgp/sequoia-openpgp) | LGPL-2.0-or-later |
 
@@ -36,12 +36,11 @@ the engine is present.
 
 ## The notice of the engine
 
-The engine carries a notice of its own, with the licences of the Chromium
-sources and of every library they are built from.  That notice is 2.2 MiB, it
-belongs to the exact build of the engine and it is therefore not kept in this
-repository: the continuous integration downloads it from the release of
-Cefrium, verifies it against the published SHA-256 of the release and puts it
-into the APK next to these texts.
+The engine carries a licence of its own, and the notice of the Chromium
+sources and of every library they are built from belongs to the exact build.
+Both are produced by the bundling service of this repository and travel with
+the bundle, so that they always belong to the engine that is shipped; the
+continuous integration puts them into the APK next to these texts.
 
 ## Why the engine may be replaced
 
@@ -52,6 +51,7 @@ is what the LGPL-3.0 asks for: the work that uses the library has to be
 distributed in a form that allows the library to be replaced.
 
 The sources of the engine are published at
-<https://codeberg.org/cefrium/cef-android>; the sources of the application
-itself, together with the pinned versions of its Rust dependencies, are the
-repository of this project.
+<https://github.com/chromiumembedded/cef>, at the revision that
+`crates/cefpack/manifest/cef-android.toml` pins; the sources of the
+application itself, together with the pinned versions of its Rust
+dependencies, are the repository of this project.

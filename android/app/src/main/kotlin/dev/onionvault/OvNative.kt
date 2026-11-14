@@ -11,6 +11,43 @@ import android.view.Surface
  */
 object OvNative {
 
+    /**
+     * The name of the native library of Trap.
+     *
+     * The library carries the engine of the browser, the Tor client and the
+     * key manager; it is built by cargo-ndk and lands in the directory of
+     * the shared objects of the APK.
+     */
+    private const val LIBRARY = "onion_vault"
+
+    /**
+     * Load the native library.
+     *
+     * The call has to happen before any other function of this object is
+     * used: the methods below are implemented in the native library, and the
+     * loader throws an `UnsatisfiedLinkError` when the library is not yet in
+     * the process.  Loading it twice is harmless: the loader remembers the
+     * libraries it has already loaded.
+     */
+    fun load() {
+        System.loadLibrary(LIBRARY)
+    }
+
+    /**
+     * Arm the native guard against the crashes.
+     *
+     * A crash inside the engine of the browser is a signal, not an
+     * exception: the handler of Java never sees it and the process is
+     * killed by the kernel.  The guard catches those signals and writes a
+     * report of them into the given file, which the [CrashGuard] reads on
+     * the next start of the application and shows to the user.
+     *
+     * The call has to happen before the engine starts.
+     *
+     * @param reportPath the file the report of the crash is written to.
+     */
+    external fun nativeInstallCrashGuard(reportPath: String)
+
     /** Start the engine: Tor, the key manager and the off-screen browser. */
     external fun nativeInit(
         filesDir: String,
@@ -137,12 +174,4 @@ object OvNative {
 
     /** Go back in the history of the browser. */
     external fun nativeGoBack(): Boolean
-
-    /**
-     * Run a CEF subprocess.
-     *
-     * The subprocesses are started by [CefService]; the command line is
-     * passed as a list of switches.
-     */
-    external fun nativeRunSubprocess(processType: String, switches: Array<String>): Int
 }

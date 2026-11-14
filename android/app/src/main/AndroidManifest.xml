@@ -2,10 +2,34 @@
 <!--
     Trap manifest.
 
-    The CEF subprocesses (renderer, GPU and utility process) run in dedicated
-    Android services: Android does not allow a plain fork()/exec() of a helper
-    binary, the subprocess has to be started through the ActivityManager so
-    that the platform gives it a process with the right SELinux label.
+    The engine of the browser brings its own manifest, which declares the
+    child processes of Chromium (the renderer, the GPU and the utility
+    process).  Android does not allow a plain fork()/exec() of a helper
+    binary: each subprocess has to be started through the ActivityManager,
+    so that the platform gives it a process with the right SELinux label.
+    The engine therefore declares one service per subprocess itself, and
+    the manifest of Trap does not have to repeat them.
+
+    The catalogue of the surfaces of the system:
+
+      * `android:enableOnBackInvokedCallback="true"` — the predictive back
+        gesture is handed to the application instead of the system, so that
+        `PredictiveBackHandler` can show the frame of the previous page
+        while the finger is on the screen.
+      * `android:launchMode="singleTask"` — the browser is one task; a
+        second launch comes to the task that is already running.
+      * `android:configChanges` — the orientation, the size, the keyboard
+        and the night mode are handled by the activity itself, so that the
+        off-screen rendering is not thrown away when the phone is turned.
+      * `android:windowSoftInputMode="adjustResize"` — the chrome floats
+        above the page, so the keyboard has to shrink the window and not
+        cover the field of the address.
+
+    **The chrome draws no insets of its own.**  There is no
+    `WindowInsets` anywhere in the application: the row of the buttons and
+    the field of the address are the last two things of a plain `Column`,
+    so they sit under the navigation bar of the system unless the system
+    adds the padding for them.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
@@ -17,9 +41,11 @@
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
     <application
+        android:name=".TrapApplication"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:enableOnBackInvokedCallback="true"
+        android:extractNativeLibs="true"
         android:fullBackupContent="false"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
@@ -40,27 +66,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <!--
-            The CEF subprocesses.  Every process type gets its own service so
-            that the ActivityManager starts it in a separate process; the
-            command line of the subprocess is passed through the intent
-            extras (see CefService.kt).
-        -->
-        <service
-            android:name=".CefRenderService"
-            android:exported="false"
-            android:process=":cef_render" />
-
-        <service
-            android:name=".CefGpuService"
-            android:exported="false"
-            android:process=":cef_gpu" />
-
-        <service
-            android:name=".CefUtilityService"
-            android:exported="false"
-            android:process=":cef_utility" />
 
     </application>
 

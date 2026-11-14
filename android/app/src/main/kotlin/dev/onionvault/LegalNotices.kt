@@ -35,7 +35,7 @@ object LegalNotices {
         "LGPL-3.0.txt" to "GNU Lesser General Public License 3.0",
         "GPL-3.0.txt" to "GNU General Public License 3.0",
         "LGPL-2.1.txt" to "GNU Lesser General Public License 2.1",
-        "CEFRIUM-NOTICE.txt" to "The notice of the CEF engine",
+        "CEF-LICENSE.txt" to "The licence of the CEF engine",
     )
 
     /**
