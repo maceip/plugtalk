@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Install everything needed to build the Trap APK on a Linux x86_64 machine:
-# JDK 25, Android SDK 37, NDK r27c, the Rust Android targets, cargo-ndk and
-# the CEF sysroot (libcef.so per ABI) that the Rust library links against.
+# JDK 25, Android SDK 37, NDK r27c, the Rust Android targets and cargo-ndk.
+#
+# The engine of the browser is **not** installed here: it is CEF, built from
+# its own sources by the bundling service of the workspace (`crates/cefpack`),
+# and that build takes hours.  The bundle it produces is what
+# CEF_ANDROID_ROOT points at.
 #
 #   scripts/setup-toolchain.sh            # installs into /opt/trap-toolchain
 #   source /opt/trap-toolchain/env.sh
@@ -11,8 +15,6 @@
 set -euo pipefail
 
 TC="${TRAP_TOOLCHAIN:-/opt/trap-toolchain}"
-CEFRIUM_VERSION="0.19.0"
-CEFRIUM_SHA256="efb3f50dede4485215560455e16836671a7ebae32a35559bcfd4456d6667978b"
 NDK_VERSION="r27c"
 NDK_PACKAGE="27.2.12479018"
 
@@ -52,19 +54,17 @@ echo "== Rust targets and cargo-ndk"
 rustup target add aarch64-linux-android x86_64-linux-android >/dev/null
 command -v cargo-ndk >/dev/null || cargo install cargo-ndk
 
-CEF="$TC/cef-android"
-if [ ! -f "$CEF/lib/x86_64/libcef.so" ]; then
-  echo "== Cefrium $CEFRIUM_VERSION (libcef.so per ABI)"
-  curl -fsSL -o cefrium.aar \
-    "https://codeberg.org/cefrium/cef-android/releases/download/v$CEFRIUM_VERSION/cefrium-sdk-$CEFRIUM_VERSION.aar"
-  echo "$CEFRIUM_SHA256  cefrium.aar" | sha256sum --check --strict -
-  rm -rf cefrium-unpacked && unzip -q cefrium.aar 'jni/arm64-v8a/libcef.so' 'jni/x86_64/libcef.so' -d cefrium-unpacked
-  mkdir -p "$CEF/lib/arm64-v8a" "$CEF/lib/x86_64"
-  cp cefrium-unpacked/jni/arm64-v8a/libcef.so "$CEF/lib/arm64-v8a/"
-  cp cefrium-unpacked/jni/arm64-v8a/libcef.so "$CEF/lib/"
-  cp cefrium-unpacked/jni/x86_64/libcef.so "$CEF/lib/x86_64/"
-  rm -rf cefrium-unpacked cefrium.aar
-fi
+# The engine of the browser is CEF, built from its own sources with the NDK
+# by the bundling service of the workspace.  The service is the crate
+# `crates/cefpack`; the build of the engine takes hours and needs a lot of
+# memory and disk, therefore it is **not** part of this script.  Run it by
+# hand when the engine is needed:
+#
+#   cargo run -p cefpack -- fetch     # the pinned CEF sources
+#   cargo run -p cefpack -- build     # the engine, the headers, the resources
+#
+# and point CEF_ANDROID_ROOT at the bundle it produces.
+CEF="${CEF_ANDROID_ROOT:-$TC/cef-bundle}"
 
 cat > "$TC/env.sh" <<EOF
 export JAVA_HOME=$TC/jdk25
