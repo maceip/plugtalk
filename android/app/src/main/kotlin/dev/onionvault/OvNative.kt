@@ -1,5 +1,6 @@
 package dev.onionvault
 
+import android.util.Log
 import android.view.Surface
 
 /**
@@ -11,12 +12,24 @@ import android.view.Surface
  */
 object OvNative {
 
-    init {
+    /**
+     * `null` when the native libraries are loaded, otherwise the reason they
+     * are not.  Callers check it before the first native call instead of
+     * letting an [UnsatisfiedLinkError] kill the process.
+     */
+    val loadError: Throwable? = try {
         // libcef.so carries the CEF runtime that libonion_vault.so links
         // against; load it first, then the engine with the JNI entry points.
         System.loadLibrary("cef")
         System.loadLibrary("onion_vault")
+        null
+    } catch (error: Throwable) {
+        Log.e("OvNative", "cannot load the native libraries", error)
+        error
     }
+
+    /** `true` when the native libraries are loaded. */
+    val isLoaded: Boolean get() = loadError == null
 
     /** Start the engine: Tor, the key manager and the off-screen browser. */
     external fun nativeInit(

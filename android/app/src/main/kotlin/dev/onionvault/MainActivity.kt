@@ -9,7 +9,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Text
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.biometric.BiometricManager
@@ -72,6 +78,12 @@ class MainActivity : FragmentActivity(), OvBridge.Listener {
     /** The state of the screen. */
     private var uiState by mutableStateOf(BrowserUiState())
 
+    /** `true` once the native engine started; every native call depends on it. */
+    private var engineReady = false
+
+    /** Why the engine did not start, shown instead of the browser. */
+    private var startupFailure by mutableStateOf<String?>(null)
+
     /** The message pump of CEF. */
     private val frameCallback: Choreographer.FrameCallback = Choreographer.FrameCallback {
         OvNative.nativeDoMessageLoopWork()
@@ -84,20 +96,13 @@ class MainActivity : FragmentActivity(), OvBridge.Listener {
         super.onCreate(savedInstanceState)
         OvBridge.setListener(this)
 
-        // The CEF resources (pak files, ICU data, locales) are unpacked from
-        // the assets into the private directory of the application.
-        CefResources.unpack(this)
-
-        val started = OvNative.nativeInit(
-            filesDir.absolutePath,
-            cacheDir.absolutePath,
-            hiddenServiceOnlyMode(),
-            requireUserAuthentication(),
-        )
-        if (!started) {
-            Toast.makeText(this, R.string.engine_failed, Toast.LENGTH_LONG).show()
+        val failure = startEngine()
+        if (failure != null) {
+            Log.e(TAG, "the engine did not start: $failure")
+            showStartupFailure(failure)
             return
         }
+        engineReady = true
 
         setContent {
             // The licences that travel with the application are shown by the
@@ -151,7 +156,61 @@ class MainActivity : FragmentActivity(), OvBridge.Listener {
 
     override fun onResume() {
         super.onResume()
-        Choreographer.getInstance().postFrameCallback(frameCallback)
+        if (engineReady) {
+            Choreographer.getInstance().postFrameCallback(frameCallback)
+        }
+    }
+
+    /**
+     * Load the native library, unpack the CEF resources and start the engine.
+     *
+     * Returns `null` on success, otherwise a description of the failure.
+     * Nothing here may throw: a failure is shown on screen, not a crash.
+     */
+    private fun startEngine(): String? {
+        OvNative.loadError?.let { error ->
+            return "The native library could not be loaded: ${error.message ?: error}"
+        }
+
+        // The CEF resources (pak files, ICU data, locales) are unpacked from
+        // the assets into the private directory of the application.
+        try {
+            CefResources.unpack(this)
+        } catch (error: Throwable) {
+            Log.e(TAG, "cannot unpack the CEF resources", error)
+            return "The browser resources could not be unpacked: ${error.message ?: error}"
+        }
+
+        val started = try {
+            OvNative.nativeInit(
+                filesDir.absolutePath,
+                cacheDir.absolutePath,
+                hiddenServiceOnlyMode(),
+                requireUserAuthentication(),
+            )
+        } catch (error: Throwable) {
+            Log.e(TAG, "nativeInit threw", error)
+            return "The engine could not be started: ${error.message ?: error}"
+        }
+        // The native side reports the reason through showError, which
+        // replaces this generic message when it arrives.
+        return if (started) null else getString(R.string.engine_failed)
+    }
+
+    /** Show why the engine did not start instead of closing the application. */
+    private fun showStartupFailure(reason: String) {
+        if (startupFailure == null) {
+            startupFailure = reason
+        }
+        setContent {
+            Column(
+                modifier = Modifier.fillMaxSize().padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                Text(getString(R.string.engine_failed), fontSize = 20.sp)
+                Text(startupFailure ?: reason, fontSize = 14.sp)
+            }
+        }
     }
 
     override fun onPause() {
@@ -166,7 +225,10 @@ class MainActivity : FragmentActivity(), OvBridge.Listener {
 
     override fun onDestroy() {
         OvBridge.setListener(null)
-        OvNative.nativeShutdown()
+        if (engineReady) {
+            engineReady = false
+            OvNative.nativeShutdown()
+        }
         super.onDestroy()
     }
 
@@ -449,6 +511,12 @@ class MainActivity : FragmentActivity(), OvBridge.Listener {
     }
 
     override fun showError(message: String) {
+        if (!engineReady) {
+            // The native reason of a failed start is more precise than the
+            // generic message of the start-up screen.
+            startupFailure = message
+            return
+        }
         Toast.makeText(this, message, Toast.LENGTH_LONG).show()
     }
 

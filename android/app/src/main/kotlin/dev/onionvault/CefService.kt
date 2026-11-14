@@ -47,7 +47,17 @@ open class CefService : Service() {
 
         Log.i(TAG, "starting the CEF subprocess '$processType'")
 
-        val result = OvNative.nativeRunSubprocess(processType, arguments)
+        if (!OvNative.isLoaded) {
+            Log.e(TAG, "the native library is not loaded; the subprocess '$processType' cannot run")
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
+        val result = try {
+            OvNative.nativeRunSubprocess(processType, arguments)
+        } catch (error: Throwable) {
+            Log.e(TAG, "the CEF subprocess '$processType' failed", error)
+            -1
+        }
         if (result != 0) {
             Log.e(TAG, "the CEF subprocess '$processType' failed with $result")
         }

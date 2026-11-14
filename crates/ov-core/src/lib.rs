@@ -38,6 +38,34 @@ static ENGINE: OnceLock<Mutex<Option<Arc<EngineState>>>> = OnceLock::new();
 /// The Tokio runtime that carries the Tor client.
 static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
+/// `true` once `CefInitialize` succeeded; every later CEF call checks it.
+static CEF_INITIALIZED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// `true` when CEF was initialized and has not been shut down.
+pub fn cef_initialized() -> bool {
+    CEF_INITIALIZED.load(std::sync::atomic::Ordering::Acquire)
+}
+
+/// Route the `log` macros to logcat and log panics before they abort.
+///
+/// Without it every `log::error!` of the native code is discarded.
+pub fn init_logging() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        #[cfg(target_os = "android")]
+        android_logger::init_once(
+            android_logger::Config::default()
+                .with_max_level(log::LevelFilter::Info)
+                .with_tag("TrapNative"),
+        );
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            log::error!("native panic: {info}");
+            previous(info);
+        }));
+    });
+}
+
 /// The alias of the master wrapping key in the Android Keystore.
 const MASTER_KEY_ALIAS: &str = "onionvault.master.wrap.v1";
 
@@ -57,13 +85,17 @@ impl Engine {
         hidden_service_only: bool,
         require_user_authentication: bool,
     ) -> Result<Arc<Self>> {
-        let runtime = RUNTIME.get_or_init(|| {
-            tokio::runtime::Builder::new_multi_thread()
+        if RUNTIME.get().is_none() {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .thread_name("ov-runtime")
                 .build()
-                .expect("cannot create the Tokio runtime")
-        });
+                .context("cannot create the Tokio runtime")?;
+            let _ = RUNTIME.set(runtime);
+        }
+        let runtime = RUNTIME
+            .get()
+            .ok_or_else(|| anyhow::anyhow!("the Tokio runtime is not available"))?;
 
         // --- the Tor transport ------------------------------------------------
         let tor_config = ov_tor::TorConfig {
@@ -155,9 +187,10 @@ impl Engine {
         );
 
         // The CEF resources were unpacked from the APK assets by the Kotlin
-        // side into `filesDir/cef_resources`.
-        let resources_dir = files_dir.join("cef_resources");
+        // side (`CefResources.unpack`) into `filesDir/cef`.
+        let resources_dir = files_dir.join("cef");
         let locales_dir = resources_dir.join("locales");
+        check_cef_resources(&resources_dir, &locales_dir)?;
         let settings = ov_cef::cef_settings(
             Some(&resources_dir),
             Some(&locales_dir),
@@ -165,16 +198,21 @@ impl Engine {
             true,
         );
 
+        if cef_initialized() {
+            anyhow::bail!("CEF is already initialized in this process");
+        }
         let args = build_main_args();
+        // `CefInitialize` returns 1 on success and 0 on failure.
         let result = cef::initialize(
             Some(&args),
             Some(&settings),
             Some(&mut app),
             std::ptr::null_mut(),
         );
-        if result != 0 {
-            anyhow::bail!("CefInitialize failed with {result}");
+        if result != 1 {
+            anyhow::bail!("CefInitialize failed (returned {result})");
         }
+        CEF_INITIALIZED.store(true, std::sync::atomic::Ordering::Release);
         log::info!("CEF was initialized");
 
         // Create the windowless browser.
@@ -190,6 +228,7 @@ impl Engine {
             None,
         );
         if browser == 0 {
+            shutdown_cef();
             anyhow::bail!("CefBrowserHost::CreateBrowser failed");
         }
 
@@ -220,17 +259,46 @@ impl Engine {
 /// Android does not give the native library a real command line, so a
 /// synthetic one is used.
 fn build_main_args() -> cef::MainArgs {
-    use std::{ffi::CString, os::raw::c_char};
+    use std::os::raw::c_char;
 
-    let mut argv = [CString::new("onionvault").expect("valid program name")];
-    let mut pointers: Vec<*mut c_char> = argv
-        .iter_mut()
-        .map(|value| value.as_ptr() as *mut c_char)
-        .collect();
+    // The strings and the pointer array must outlive `CefInitialize`, which
+    // keeps reading `argv`; locals would dangle as soon as this returns.
+    struct Argv(Vec<*mut c_char>);
+    // SAFETY: the pointers refer to a leaked, immutable C string.
+    unsafe impl Send for Argv {}
+    unsafe impl Sync for Argv {}
+    static ARGV: OnceLock<Argv> = OnceLock::new();
+
+    let argv = ARGV.get_or_init(|| {
+        let program: &'static std::ffi::CStr = c"onionvault";
+        Argv(vec![program.as_ptr() as *mut c_char, std::ptr::null_mut()])
+    });
 
     cef::MainArgs {
-        argc: pointers.len() as std::os::raw::c_int,
-        argv: pointers.as_mut_ptr(),
+        argc: 1,
+        argv: argv.0.as_ptr() as *mut *mut c_char,
+    }
+}
+
+/// Fail early, with a readable message, when the CEF resources are missing.
+fn check_cef_resources(resources_dir: &Path, locales_dir: &Path) -> Result<()> {
+    let has_pak = std::fs::read_dir(resources_dir)
+        .with_context(|| format!("the CEF resources are missing: {}", resources_dir.display()))?
+        .filter_map(|entry| entry.ok())
+        .any(|entry| entry.path().extension().is_some_and(|ext| ext == "pak"));
+    if !has_pak {
+        anyhow::bail!("no .pak file in {}", resources_dir.display());
+    }
+    if !locales_dir.is_dir() {
+        log::warn!("no CEF locales in {}", locales_dir.display());
+    }
+    Ok(())
+}
+
+/// Shut CEF down, if it is running.
+pub fn shutdown_cef() {
+    if CEF_INITIALIZED.swap(false, std::sync::atomic::Ordering::AcqRel) {
+        cef::shutdown();
     }
 }
 
@@ -294,6 +362,7 @@ pub mod jni_api {
         hidden_service_only: jboolean,
         require_auth: jboolean,
     ) -> jboolean {
+        init_logging();
         let files_dir = match read_string(&mut env, files_dir) {
             Ok(value) => PathBuf::from(value),
             Err(err) => {
@@ -307,7 +376,20 @@ pub mod jni_api {
             Err(err) => log::error!("cannot obtain the Java VM: {err}"),
         }
 
-        match Engine::start(&files_dir, hidden_service_only != 0, require_auth != 0) {
+        let started = std::panic::catch_unwind(|| {
+            Engine::start(&files_dir, hidden_service_only != 0, require_auth != 0)
+        })
+        .unwrap_or_else(|panic| {
+            let message = panic
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| panic.downcast_ref::<&str>().map(|text| text.to_string()))
+                .unwrap_or_else(|| "unknown panic".to_string());
+            Err(anyhow::anyhow!(
+                "the engine panicked while starting: {message}"
+            ))
+        });
+        match started {
             Ok(_) => 1,
             Err(err) => {
                 log::error!("cannot start the engine: {err:#}");
@@ -333,7 +415,7 @@ pub mod jni_api {
             }
             state.tor.shutdown();
         }
-        cef::shutdown();
+        shutdown_cef();
     }
 
     /// Attach the Android surface to the renderer.
@@ -405,7 +487,9 @@ pub mod jni_api {
         _env: JNIEnv,
         _this: JObject,
     ) {
-        cef::do_message_loop_work();
+        if cef_initialized() {
+            cef::do_message_loop_work();
+        }
     }
 
     /// Load a URL.
@@ -1087,6 +1171,7 @@ pub mod jni_api {
         process_type: jstring,
         switches: jni::objects::JObjectArray<'static>,
     ) -> jint {
+        init_logging();
         let process_type = match read_string(&mut env, process_type) {
             Ok(value) => value,
             Err(_) => return -1,
