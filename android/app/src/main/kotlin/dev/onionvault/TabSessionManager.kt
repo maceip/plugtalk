@@ -13,6 +13,7 @@ import android.view.MenuItem
 import android.view.MotionEvent
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import androidx.annotation.VisibleForTesting
 import com.cefrium.CefriumBrowser
 import com.cefrium.CefriumDisplayHandler
 import com.cefrium.CefriumLoadHandler
@@ -23,6 +24,7 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import org.json.JSONObject
 
 /**
  * Multi-tab Tor browser session manager backed by [CefriumBrowser] instances on
@@ -84,6 +86,7 @@ class TabSessionManager(
         val surfaceWrapper: TouchGateFrameLayout?,
         var state: TabState,
         var latestDomHtml: String = "",
+        var overrideDisplayUrl: String? = null,
     )
 
     private inner class TouchGateFrameLayout(
@@ -375,6 +378,7 @@ class TabSessionManager(
             )
         }
 
+        managed.overrideDisplayUrl = null
         updateTabState(targetTabId) {
             it.copy(
                 url = normalized,
@@ -389,6 +393,69 @@ class TabSessionManager(
 
         browser?.loadUrl(normalized)
         return decision
+    }
+
+    /**
+     * Injects a zero-JavaScript HTML document into the live [CefriumBrowser] frame via
+     * `Page.getFrameTree` + `Page.setDocumentContent` for instrumentation verification
+     * while preserving `setJavaScriptEnabled(false)` and `Emulation.setScriptExecutionDisabled(true)`.
+     */
+    @VisibleForTesting
+    internal fun loadInlineHtmlForTest(
+        html: String,
+        displayUrl: String,
+        tabId: String? = _activeTabId.value,
+        onComplete: (Boolean) -> Unit = {},
+    ) {
+        mainHandler.post {
+            val targetTabId = tabId ?: ensureInitialTab()
+            val managed = sessions[targetTabId]
+            val browser = managed?.browser
+            if (managed == null || browser == null) {
+                onComplete(false)
+                return@post
+            }
+            managed.overrideDisplayUrl = displayUrl
+            updateTabState(targetTabId) {
+                it.copy(
+                    url = displayUrl,
+                    title = displayTitleForUrl(displayUrl),
+                    isLoading = false,
+                    loadProgress = 100,
+                    isOnion = isOnionAddress(displayUrl),
+                    lastBlockedUrl = null,
+                    lastBlockReason = null,
+                )
+            }
+            browser.executeDevToolsMethod("Page.getFrameTree", "{}") { treeOk, treeJson ->
+                val frameId = if (treeOk && !treeJson.isNullOrBlank()) {
+                    runCatching {
+                        JSONObject(treeJson)
+                            .getJSONObject("frameTree")
+                            .getJSONObject("frame")
+                            .getString("id")
+                    }.getOrNull()
+                } else {
+                    null
+                }
+                if (frameId.isNullOrBlank()) {
+                    mainHandler.post { onComplete(false) }
+                    return@executeDevToolsMethod
+                }
+                val setParams = JSONObject()
+                    .put("frameId", frameId)
+                    .put("html", html)
+                    .toString()
+                browser.executeDevToolsMethod("Page.setDocumentContent", setParams) { setOk, _ ->
+                    mainHandler.post {
+                        if (setOk) {
+                            cdpController.attachAndScan(targetTabId, browser, displayUrl)
+                        }
+                        onComplete(setOk)
+                    }
+                }
+            }
+        }
     }
 
     fun reload(tabId: String? = _activeTabId.value) {
@@ -593,17 +660,25 @@ class TabSessionManager(
         browser.setRequestHandler(object : CefriumRequestHandler {
             override fun onDocumentAvailable() {
                 mainHandler.post {
-                    val current = sessions[tabId]?.browser ?: return@post
-                    cdpController.attachAndScan(tabId, current, current.url.orEmpty())
+                    val managed = sessions[tabId] ?: return@post
+                    val current = managed.browser ?: return@post
+                    val effectiveUrl = managed.overrideDisplayUrl ?: current.url.orEmpty()
+                    cdpController.attachAndScan(tabId, current, effectiveUrl)
                 }
             }
         })
 
         browser.setCallback(object : CefriumBrowser.Callback() {
             override fun onUrlChanged(url: String?) {
-                val safeUrl = url?.trim().orEmpty().ifEmpty { "about:blank" }
-                val isOnion = isOnionAddress(safeUrl)
+                val rawSafeUrl = url?.trim().orEmpty().ifEmpty { "about:blank" }
                 mainHandler.post {
+                    val overrideUrl = sessions[tabId]?.overrideDisplayUrl
+                    val safeUrl = if (rawSafeUrl == "about:blank" && !overrideUrl.isNullOrBlank()) {
+                        overrideUrl
+                    } else {
+                        rawSafeUrl
+                    }
+                    val isOnion = isOnionAddress(safeUrl)
                     updateTabState(tabId) { state ->
                         state.copy(
                             url = safeUrl,
@@ -639,7 +714,7 @@ class TabSessionManager(
                         )
                     }
                     if (!isLoading) {
-                        val currentUrl = browser.url.orEmpty()
+                        val currentUrl = sessions[tabId]?.overrideDisplayUrl ?: browser.url.orEmpty()
                         cdpController.attachAndScan(tabId, browser, currentUrl)
                         if (currentUrl.isNotBlank() && currentUrl != "about:blank") {
                             mainHandler.postDelayed({

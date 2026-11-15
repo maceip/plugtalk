@@ -11,6 +11,7 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.compose.setContent
+import androidx.annotation.VisibleForTesting
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.compose.foundation.layout.fillMaxSize
@@ -1385,6 +1386,29 @@ class MainActivity : FragmentActivity() {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
         clipboard?.setPrimaryClip(ClipData.newPlainText(label, text))
         Toast.makeText(this, toastMessage, Toast.LENGTH_SHORT).show()
+    }
+
+    @VisibleForTesting
+    internal fun activeCefriumBrowserForTest(): com.cefrium.CefriumBrowser? =
+        if (controllersReady) tabSessionManager.activeBrowser() else null
+
+    @VisibleForTesting
+    internal fun loadZeroJsDocumentForTest(
+        html: String,
+        displayUrl: String,
+        onComplete: (Boolean) -> Unit = {},
+    ) {
+        if (!controllersReady) {
+            onComplete(false)
+            return
+        }
+        activeSnapshotView = null
+        clearStatusAndPgpError()
+        tabSessionManager.loadInlineHtmlForTest(
+            html = html,
+            displayUrl = displayUrl,
+            onComplete = onComplete,
+        )
     }
 
     private data class ControllerSnapshot(

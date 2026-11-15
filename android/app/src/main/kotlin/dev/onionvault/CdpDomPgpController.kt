@@ -71,6 +71,7 @@ class CdpDomPgpController(
     val activeNodes: StateFlow<Map<String, List<DetectedPgpNode>>> = _activeNodes.asStateFlow()
 
     private val attachedBrowsers = ConcurrentHashMap<String, CefriumBrowser>()
+    private val lastUrlByTab = ConcurrentHashMap<String, String>()
     private val lastClassifiedByTab = ConcurrentHashMap<String, List<OvNative.ClassifiedDomNode>>()
     private val lastAttrMapByTab = ConcurrentHashMap<String, Map<Int, Map<String, String>>>()
     private val scanGenerationByTab = ConcurrentHashMap<String, AtomicInteger>()
@@ -84,11 +85,14 @@ class CdpDomPgpController(
         currentUrl: String = browser.url ?: "",
     ) {
         runOnMain {
+            if (currentUrl.isNotBlank()) {
+                lastUrlByTab[tabId] = currentUrl
+            }
             val alreadyAttached = attachedBrowsers.put(tabId, browser) === browser
             if (!alreadyAttached) {
                 configureDevToolsDomains(tabId, browser)
             }
-            performFullScan(tabId, browser, currentUrl)
+            performFullScan(tabId, browser, resolveScanUrl(tabId, browser, currentUrl))
         }
     }
 
@@ -151,7 +155,7 @@ class CdpDomPgpController(
                 attempt = 1,
             ) { outcome ->
                 if (outcome.ok && tabId != null) {
-                    performFullScan(tabId, browser, browser.url ?: "")
+                    performFullScan(tabId, browser, resolveScanUrl(tabId, browser))
                 }
                 runOnMain { onComplete(outcome) }
             }
@@ -160,6 +164,7 @@ class CdpDomPgpController(
 
     fun detachTab(tabId: String) {
         attachedBrowsers.remove(tabId)
+        lastUrlByTab.remove(tabId)
         lastClassifiedByTab.remove(tabId)
         lastAttrMapByTab.remove(tabId)
         scanGenerationByTab.remove(tabId)
@@ -170,6 +175,7 @@ class CdpDomPgpController(
 
     fun clearAll() {
         attachedBrowsers.clear()
+        lastUrlByTab.clear()
         lastClassifiedByTab.clear()
         lastAttrMapByTab.clear()
         scanGenerationByTab.clear()
@@ -184,7 +190,7 @@ class CdpDomPgpController(
                 "Page.frameStoppedLoading" -> {
                     runOnMain {
                         val activeBrowser = attachedBrowsers[tabId] ?: return@runOnMain
-                        performFullScan(tabId, activeBrowser, activeBrowser.url ?: "")
+                        performFullScan(tabId, activeBrowser, resolveScanUrl(tabId, activeBrowser))
                     }
                 }
             }
@@ -196,6 +202,27 @@ class CdpDomPgpController(
             "{\"value\":true}",
             null,
         )
+    }
+
+    private fun resolveScanUrl(
+        tabId: String,
+        browser: CefriumBrowser,
+        explicitUrl: String = "",
+    ): String {
+        val explicit = explicitUrl.trim()
+        if (explicit.isNotEmpty() && explicit != "about:blank") {
+            lastUrlByTab[tabId] = explicit
+            return explicit
+        }
+        val live = browser.url?.trim().orEmpty()
+        if (live.isNotEmpty() && live != "about:blank") {
+            lastUrlByTab[tabId] = live
+            return live
+        }
+        if (explicit == "about:blank") {
+            return "about:blank"
+        }
+        return lastUrlByTab[tabId].orEmpty().ifEmpty { live }
     }
 
     private fun performFullScan(
@@ -635,9 +662,18 @@ class CdpDomPgpController(
     }
 
     private fun extractNodeLiveText(node: JSONObject): String {
-        val shadowBuilder = StringBuilder()
         val shadows = node.optJSONArray("shadowRoots")
         if (shadows != null && shadows.length() > 0) {
+            for (i in 0 until shadows.length()) {
+                val shadow = shadows.optJSONObject(i) ?: continue
+                val innerEditor = findInnerEditor(shadow)
+                if (innerEditor != null) {
+                    val editorBuilder = StringBuilder()
+                    appendShadowEditorText(innerEditor, editorBuilder)
+                    return editorBuilder.toString()
+                }
+            }
+            val shadowBuilder = StringBuilder()
             for (i in 0 until shadows.length()) {
                 val shadow = shadows.optJSONObject(i) ?: continue
                 appendShadowEditorText(shadow, shadowBuilder)
@@ -649,16 +685,44 @@ class CdpDomPgpController(
         return extractElementVisibleText(node)
     }
 
+    private fun findInnerEditor(node: JSONObject): JSONObject? {
+        if (node.optInt("nodeType", 0) == 1) {
+            val attrs = parseAttributesList(node.optJSONArray("attributes"))
+            if (attrs["id"].equals("inner-editor", ignoreCase = true)) {
+                return node
+            }
+            if (attrs["id"].equals("placeholder", ignoreCase = true) ||
+                attrs["pseudo"]?.contains("placeholder", ignoreCase = true) == true
+            ) {
+                return null
+            }
+        }
+        val children = node.optJSONArray("children") ?: return null
+        for (i in 0 until children.length()) {
+            val child = children.optJSONObject(i) ?: continue
+            findInnerEditor(child)?.let { return it }
+        }
+        return null
+    }
+
     private fun appendShadowEditorText(node: JSONObject, out: StringBuilder) {
         val nodeType = node.optInt("nodeType", 0)
         if (nodeType == 3) {
             out.append(node.optString("nodeValue", ""))
             return
         }
-        val localName = node.optString("localName", node.optString("nodeName", "")).lowercase()
-        if (nodeType == 1 && localName == "br") {
-            out.append('\n')
-            return
+        if (nodeType == 1) {
+            val attrs = parseAttributesList(node.optJSONArray("attributes"))
+            if (attrs["id"].equals("placeholder", ignoreCase = true) ||
+                attrs["pseudo"]?.contains("placeholder", ignoreCase = true) == true
+            ) {
+                return
+            }
+            val localName = node.optString("localName", node.optString("nodeName", "")).lowercase()
+            if (localName == "br") {
+                out.append('\n')
+                return
+            }
         }
         val children = node.optJSONArray("children") ?: return
         for (i in 0 until children.length()) {
