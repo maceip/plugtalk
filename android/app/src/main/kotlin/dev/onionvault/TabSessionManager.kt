@@ -122,7 +122,6 @@ class TabSessionManager(
         const val MENU_ID_PGP_ACTION = 0x54524150
         const val MIN_ZOOM_PERCENT = 50
         const val MAX_ZOOM_PERCENT = 300
-        val V3_ONION_HOST_REGEX = Regex("^(?:[a-z0-9-]+\\.)*[a-z2-7]{56}\\.onion$", RegexOption.IGNORE_CASE)
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -534,16 +533,30 @@ class TabSessionManager(
         // Strip clearnet/external-app intents (`WEB_SEARCH`, `SHARE`, `PROCESS_TEXT`) from text selection.
         browser.setTextSelectionActionModeCallback(createHardenedSelectionCallback(tabId, browser))
 
-        // Long-press context menu callback -> native Compose context sheet.
-        browser.setOnContextMenuListener { linkUrl, mediaUrl ->
-            val selected = runCatching { browser.selectedText }.getOrNull()?.takeIf { it.isNotBlank() }
-            val classification = selected?.let { classifySelectedText(it) }?.takeIf { it.isPgp }
+        // Long-press context menu callback (`menuItems` is newline-separated "id|label",
+        // `url` is the link or media URL). Immediately cancel Chromium's native pending
+        // `CefRunContextMenuCallback` (`contextMenuCommand(-1)`) on the UI thread and
+        // surface Trap's native Compose context sheet instead.
+        browser.setOnContextMenuListener { menuItems, url ->
             mainHandler.post {
+                runCatching { browser.contextMenuCommand(-1) }
+                val cleanUrl = url?.trim()?.takeIf { it.isNotEmpty() }
+                val hasMediaCommand = menuItems.orEmpty()
+                    .lineSequence()
+                    .map { it.substringAfter('|', "").lowercase() }
+                    .any { label ->
+                        label.contains("image") ||
+                            label.contains("video") ||
+                            label.contains("audio") ||
+                            label.contains("media")
+                    }
+                val selected = runCatching { browser.selectedText }.getOrNull()?.takeIf { it.isNotBlank() }
+                val classification = selected?.let { classifySelectedText(it) }?.takeIf { it.isPgp }
                 onContextMenu(
                     ContextMenuTarget(
                         tabId = tabId,
-                        linkUrl = linkUrl?.takeIf { it.isNotBlank() },
-                        mediaUrl = mediaUrl?.takeIf { it.isNotBlank() },
+                        linkUrl = cleanUrl,
+                        mediaUrl = if (hasMediaCommand) cleanUrl else null,
                         selectedText = selected,
                         textClassification = classification,
                     ),
@@ -753,27 +766,11 @@ class TabSessionManager(
     }
 
     private fun classifySelectedText(text: String): OvNative.TextClassification {
-        if (OvNative.isLoaded) {
-            val json = runCatching { OvNative.nativeClassifyText(text) }.getOrDefault("")
-            return OvNative.parseTextClassification(json)
+        if (!OvNative.isLoaded) {
+            return OvNative.TextClassification()
         }
-        return when {
-            text.contains("-----BEGIN PGP MESSAGE-----") &&
-                text.contains("-----END PGP MESSAGE-----") ->
-                OvNative.TextClassification(
-                    kind = "pgp_message",
-                    actionLabel = "Decrypt Block",
-                    armored = text,
-                )
-            text.contains("-----BEGIN PGP PUBLIC KEY BLOCK-----") &&
-                text.contains("-----END PGP PUBLIC KEY BLOCK-----") ->
-                OvNative.TextClassification(
-                    kind = "pgp_public_key",
-                    actionLabel = "Import Key",
-                    armored = text,
-                )
-            else -> OvNative.TextClassification()
-        }
+        val json = runCatching { OvNative.nativeClassifyText(text) }.getOrDefault("")
+        return OvNative.parseTextClassification(json)
     }
 
     private fun normalizeUserAddressInput(rawInput: String): String {
@@ -798,15 +795,6 @@ class TabSessionManager(
         url: String,
         hiddenServiceOnly: Boolean,
     ): OvNative.UrlPolicyDecision {
-        if (OvNative.isLoaded) {
-            val json = runCatching {
-                OvNative.nativeCheckUrlPolicy(url, hiddenServiceOnly)
-            }.getOrDefault("")
-            if (json.isNotBlank()) {
-                return OvNative.parseUrlPolicy(json)
-            }
-        }
-        // Deterministic fallback policy matching `ov-cef` rules when running on JVM tests.
         val trimmed = url.trim()
         if (trimmed.equals("about:blank", ignoreCase = true)) {
             return OvNative.UrlPolicyDecision(
@@ -816,60 +804,22 @@ class TabSessionManager(
                 normalizedUrl = "about:blank",
             )
         }
-        val parsed = runCatching { Uri.parse(trimmed) }.getOrNull()
-            ?: return OvNative.UrlPolicyDecision(
-                allowed = false,
-                reason = "Malformed URL",
-                isOnion = false,
-                normalizedUrl = trimmed,
-            )
-        val scheme = parsed.scheme?.lowercase().orEmpty()
-        if (scheme != "http" && scheme != "https") {
+        if (!OvNative.isLoaded) {
             return OvNative.UrlPolicyDecision(
                 allowed = false,
-                reason = "Blocked scheme: $scheme (only http/https over Tor allowed)",
+                reason = "Native Tor/policy engine not loaded",
                 isOnion = false,
                 normalizedUrl = trimmed,
             )
         }
-        val host = parsed.host?.lowercase().orEmpty()
-        if (host.isEmpty()) {
-            return OvNative.UrlPolicyDecision(
-                allowed = false,
-                reason = "Missing hostname",
-                isOnion = false,
-                normalizedUrl = trimmed,
-            )
-        }
-        val isOnion = host.endsWith(".onion")
-        if (isOnion && !V3_ONION_HOST_REGEX.matches(host)) {
-            return OvNative.UrlPolicyDecision(
-                allowed = false,
-                reason = "Invalid v3 .onion address (expected 56 base32 characters)",
-                isOnion = false,
-                normalizedUrl = trimmed,
-            )
-        }
-        if (hiddenServiceOnly && !isOnion) {
-            return OvNative.UrlPolicyDecision(
-                allowed = false,
-                reason = "Clearnet URL blocked in Hidden-Service-Only mode",
-                isOnion = false,
-                normalizedUrl = trimmed,
-            )
-        }
-        return OvNative.UrlPolicyDecision(
-            allowed = true,
-            reason = "",
-            isOnion = isOnion,
-            normalizedUrl = trimmed,
-        )
+        val json = runCatching {
+            OvNative.nativeCheckUrlPolicy(trimmed, hiddenServiceOnly)
+        }.getOrDefault("")
+        return OvNative.parseUrlPolicy(json)
     }
 
-    private fun isOnionAddress(url: String): Boolean {
-        val host = runCatching { Uri.parse(url).host?.lowercase() }.getOrNull().orEmpty()
-        return V3_ONION_HOST_REGEX.matches(host)
-    }
+    private fun isOnionAddress(url: String): Boolean =
+        evaluateUrlPolicy(url, hiddenServiceOnly = false).isOnion
 
     private fun canNavigateForward(browser: CefriumBrowser): Boolean {
         val entries = runCatching { browser.navigationEntries }.getOrNull() ?: return false

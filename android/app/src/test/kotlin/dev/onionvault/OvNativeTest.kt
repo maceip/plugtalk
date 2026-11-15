@@ -51,16 +51,8 @@ class OvNativeTest {
     }
 
     private fun nativeExports(): Set<String> {
-        val rootSource = sourceFile("src/lib.rs")
-        val repoRoot = rootSource.parentFile?.parentFile ?: File(".").absoluteFile
-        val coreSource = File(repoRoot, "crates/ov-core/src/lib.rs")
-        val text = buildString {
-            append(rootSource.readText())
-            if (coreSource.isFile) {
-                append('\n')
-                append(coreSource.readText())
-            }
-        }
+        val source = sourceFile("src/lib.rs")
+        val text = source.readText()
         val pattern = Regex("""fn\s+(Java_\w+)\s*\(""")
         return pattern.findAll(text).map { it.groupValues[1] }.toSet()
     }

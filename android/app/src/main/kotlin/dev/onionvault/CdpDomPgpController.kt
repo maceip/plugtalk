@@ -231,7 +231,7 @@ class CdpDomPgpController(
             }
             lastAttrMapByTab[tabId] = attrMap
 
-            val classified = classifyDomTree(docJson, rootObj)
+            val classified = classifyDomTree(docJson)
             lastClassifiedByTab[tabId] = classified
 
             applyZeroJsHighlights(browser, classified, attrMap)
@@ -269,82 +269,16 @@ class CdpDomPgpController(
 
     private fun classifyDomTree(
         rawDocJson: String,
-        rootObj: JSONObject?,
     ): List<OvNative.ClassifiedDomNode> {
-        if (OvNative.isLoaded) {
-            val classifiedJson = runCatching {
-                OvNative.nativeClassifyCdpDom(rawDocJson)
-            }.onFailure {
-                Log.w(TAG, "nativeClassifyCdpDom failed", it)
-            }.getOrDefault("[]")
-            return OvNative.parseClassifiedDom(classifiedJson)
+        if (!OvNative.isLoaded) {
+            return emptyList()
         }
-        // Pure-Kotlin fallback used only when running JVM tests without libonion_vault.so.
-        if (rootObj == null) return emptyList()
-        val fallback = ArrayList<OvNative.ClassifiedDomNode>()
-        walkFallbackDom(rootObj, fallback)
-        return fallback
-    }
-
-    private fun walkFallbackDom(
-        node: JSONObject,
-        out: MutableList<OvNative.ClassifiedDomNode>,
-    ) {
-        val nodeType = node.optInt("nodeType", 0)
-        if (nodeType == 1) {
-            val tag = node.optString("localName", node.optString("nodeName", "")).lowercase()
-            val nodeId = node.optInt("nodeId", 0)
-            val backendNodeId = node.optInt("backendNodeId", 0)
-            val attrs = parseAttributesList(node.optJSONArray("attributes"))
-            val typeAttr = attrs["type"]?.lowercase().orEmpty()
-            if (tag == "textarea" || (tag == "input" && (typeAttr.isEmpty() || typeAttr == "text" || typeAttr == "search"))) {
-                val liveText = extractNodeLiveText(node)
-                out += OvNative.ClassifiedDomNode(
-                    nodeId = nodeId,
-                    backendNodeId = backendNodeId,
-                    tag = tag,
-                    kind = "pgp_textarea",
-                    actionLabel = "Encrypt Field",
-                    text = liveText,
-                    fingerprintHint = "",
-                )
-                return
-            }
-            val textContent = extractElementVisibleText(node)
-            if (textContent.contains("-----BEGIN PGP MESSAGE-----") &&
-                textContent.contains("-----END PGP MESSAGE-----")
-            ) {
-                out += OvNative.ClassifiedDomNode(
-                    nodeId = nodeId,
-                    backendNodeId = backendNodeId,
-                    tag = tag,
-                    kind = "pgp_message",
-                    actionLabel = "Decrypt Block",
-                    text = textContent.trim(),
-                    fingerprintHint = "",
-                )
-                return
-            }
-            if (textContent.contains("-----BEGIN PGP PUBLIC KEY BLOCK-----") &&
-                textContent.contains("-----END PGP PUBLIC KEY BLOCK-----")
-            ) {
-                out += OvNative.ClassifiedDomNode(
-                    nodeId = nodeId,
-                    backendNodeId = backendNodeId,
-                    tag = tag,
-                    kind = "pgp_public_key",
-                    actionLabel = "Import Key",
-                    text = textContent.trim(),
-                    fingerprintHint = "",
-                )
-                return
-            }
-        }
-        val children = node.optJSONArray("children") ?: return
-        for (i in 0 until children.length()) {
-            val child = children.optJSONObject(i) ?: continue
-            walkFallbackDom(child, out)
-        }
+        val classifiedJson = runCatching {
+            OvNative.nativeClassifyCdpDom(rawDocJson)
+        }.onFailure {
+            Log.w(TAG, "nativeClassifyCdpDom failed", it)
+        }.getOrDefault("[]")
+        return OvNative.parseClassifiedDom(classifiedJson)
     }
 
     private fun applyZeroJsHighlights(
@@ -357,9 +291,9 @@ class CdpDomPgpController(
             val existingStyle = attrMap[node.nodeId]?.get("style").orEmpty()
             if (existingStyle.contains(HIGHLIGHT_MARKER)) continue
             val outlineCss = when (node.kind) {
-                "pgp_textarea" -> "outline: 1.5px solid rgba(157,123,255,0.75); outline-offset: 2px;"
-                "pgp_message" -> "outline: 1.5px solid rgba(69,212,168,0.75); outline-offset: 2px;"
-                "pgp_public_key" -> "outline: 1.5px solid rgba(255,196,86,0.75); outline-offset: 2px;"
+                "pgp_textarea" -> "outline: 1.5px solid rgba(232,163,61,0.80); outline-offset: 2px;"
+                "pgp_message" -> "outline: 1.5px solid rgba(46,196,176,0.80); outline-offset: 2px;"
+                "pgp_public_key" -> "outline: 1.5px solid rgba(62,207,106,0.80); outline-offset: 2px;"
                 else -> continue
             }
             val mergedStyle = buildString {
