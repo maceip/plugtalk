@@ -660,8 +660,8 @@ private fun BottomControlDock(
                     strokeWidth = strokePx,
                 )
             }
-            .padding(horizontal = 8.dp, vertical = 6.dp)
-            .testTag("bottom_control_dock"),
+            .testTag("bottom_control_dock")
+            .padding(horizontal = 8.dp, vertical = 6.dp),
     ) {
         val isWide = maxWidth >= 560.dp
         val navCircleSize = if (isWide) 44.dp else 40.dp

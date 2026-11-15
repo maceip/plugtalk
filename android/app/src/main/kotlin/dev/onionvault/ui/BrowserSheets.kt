@@ -71,7 +71,7 @@ fun ClearnetConsentSheet(
     }
     val domainGlob = remember(prompt.host, prompt.suggestedPattern) {
         prompt.suggestedPattern.trim().ifBlank {
-            OvNative.suggestGlobForHost(exactHost)
+            OvNative.suggestGlob(exactHost)
         }.ifBlank { exactHost }
     }
     var pattern by remember(prompt.host, prompt.pendingUrl, prompt.suggestedPattern) {
@@ -116,6 +116,7 @@ fun ClearnetConsentSheet(
                     fontFamily = FontFamily.Monospace,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.testTag("clearnet_prompt_host"),
                 )
             }
 
@@ -190,7 +191,7 @@ fun ClearnetConsentSheet(
                         enabled = canAllow,
                         role = Role.Button,
                         onClick = {
-                            onAllow(prompt, cleanPattern, OvNative.CLEARNET_DEFAULT_TTL_SECONDS)
+                            onAllow(prompt, cleanPattern, OvNative.DEFAULT_CLEARNET_TTL_SECONDS)
                         },
                     )
                     .testTag("clearnet_allow_3d_button"),
@@ -406,6 +407,7 @@ fun TabsSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .weight(1f, fill = false)
                 .heightIn(max = 380.dp)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -508,6 +510,7 @@ fun SecurityCircuitSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .weight(1f, fill = false)
                 .heightIn(max = 480.dp)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -646,6 +649,7 @@ fun SettingsSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .weight(1f, fill = false)
                 .heightIn(max = 460.dp)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(9.dp),
@@ -869,6 +873,7 @@ fun BrowserMenuSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .weight(1f, fill = false)
                 .heightIn(max = 480.dp)
                 .verticalScroll(rememberScrollState()),
         ) {

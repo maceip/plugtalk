@@ -354,7 +354,7 @@ class TabSessionManager(
                     runCatching { Uri.parse(normalized).host.orEmpty() }.getOrDefault("")
                 }.trim().trimEnd('.').lowercase()
                 val suggested = decision.suggestedPattern.ifBlank {
-                    OvNative.suggestGlobForHost(host)
+                    OvNative.suggestGlob(host)
                 }
                 onClearnetConsentRequired(host, normalized, suggested)
                 return decision
@@ -616,7 +616,7 @@ class TabSessionManager(
                         runCatching { Uri.parse(normalized).host.orEmpty() }.getOrDefault("")
                     }.trim().trimEnd('.').lowercase()
                     val suggested = decision.suggestedPattern.ifBlank {
-                        OvNative.suggestGlobForHost(host)
+                        OvNative.suggestGlob(host)
                     }
                     mainHandler.post { onClearnetConsentRequired(host, normalized, suggested) }
                 } else {
@@ -870,7 +870,7 @@ class TabSessionManager(
                         runCatching { Uri.parse(normalized).host.orEmpty() }.getOrDefault("")
                     }.trim().trimEnd('.').lowercase()
                     val suggested = decision.suggestedPattern.ifBlank {
-                        OvNative.suggestGlobForHost(host)
+                        OvNative.suggestGlob(host)
                     }
                     mainHandler.post {
                         onClearnetConsentRequired(host, normalized, suggested)

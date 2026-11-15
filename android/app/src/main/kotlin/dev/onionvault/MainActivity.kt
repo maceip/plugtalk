@@ -583,7 +583,7 @@ class MainActivity : FragmentActivity() {
             ClearnetPromptState(
                 host = pendingHost,
                 pendingUrl = null,
-                suggestedPattern = OvNative.suggestGlobForHost(pendingHost),
+                suggestedPattern = OvNative.suggestGlob(pendingHost),
             )
         } else {
             uiState.clearnetPrompt
@@ -639,7 +639,7 @@ class MainActivity : FragmentActivity() {
         val cleanHost = host.trim().trimEnd('.').lowercase()
         if (cleanHost.isEmpty()) return
         val resolvedPattern = suggestedPattern.trim().ifBlank {
-            OvNative.suggestGlobForHost(cleanHost)
+            OvNative.suggestGlob(cleanHost)
         }.ifBlank { cleanHost }
         uiState = uiState.copy(
             blocked = false,

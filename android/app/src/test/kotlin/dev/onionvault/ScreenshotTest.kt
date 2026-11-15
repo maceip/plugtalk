@@ -362,7 +362,7 @@ class ScreenshotTest {
                     clearnetPrompt = ClearnetPromptState(
                         host = host,
                         pendingUrl = normalized,
-                        suggestedPattern = OvNative.suggestGlobForHost(host),
+                        suggestedPattern = OvNative.suggestGlob(host),
                     ),
                 )
             }
@@ -410,7 +410,7 @@ class ScreenshotTest {
         compose.onNodeWithTag("status_notice_banner").assertDoesNotExist()
         compose.onNodeWithTag("clearnet_consent_sheet").assertIsDisplayed()
         compose.onNodeWithText("Allow clearnet site over Tor?").assertIsDisplayed()
-        compose.onNodeWithText("tor.taxi").assertIsDisplayed()
+        compose.onNodeWithTag("clearnet_prompt_host").assertTextEquals("tor.taxi")
         compose.onNodeWithTag("clearnet_pattern_input").assertTextEquals("*.tor.taxi")
 
         // 2. Scope chips toggle cleanly between Exact host and *.domain.
@@ -481,10 +481,10 @@ class ScreenshotTest {
 
     @Test
     fun ov_native_clearnet_json_parsers_and_glob_suggestions_match_contract() {
-        assertEquals("*.tor.taxi", OvNative.suggestGlobForHost("tor.taxi"))
-        assertEquals("*.tor.taxi", OvNative.suggestGlobForHost("www.tor.taxi"))
-        assertEquals("*.tor.taxi", OvNative.suggestGlobForHost("sub.tor.taxi"))
-        assertEquals("1.1.1.1", OvNative.suggestGlobForHost("1.1.1.1"))
+        assertEquals("*.tor.taxi", OvNative.suggestGlob("tor.taxi"))
+        assertEquals("*.tor.taxi", OvNative.suggestGlob("www.tor.taxi"))
+        assertEquals("*.tor.taxi", OvNative.suggestGlob("sub.tor.taxi"))
+        assertEquals("1.1.1.1", OvNative.suggestGlob("1.1.1.1"))
 
         val consentPolicy = OvNative.parseUrlPolicy(
             """
