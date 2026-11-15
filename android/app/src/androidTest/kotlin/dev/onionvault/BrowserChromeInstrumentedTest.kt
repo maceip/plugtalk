@@ -162,28 +162,34 @@ class BrowserChromeInstrumentedTest {
         val prefs = TrapPreferences(activity)
         prefs.requireBiometric = false
 
-        // Generate a dedicated Sequoia OpenPGP own keypair in Android Keystore.
-        val keyGen = OvNative.parseGenerateKey(
-            OvNative.nativeGenerateKey("ZeroJS Signer <zerojs@onion>", ""),
-        )
-        assertTrue("Key generation failed: ${keyGen.error}", keyGen.ok)
-        assertFalse(keyGen.fingerprint.isBlank())
+        // Generate a dedicated Sequoia OpenPGP own keypair via the real KeyringSheet UI
+        // so MainActivity refreshes uiState.keys and defaultKeyFingerprint end-to-end.
+        val beforeKeys = OvNative.parseKeys(OvNative.nativeListKeysJson())
+        val beforeFingerprints = beforeKeys.map { it.fingerprint }.toSet()
+
+        composeRule.onNodeWithTag("top_keyring_button").performClick()
+        composeRule.onNodeWithTag("keyring_sheet").assertIsDisplayed()
+        composeRule.onNodeWithText("Generate").performClick()
+        composeRule.onNodeWithTag("keygen_userid_input").performTextInput("ZeroJS Signer <zerojs@onion>")
+        composeRule.onNodeWithTag("keygen_submit_button").performClick()
+
+        composeRule.waitUntil(timeoutMillis = 15_000L) {
+            OvNative.parseKeys(OvNative.nativeListKeysJson()).any {
+                it.userId.contains("zerojs@onion") && it.fingerprint !in beforeFingerprints
+            } && composeRule.onAllNodesWithText("ZeroJS Signer <zerojs@onion>")
+                .fetchSemanticsNodes()
+                .isNotEmpty()
+        }
+        val createdKey = OvNative.parseKeys(OvNative.nativeListKeysJson()).first {
+            it.userId.contains("zerojs@onion") && it.fingerprint !in beforeFingerprints
+        }
+        assertFalse(createdKey.fingerprint.isBlank())
 
         try {
-            // Set as default key via Keyring sheet so MainActivity uiState picks up the new key.
-            composeRule.onNodeWithTag("top_keyring_button").performClick()
-            composeRule.onNodeWithTag("keyring_sheet").assertIsDisplayed()
-            composeRule.waitUntil(timeoutMillis = 10_000L) {
-                composeRule.onAllNodesWithText("ZeroJS Signer <zerojs@onion>")
-                    .fetchSemanticsNodes()
-                    .isNotEmpty()
-            }
             val setDefaultNodes = composeRule.onAllNodesWithText("Set Default")
             if (setDefaultNodes.fetchSemanticsNodes().isNotEmpty()) {
                 setDefaultNodes[0].performClick()
                 composeRule.waitForIdle()
-            } else {
-                prefs.defaultKeyFingerprint = keyGen.fingerprint
             }
             composeRule.onNodeWithTag("sheet_close_button").performClick()
             composeRule.waitForIdle()
@@ -286,7 +292,7 @@ class BrowserChromeInstrumentedTest {
             composeRule.onNodeWithText("Plaintext secret drop").assertIsDisplayed()
             composeRule.onNodeWithText("Good signature · ZeroJS Signer <zerojs@onion>")
                 .assertIsDisplayed()
-            composeRule.onNodeWithText("Key ID · ${keyGen.fingerprint.takeLast(16)}")
+            composeRule.onNodeWithText("Key ID · ${createdKey.fingerprint.takeLast(16)}")
                 .assertIsDisplayed()
 
             // Closing PlaintextSheet must leave ciphertext intact in DOM (never leaking plaintext to page).
@@ -297,8 +303,8 @@ class BrowserChromeInstrumentedTest {
             assertTrue(postDecryptDomValue.contains("-----BEGIN PGP MESSAGE-----"))
             assertFalse(postDecryptDomValue.contains("Plaintext secret drop"))
         } finally {
-            OvNative.nativeDeleteKey(keyGen.fingerprint)
-            if (prefs.defaultKeyFingerprint == keyGen.fingerprint) {
+            OvNative.nativeDeleteKey(createdKey.fingerprint)
+            if (prefs.defaultKeyFingerprint == createdKey.fingerprint) {
                 prefs.defaultKeyFingerprint = ""
             }
         }
