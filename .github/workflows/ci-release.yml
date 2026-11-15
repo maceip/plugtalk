@@ -177,7 +177,7 @@ jobs:
             echo "::error::sdkmanager was not found in ${sdk_root}/cmdline-tools"
             exit 1
           fi
-          echo "$(dirname "${sdkmanager}")" >> "$GITHUB_PATH"
+          dirname "${sdkmanager}" >> "$GITHUB_PATH"
           echo "${sdk_root}/platform-tools" >> "$GITHUB_PATH"
 
       - name: Install Android SDK 37 and NDK r27c
@@ -195,17 +195,19 @@ jobs:
           sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
           ndk_root="${sdk_root}/ndk/27.2.12479018"
           ndk_bin="${ndk_root}/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          echo "ANDROID_NDK_HOME=${ndk_root}" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK_ROOT=${ndk_root}" >> "$GITHUB_ENV"
           echo "${ndk_bin}" >> "$GITHUB_PATH"
-          echo "CC_aarch64_linux_android=${ndk_bin}/aarch64-linux-android29-clang" >> "$GITHUB_ENV"
-          echo "CXX_aarch64_linux_android=${ndk_bin}/aarch64-linux-android29-clang++" >> "$GITHUB_ENV"
-          echo "AR_aarch64_linux_android=${ndk_bin}/llvm-ar" >> "$GITHUB_ENV"
-          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${ndk_bin}/aarch64-linux-android29-clang" >> "$GITHUB_ENV"
-          echo "CC_x86_64_linux_android=${ndk_bin}/x86_64-linux-android29-clang" >> "$GITHUB_ENV"
-          echo "CXX_x86_64_linux_android=${ndk_bin}/x86_64-linux-android29-clang++" >> "$GITHUB_ENV"
-          echo "AR_x86_64_linux_android=${ndk_bin}/llvm-ar" >> "$GITHUB_ENV"
-          echo "CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER=${ndk_bin}/x86_64-linux-android29-clang" >> "$GITHUB_ENV"
+          {
+            echo "ANDROID_NDK_HOME=${ndk_root}"
+            echo "ANDROID_NDK_ROOT=${ndk_root}"
+            echo "CC_aarch64_linux_android=${ndk_bin}/aarch64-linux-android29-clang"
+            echo "CXX_aarch64_linux_android=${ndk_bin}/aarch64-linux-android29-clang++"
+            echo "AR_aarch64_linux_android=${ndk_bin}/llvm-ar"
+            echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${ndk_bin}/aarch64-linux-android29-clang"
+            echo "CC_x86_64_linux_android=${ndk_bin}/x86_64-linux-android29-clang"
+            echo "CXX_x86_64_linux_android=${ndk_bin}/x86_64-linux-android29-clang++"
+            echo "AR_x86_64_linux_android=${ndk_bin}/llvm-ar"
+            echo "CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER=${ndk_bin}/x86_64-linux-android29-clang"
+          } >> "$GITHUB_ENV"
 
       - name: Install Rust Android targets and cargo-ndk
         run: |

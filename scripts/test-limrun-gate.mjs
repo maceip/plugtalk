@@ -295,12 +295,14 @@ async function startMockLimrunServer(toolsDir, mode) {
       }
 
       if (type === 'getElementTree') {
+        const headerTitle =
+          mode === 'premature_onion_still_loading' ? 'about:blank' : 'DuckDuckGo';
         const xml =
           mode === 'crash_on_launch'
             ? '<hierarchy><node package="com.android.launcher3" text="Home" /></hierarchy>'
             : state.navigatedOnion
               ? '<hierarchy>' +
-                '<node package="dev.onionvault" text="DuckDuckGo" />' +
+                `<node package="dev.onionvault" text="${headerTitle}" />` +
                 '<node package="dev.onionvault" text="https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/" />' +
                 '<node package="dev.onionvault" text="Tor ready" />' +
                 '<node package="dev.onionvault" text="iso-duckduckgogg42xj" />' +
@@ -314,7 +316,7 @@ async function startMockLimrunServer(toolsDir, mode) {
 
         const nodes = state.navigatedOnion
           ? [
-              { packageName: 'dev.onionvault', text: 'DuckDuckGo' },
+              { packageName: 'dev.onionvault', text: headerTitle },
               {
                 packageName: 'dev.onionvault',
                 text: 'https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/',
@@ -400,12 +402,20 @@ async function startMockLimrunServer(toolsDir, mode) {
             const lines = [
               '11-15 03:00:01.010  9001  9001 I Trap    : the engine is ready',
               '11-15 03:00:01.250  9001  9024 I ov_tor  : SOCKS5 listener bound to 127.0.0.1:41955',
+              '11-15 03:00:01.400  9001  9001 I Cefrium : loadUrl: about:blank',
+              '11-15 03:00:01.750  9001  9001 I Cefrium : OnLoadEnd: status 0, isMain=1',
               '11-15 03:00:03.400  9001  9025 I ov_tor  : Tor client bootstrapped',
             ];
             if (state.navigatedOnion) {
               lines.push(
+                '11-15 03:00:04.050  9001  9001 I Cefrium : loadUrl: https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/',
                 '11-15 03:00:04.100  9001  9026 I ov_tor  : created isolated Tor circuit group iso-duckduckgogg42xj',
               );
+              if (mode !== 'premature_onion_still_loading') {
+                lines.push(
+                  '11-15 03:00:18.450  9001  9001 I Cefrium : OnLoadEnd: status 200, isMain=1',
+                );
+              }
             }
             out = `${lines.join('\n')}\n`;
           }
@@ -563,6 +573,9 @@ async function runTests() {
       assert.equal(summary.onionSmoke.isolationCreatedInLogcat, true);
       assert.equal(summary.onionSmoke.isolationVisibleInUi, true);
       assert.equal(summary.onionSmoke.onionHostVisibleInUi, true);
+      assert.equal(summary.onionSmoke.pageLoadedInLogcat, true);
+      assert.equal(summary.onionSmoke.mainFrameHttpStatus, 200);
+      assert.equal(summary.onionSmoke.onionTitleRenderedInUi, true);
       assert.equal(summary.appPid, '9001');
       assert.ok(fs.statSync(path.join(outDir, 'limrun-launch.png')).size > 0);
       assert.ok(fs.statSync(path.join(outDir, 'limrun-onion.png')).size > 0);
@@ -611,8 +624,50 @@ async function runTests() {
     }
   }
 
+  console.log('== Test 5: Unrendered .onion tab (stale about:blank header + no HTTP 2xx/3xx OnLoadEnd) fails closed ==');
+  {
+    const mock = await startMockLimrunServer(toolsDir, 'premature_onion_still_loading');
+    const outDir = path.join(workDir, 'out-premature-onion');
+    try {
+      const res = await runGateAsync([apkPath, outDir], {
+        ...process.env,
+        LIM_API_KEY: 'lim_test_key_premature',
+        LIMRUN_BASE_URL: mock.baseURL,
+        LIMRUN_TOOLS_DIR: toolsDir,
+        BOOT_WAIT_SECONDS: '6',
+        ONION_WAIT_SECONDS: '3',
+        STABILITY_SECONDS: '0',
+        POLL_INTERVAL_MS: '200',
+      });
+      assert.notEqual(
+        res.status,
+        0,
+        'Gate must fail closed if .onion URL is only in address bar while viewport is still about:blank',
+      );
+      assert.deepEqual(mock.state.deletedInstances, mock.state.createdInstances);
+      const summary = JSON.parse(fs.readFileSync(path.join(outDir, 'limrun-summary.json'), 'utf8'));
+      assert.equal(summary.passed, false);
+      assert.equal(summary.onionSmoke.isolationCreatedInLogcat, true);
+      assert.equal(summary.onionSmoke.onionHostVisibleInUi, true);
+      assert.equal(summary.onionSmoke.pageLoadedInLogcat, false);
+      assert.equal(summary.onionSmoke.mainFrameHttpStatus, null);
+      assert.equal(summary.onionSmoke.onionTitleRenderedInUi, false);
+      assert.ok(
+        summary.failures.some((f) => /OnLoadEnd/.test(f)),
+        `Expected missing OnLoadEnd failure in summary.failures: ${JSON.stringify(summary.failures)}`,
+      );
+      assert.ok(
+        summary.failures.some((f) => /stale 'about:blank' title/.test(f)),
+        `Expected stale about:blank title failure in summary.failures: ${JSON.stringify(summary.failures)}`,
+      );
+      console.log('  PASS: Unrendered .onion still-loading state failed closed and deleted instance');
+    } finally {
+      await mock.close();
+    }
+  }
+
   fs.rmSync(workDir, { recursive: true, force: true });
-  console.log('ALL 4 LIMRUN GATE E2E TESTS PASSED');
+  console.log('ALL 5 LIMRUN GATE E2E TESTS PASSED');
 }
 
 runTests().catch((err) => {

@@ -29,3 +29,8 @@ android/app/src/main/assets/licenses/
 # The Python cache of the icon pipelines
 __pycache__/
 *.pyc
+
+# Local secrets and environment files (never commit)
+.env
+.env.*
+

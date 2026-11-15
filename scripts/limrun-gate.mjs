@@ -53,7 +53,7 @@ const LIMRUN_INSTALL_MODE = (process.env.LIMRUN_INSTALL_MODE || 'auto').trim();
 const INSTANCE_ID_FILE = (process.env.LIMRUN_INSTANCE_ID_FILE || '').trim() || null;
 
 const BOOT_WAIT_SECONDS = Number(process.env.BOOT_WAIT_SECONDS ?? 150);
-const ONION_WAIT_SECONDS = Number(process.env.ONION_WAIT_SECONDS ?? 120);
+const ONION_WAIT_SECONDS = Number(process.env.ONION_WAIT_SECONDS ?? 180);
 const STABILITY_SECONDS = Number(process.env.STABILITY_SECONDS ?? 12);
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS ?? 2000);
 const SKIP_ONION_SMOKE = process.env.LIMRUN_SKIP_ONION_SMOKE === '1';
@@ -201,6 +201,27 @@ function detectCrashScreenInTree(tree) {
   return false;
 }
 
+function hasStaleAboutBlankTitle(tree) {
+  if (
+    Array.isArray(tree?.nodes) &&
+    tree.nodes.some((n) => String(n.text || '').trim().toLowerCase() === 'about:blank')
+  ) {
+    return true;
+  }
+  return /\btext="about:blank"/i.test(tree?.xml || '');
+}
+
+function extractLatestMainFrameHttpStatus(logBuffer, targetUrl) {
+  if (!logBuffer) return null;
+  const loadIdx = logBuffer.lastIndexOf(`loadUrl: ${targetUrl}`);
+  const postNavLog = loadIdx >= 0 ? logBuffer.slice(loadIdx) : logBuffer;
+  const matches = [
+    ...postNavLog.matchAll(/Cefrium\s*:\s*OnLoadEnd:\s*status\s+([23]\d\d),\s*isMain=1/g),
+  ];
+  if (matches.length === 0) return null;
+  return Number(matches[matches.length - 1][1]);
+}
+
 async function main() {
   const apkPath = path.resolve(process.argv[2] || DEFAULT_APK);
   const outDir = path.resolve(process.argv[3] || DEFAULT_OUT_DIR);
@@ -307,9 +328,13 @@ async function main() {
       targetUrl: ONION_TEST_URL,
       expectedIsolation: ONION_EXPECTED_ISOLATION,
       triggerMethod: null,
+      attempts: 1,
       isolationCreatedInLogcat: false,
       isolationVisibleInUi: false,
       onionHostVisibleInUi: false,
+      pageLoadedInLogcat: false,
+      mainFrameHttpStatus: null,
+      onionTitleRenderedInUi: false,
       elapsedSeconds: null,
     },
     appPid: null,
@@ -675,6 +700,14 @@ async function main() {
           summary.onionSmoke.isolationCreatedInLogcat = true;
         }
 
+        const httpStatus =
+          extractLatestMainFrameHttpStatus(latestDumpLogText, ONION_TEST_URL) ??
+          extractLatestMainFrameHttpStatus(streamedLogLines.join('\n'), ONION_TEST_URL);
+        if (httpStatus !== null) {
+          summary.onionSmoke.pageLoadedInLogcat = true;
+          summary.onionSmoke.mainFrameHttpStatus = httpStatus;
+        }
+
         finalTree = await client.getElementTree({ waitForIdleTimeoutMs: 1500 }).catch(() => null);
         if (finalTree) {
           const allText = [
@@ -685,13 +718,37 @@ async function main() {
           if (allText.includes(ONION_EXPECTED_ISOLATION)) {
             summary.onionSmoke.isolationVisibleInUi = true;
           }
-          if (
-            !allText.includes('about:blank · zero-JS') &&
-            (allText.includes(ONION_EXPECTED_HOST) || /DuckDuckGo/i.test(allText))
-          ) {
+          if (!allText.includes('about:blank · zero-JS') && allText.includes(ONION_EXPECTED_HOST)) {
             summary.onionSmoke.onionHostVisibleInUi = true;
           }
+          if (summary.onionSmoke.onionHostVisibleInUi && !hasStaleAboutBlankTitle(finalTree)) {
+            summary.onionSmoke.onionTitleRenderedInUi = true;
+          }
           if (/Navigation failed/i.test(allText)) {
+            const elapsedSec = (Date.now() - onionStarted) / 1000;
+            if (summary.onionSmoke.attempts < 2 && elapsedSec < ONION_WAIT_SECONDS - 30) {
+              summary.onionSmoke.attempts += 1;
+              summary.onionSmoke.pageLoadedInLogcat = false;
+              summary.onionSmoke.mainFrameHttpStatus = null;
+              summary.onionSmoke.onionTitleRenderedInUi = false;
+              console.warn(
+                `  First .onion rendezvous attempt reported navigation error at ${elapsedSec.toFixed(1)}s; retrying live navigation (attempt ${summary.onionSmoke.attempts})...`,
+              );
+              await client
+                .adbShell('am', [
+                  'start',
+                  '-W',
+                  '-a',
+                  'android.intent.action.VIEW',
+                  '-d',
+                  ONION_TEST_URL,
+                  '-n',
+                  ACTIVITY,
+                ])
+                .catch(() => {});
+              await sleep(3000);
+              continue;
+            }
             summary.failures.push(`Browser reported navigation error while loading ${ONION_TEST_URL}`);
             break;
           }
@@ -699,7 +756,9 @@ async function main() {
 
         if (
           (summary.onionSmoke.isolationCreatedInLogcat || summary.onionSmoke.isolationVisibleInUi) &&
-          summary.onionSmoke.onionHostVisibleInUi
+          summary.onionSmoke.onionHostVisibleInUi &&
+          summary.onionSmoke.pageLoadedInLogcat &&
+          summary.onionSmoke.onionTitleRenderedInUi
         ) {
           summary.onionSmoke.elapsedSeconds = Number(
             ((Date.now() - onionStarted) / 1000).toFixed(1),
@@ -721,6 +780,16 @@ async function main() {
       if (!summary.onionSmoke.onionHostVisibleInUi) {
         summary.failures.push(
           `Browser chrome never transitioned from StartPage to '${ONION_EXPECTED_HOST}'`,
+        );
+      }
+      if (!summary.onionSmoke.pageLoadedInLogcat) {
+        summary.failures.push(
+          `Cefrium never completed HTTP 2xx/3xx main-frame OnLoadEnd for ${ONION_TEST_URL}`,
+        );
+      }
+      if (!summary.onionSmoke.onionTitleRenderedInUi) {
+        summary.failures.push(
+          `Browser header remained on stale 'about:blank' title instead of rendering ${ONION_EXPECTED_HOST}`,
         );
       }
 
