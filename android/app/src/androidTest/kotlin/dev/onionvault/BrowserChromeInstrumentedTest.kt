@@ -368,16 +368,22 @@ class BrowserChromeInstrumentedTest {
             ?: return ""
         val target = findElementById(root, elementId) ?: return ""
         val shadows = target.optJSONArray("shadowRoots")
-        if (shadows != null) {
+        if (shadows != null && shadows.length() > 0) {
             for (i in 0 until shadows.length()) {
                 val shadow = shadows.optJSONObject(i) ?: continue
                 val editor = findElementById(shadow, "inner-editor")
                 if (editor != null) {
-                    return collectTextNodes(editor)
+                    return collectNonPlaceholderTextNodes(editor)
                 }
             }
+            val shadowText = StringBuilder()
+            for (i in 0 until shadows.length()) {
+                val shadow = shadows.optJSONObject(i) ?: continue
+                shadowText.append(collectNonPlaceholderTextNodes(shadow))
+            }
+            return shadowText.toString()
         }
-        return collectTextNodes(target)
+        return collectNonPlaceholderTextNodes(target)
     }
 
     private fun findElementById(node: JSONObject, targetId: String): JSONObject? {
@@ -412,9 +418,28 @@ class BrowserChromeInstrumentedTest {
         return null
     }
 
-    private fun collectTextNodes(node: JSONObject): String {
+    private fun isPlaceholderNode(node: JSONObject): Boolean {
+        if (node.optInt("nodeType", 0) != 1) return false
+        val attrs = node.optJSONArray("attributes") ?: return false
+        var i = 0
+        while (i + 1 < attrs.length()) {
+            val k = attrs.optString(i)
+            val v = attrs.optString(i + 1)
+            if (k.equals("id", ignoreCase = true) && v.equals("placeholder", ignoreCase = true)) {
+                return true
+            }
+            if (k.equals("pseudo", ignoreCase = true) && v.contains("placeholder", ignoreCase = true)) {
+                return true
+            }
+            i += 2
+        }
+        return false
+    }
+
+    private fun collectNonPlaceholderTextNodes(node: JSONObject): String {
         val sb = StringBuilder()
         fun walk(cur: JSONObject) {
+            if (isPlaceholderNode(cur)) return
             val type = cur.optInt("nodeType", 0)
             if (type == 3) {
                 sb.append(cur.optString("nodeValue", ""))

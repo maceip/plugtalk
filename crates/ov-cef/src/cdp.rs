@@ -406,20 +406,38 @@ fn classify_cdp_element(
 }
 
 /// Extract the live value of `<textarea>` or `<input>` from Blink's pierced
-/// User-Agent shadow root (`<div id="inner-editor">`), ignoring `#placeholder`
+/// User-Agent shadow root (`<div id="inner-editor">` or Blink's plain editor
+/// `<div>` inside `#shadow-root (user-agent)`), ignoring `#placeholder`
 /// shadow nodes and falling back to author children / `value` attribute when
-/// no UA `#inner-editor` is present.
+/// no UA shadow root is present.
 pub fn live_form_control_value(node: &CdpNode, tag: &str) -> String {
     for shadow in &node.shadow_roots {
         if let Some(inner_editor) = find_inner_editor(shadow) {
             return collect_inner_editor_text(inner_editor);
         }
     }
+    if !node.shadow_roots.is_empty() {
+        let mut shadow_text = String::new();
+        for shadow in &node.shadow_roots {
+            collect_non_placeholder_shadow_text(shadow, &mut shadow_text);
+        }
+        return shadow_text;
+    }
     if tag == "input" {
         node.attr("value").unwrap_or("").to_string()
     } else {
         collect_cdp_rendered_text(node)
     }
+}
+
+fn is_placeholder_element(node: &CdpNode) -> bool {
+    node.is_element()
+        && (node
+            .attr("id")
+            .is_some_and(|id| id.eq_ignore_ascii_case("placeholder"))
+            || node
+                .attr("pseudo")
+                .is_some_and(|p| p.to_ascii_lowercase().contains("placeholder")))
 }
 
 fn find_inner_editor(node: &CdpNode) -> Option<&CdpNode> {
@@ -431,13 +449,7 @@ fn find_inner_editor(node: &CdpNode) -> Option<&CdpNode> {
             return Some(node);
         }
         // Never descend into Blink's `#placeholder` / `-webkit-input-placeholder`.
-        if node
-            .attr("id")
-            .is_some_and(|id| id.eq_ignore_ascii_case("placeholder"))
-            || node
-                .attr("pseudo")
-                .is_some_and(|p| p.contains("placeholder"))
-        {
+        if is_placeholder_element(node) {
             return None;
         }
     }
@@ -447,6 +459,36 @@ fn find_inner_editor(node: &CdpNode) -> Option<&CdpNode> {
         }
     }
     None
+}
+
+fn collect_non_placeholder_shadow_text(node: &CdpNode, out: &mut String) {
+    if is_placeholder_element(node) {
+        return;
+    }
+    if node.is_text() {
+        out.push_str(&node.node_value);
+        return;
+    }
+    let tag = node.tag_lower();
+    if !tag.is_empty() && is_ignored_subtree(&tag) {
+        return;
+    }
+    let len = node.children.len();
+    for (idx, child) in node.children.iter().enumerate() {
+        if is_placeholder_element(child) {
+            continue;
+        }
+        if child.is_text() {
+            out.push_str(&child.node_value);
+        } else if child.tag_lower() == "br" {
+            let is_trailing_caret_br = idx + 1 == len && (out.is_empty() || out.ends_with('\n'));
+            if !is_trailing_caret_br {
+                out.push('\n');
+            }
+        } else {
+            collect_non_placeholder_shadow_text(child, out);
+        }
+    }
 }
 
 fn collect_inner_editor_text(inner_editor: &CdpNode) -> String {
@@ -771,5 +813,69 @@ mod tests {
         assert_eq!(nodes.len(), 1);
         assert_eq!(nodes[0].kind, "pgp_public_key");
         assert_eq!(nodes[0].action_label, "Insert My PubKey");
+    }
+
+    #[test]
+    fn parses_blink_textarea_ua_shadow_editor_without_inner_editor_id() {
+        let cdp_json = r##"{
+          "root": {
+            "nodeId": 1,
+            "backendNodeId": 1,
+            "nodeType": 9,
+            "nodeName": "#document",
+            "children": [{
+              "nodeId": 7,
+              "backendNodeId": 77,
+              "nodeType": 1,
+              "nodeName": "TEXTAREA",
+              "localName": "textarea",
+              "attributes": ["id", "msg", "placeholder", "Write secret message"],
+              "children": [
+                { "nodeId": 8, "nodeType": 3, "nodeName": "#text", "nodeValue": "Initial stale text" }
+              ],
+              "shadowRoots": [{
+                "nodeId": 9,
+                "nodeType": 11,
+                "nodeName": "#document-fragment",
+                "shadowRootType": "user-agent",
+                "children": [
+                  {
+                    "nodeId": 10,
+                    "nodeType": 1,
+                    "nodeName": "DIV",
+                    "localName": "div",
+                    "attributes": ["pseudo", "-webkit-input-placeholder", "id", "placeholder"],
+                    "children": [
+                      { "nodeId": 11, "nodeType": 3, "nodeName": "#text", "nodeValue": "Write secret message" }
+                    ]
+                  },
+                  {
+                    "nodeId": 12,
+                    "nodeType": 1,
+                    "nodeName": "DIV",
+                    "localName": "div",
+                    "children": [
+                      { "nodeId": 13, "nodeType": 3, "nodeName": "#text", "nodeValue": "-----BEGIN PGP MESSAGE-----" },
+                      { "nodeId": 14, "nodeType": 1, "nodeName": "BR", "localName": "br" },
+                      { "nodeId": 15, "nodeType": 1, "nodeName": "BR", "localName": "br" },
+                      { "nodeId": 16, "nodeType": 3, "nodeName": "#text", "nodeValue": "hQEMAyEAD2G1UN2v==" },
+                      { "nodeId": 17, "nodeType": 1, "nodeName": "BR", "localName": "br" },
+                      { "nodeId": 18, "nodeType": 3, "nodeName": "#text", "nodeValue": "-----END PGP MESSAGE-----" },
+                      { "nodeId": 19, "nodeType": 1, "nodeName": "BR", "localName": "br" }
+                    ]
+                  }
+                ]
+              }]
+            }]
+          }
+        }"##;
+        let nodes = classify_cdp_dom_json(cdp_json).expect("valid CDP JSON");
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].kind, "pgp_message");
+        assert_eq!(nodes[0].action_label, "Decrypt Block");
+        assert!(!nodes[0].text.contains("Write secret message"));
+        assert!(!nodes[0].text.contains("Initial stale text"));
+        assert!(nodes[0].text.starts_with("-----BEGIN PGP MESSAGE-----"));
+        assert!(nodes[0].text.ends_with("-----END PGP MESSAGE-----"));
     }
 }
