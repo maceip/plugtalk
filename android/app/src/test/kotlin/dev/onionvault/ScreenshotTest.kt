@@ -19,6 +19,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
@@ -28,9 +29,15 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.height
+import androidx.compose.ui.unit.width
 import dev.onionvault.ui.BackPreviewState
 import dev.onionvault.ui.BrowserScreen
 import dev.onionvault.ui.BrowserUiState
+import dev.onionvault.ui.ClearnetPromptState
+import dev.onionvault.ui.DUCKDUCKGO_ONION_URL
 import dev.onionvault.ui.EncryptRequestState
 import dev.onionvault.ui.KeyInfo
 import dev.onionvault.ui.NormalizedBounds
@@ -38,7 +45,6 @@ import dev.onionvault.ui.OvCrashScreen
 import dev.onionvault.ui.PgpFieldState
 import dev.onionvault.ui.PgpOverlayState
 import dev.onionvault.ui.PgpPlaintextState
-import dev.onionvault.ui.DUCKDUCKGO_ONION_URL
 import dev.onionvault.ui.TabItemState
 import dev.onionvault.ui.TorBootstrapState
 import dev.onionvault.ui.TrapPreferences
@@ -47,6 +53,7 @@ import dev.onionvault.ui.TrapThemeFamily
 import dev.onionvault.ui.TrapThemeMode
 import dev.onionvault.ui.previews.BrowserChromePreview
 import dev.onionvault.ui.previews.BrowserMenuPreview
+import dev.onionvault.ui.previews.ClearnetConsentPreview
 import dev.onionvault.ui.previews.CrashScreenPreview
 import dev.onionvault.ui.previews.LegalNoticesPreview
 import dev.onionvault.ui.previews.NeonGraffitiKeyringPreview
@@ -60,6 +67,7 @@ import dev.onionvault.ui.previews.TorBootstrapPreview
 import dev.onionvault.ui.previews.TorTaxiPreview
 import dev.onionvault.ui.previews.torTaxiState
 import java.io.File
+import kotlin.math.abs
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -71,7 +79,8 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * Screenshot & interactive Compose UI verification suite for Trap's browser chrome,
+ * Screenshot & interactive Compose UI verification suite for Trap's single-row bottom
+ * browser chrome, minimal start page, clearnet consent interstitial bottom sheet,
  * theme families (`SecureDrop` & `NeonGraffiti` × `Dark` & `Light`), sheets, PGP
  * flows, predictive-back snapshot recovery, and `TrapPreferences` persistence.
  */
@@ -167,29 +176,366 @@ class ScreenshotTest {
         capture("13-recipient-picker") { RecipientPickerPreview() }
     }
 
-    // --- Interactive Compose Controls & Persisted State Verification ---
+    @Test
+    fun clearnet_consent_sheet_is_rendered() {
+        capture("14-clearnet-consent") { ClearnetConsentPreview() }
+    }
+
+    // --- Single-Row Chrome Geometry & Minimal Start Page Verification ---
 
     @Test
-    fun start_page_preserves_blank_address_and_launches_duckduckgo_onion() {
+    fun single_row_bottom_chrome_and_minimal_start_page_enforce_geometry_and_zero_top_bar() {
         var navigatedUrl = ""
+        var state by mutableStateOf(
+            BrowserUiState(
+                url = "about:blank",
+                tor = TorBootstrapState(percent = 100, stage = "ready", ready = true),
+            ),
+        )
+
         compose.setContent {
             BrowserScreen(
-                state = BrowserUiState(
-                    url = "about:blank",
-                    tor = TorBootstrapState(percent = 100, stage = "ready", ready = true),
-                ),
-                onNavigate = { navigatedUrl = it },
+                state = state,
+                onNavigate = { target ->
+                    navigatedUrl = target
+                    state = state.copy(url = target)
+                },
             )
         }
 
-        // `about:blank` must keep EditableText empty and show the honest .onion placeholder.
-        compose.onNodeWithTag("address_input").assertTextEquals("Enter .onion address", "")
-        compose.onNodeWithTag("nav_back").assertIsNotEnabled()
-        compose.onNodeWithTag("nav_forward").assertIsNotEnabled()
+        // 1. Strictly zero top app bar, zero top address bar, zero transport footer, zero 3-card clutter.
+        compose.onNodeWithTag("top_identity_header").assertDoesNotExist()
+        compose.onNodeWithTag("transport_footer").assertDoesNotExist()
+        compose.onNodeWithTag("top_tor_pill").assertDoesNotExist()
+        compose.onNodeWithTag("top_keyring_button").assertDoesNotExist()
+        compose.onNodeWithTag("start_security_card").assertDoesNotExist()
+        compose.onNodeWithTag("start_ddg_onion_card").assertDoesNotExist()
+        compose.onNodeWithTag("start_open_keyring").assertDoesNotExist()
+        compose.onNodeWithTag("start_open_settings").assertDoesNotExist()
+        compose.onNodeWithText("Launch").assertDoesNotExist()
 
-        compose.onNodeWithTag("start_ddg_onion_card").performClick()
+        // 2. Minimal StartPage renders centered "Trap" + tappable live Tor status.
+        compose.onNodeWithTag("start_page").assertIsDisplayed()
+        compose.onNodeWithText("Trap").assertIsDisplayed()
+        compose.onNodeWithTag("start_tor_status").assertIsDisplayed()
+        compose.onNodeWithText("Tor ready").assertIsDisplayed()
+
+        compose.onNodeWithTag("start_tor_status").performClick()
+        compose.onNodeWithTag("security_circuit_sheet").assertIsDisplayed()
+        compose.onNodeWithTag("sheet_close_button").performClick()
+
+        // 3. Unfocused single-row bottom dock (~56.dp content height, strictly < 90.dp).
+        compose.onNodeWithTag("address_input").assertTextEquals("Enter address", "")
+        compose.onNodeWithTag("nav_back").assertIsNotEnabled()
+        compose.onNodeWithTag("nav_forward").assertDoesNotExist()
+
+        val dockBounds = compose.onNodeWithTag("bottom_control_dock").getUnclippedBoundsInRoot()
+        assertTrue(
+            "Expected single-row bottom_control_dock content height ~56dp (< 90dp), got ${dockBounds.height}",
+            dockBounds.height >= 48.dp && dockBounds.height < 90.dp && dockBounds.height <= 64.dp,
+        )
+
+        val backBounds = compose.onNodeWithTag("nav_back").getUnclippedBoundsInRoot()
+        val capsuleBounds = compose.onNodeWithTag("address_capsule").getUnclippedBoundsInRoot()
+        val tabsBounds = compose.onNodeWithTag("nav_tabs").getUnclippedBoundsInRoot()
+        val menuBounds = compose.onNodeWithTag("nav_menu").getUnclippedBoundsInRoot()
+
+        val backCenterY = (backBounds.top.value + backBounds.bottom.value) / 2f
+        val capsuleCenterY = (capsuleBounds.top.value + capsuleBounds.bottom.value) / 2f
+        val tabsCenterY = (tabsBounds.top.value + tabsBounds.bottom.value) / 2f
+        val menuCenterY = (menuBounds.top.value + menuBounds.bottom.value) / 2f
+        assertTrue(abs(backCenterY - capsuleCenterY) <= 1.5f)
+        assertTrue(abs(tabsCenterY - capsuleCenterY) <= 1.5f)
+        assertTrue(abs(menuCenterY - capsuleCenterY) <= 1.5f)
+
+        // 4. Focusing address input switches to [ Cancel · Wide Address Capsule ] in ONE row (< 90.dp).
+        compose.onNodeWithTag("address_input").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("address_cancel").assertIsDisplayed()
+        compose.onNodeWithTag("nav_back").assertDoesNotExist()
+        compose.onNodeWithTag("nav_tabs").assertDoesNotExist()
+        compose.onNodeWithTag("nav_menu").assertDoesNotExist()
+
+        val focusedDockBounds = compose.onNodeWithTag("bottom_control_dock").getUnclippedBoundsInRoot()
+        val focusedCapsuleBounds = compose.onNodeWithTag("address_capsule").getUnclippedBoundsInRoot()
+        assertTrue(
+            "Focused bottom_control_dock must remain 1 row (< 90dp), got ${focusedDockBounds.height}",
+            focusedDockBounds.height >= 48.dp && focusedDockBounds.height < 90.dp,
+        )
+        assertTrue(
+            "Focused address_capsule must expand across single row (>= 320dp on 411dp phone), got ${focusedCapsuleBounds.width}",
+            focusedCapsuleBounds.width >= 320.dp,
+        )
+
+        compose.onNodeWithTag("address_input").performTextInput("draft.example")
+        compose.onNodeWithTag("address_clear").performClick()
+        compose.onNodeWithTag("address_input").assertTextEquals("Enter address", "")
+
+        compose.onNodeWithTag("address_input").performTextInput("cancel.example")
+        compose.onNodeWithTag("address_cancel").performClick()
+        compose.waitForIdle()
+
+        // Cancel clears focus and restores resting single-row controls.
+        compose.onNodeWithTag("nav_back").assertIsDisplayed()
+        compose.onNodeWithTag("nav_tabs").assertIsDisplayed()
+        compose.onNodeWithTag("nav_menu").assertIsDisplayed()
+        compose.onNodeWithTag("address_input").assertTextEquals("Enter address", "")
+
+        // Navigating via Go clears focus and submits URL.
+        compose.onNodeWithTag("address_input").performTextInput(DUCKDUCKGO_ONION_URL)
+        compose.onNodeWithTag("address_go").performClick()
         assertEquals(DUCKDUCKGO_ONION_URL, navigatedUrl)
     }
+
+    @Test
+    @Config(qualifiers = "w600dp-h891dp-xhdpi")
+    fun wide_viewport_renders_forward_button_in_single_row_bottom_dock() {
+        compose.setContent {
+            BrowserScreen(
+                state = BrowserUiState(
+                    url = DUCKDUCKGO_ONION_URL,
+                    canGoBack = true,
+                    canGoForward = false,
+                    tor = TorBootstrapState(percent = 100, stage = "ready", ready = true),
+                ),
+            )
+        }
+
+        compose.onNodeWithTag("top_identity_header").assertDoesNotExist()
+        compose.onNodeWithTag("nav_back").assertIsDisplayed()
+        compose.onNodeWithTag("nav_forward").assertIsDisplayed().assertIsNotEnabled()
+        compose.onNodeWithTag("nav_reload").assertIsDisplayed()
+
+        val dockHeight = compose.onNodeWithTag("bottom_control_dock").getUnclippedBoundsInRoot().height
+        assertTrue("Expected single-row tablet dock < 90dp, got $dockHeight", dockHeight < 90.dp)
+    }
+
+    // --- Clearnet Consent Interstitial Bottom Sheet E2E Verification ---
+
+    @Test
+    fun clearnet_consent_sheet_allows_for_3_days_supports_glob_editing_and_revokes_rules() {
+        val rawPrefs = compose.activity.getSharedPreferences("test_clearnet_prefs", Context.MODE_PRIVATE)
+        rawPrefs.edit().clear().commit()
+        val prefs = TrapPreferences(rawPrefs)
+        assertFalse("hiddenServiceOnly must default to false", prefs.hiddenServiceOnly)
+
+        val recordedAllows = mutableListOf<Pair<String, Long>>()
+        val recordedBlocks = mutableListOf<String>()
+        var state by mutableStateOf(
+            BrowserUiState(
+                url = "about:blank",
+                hiddenServiceOnly = prefs.hiddenServiceOnly,
+                tor = TorBootstrapState(percent = 100, stage = "ready", ready = true),
+            ),
+        )
+
+        fun matchesSimpleGlob(pattern: String, host: String): Boolean {
+            val p = pattern.lowercase()
+            val h = host.lowercase()
+            if (p.startsWith("*.") && (h == p.removePrefix("*.") || h.endsWith(p.removePrefix("*")))) {
+                return true
+            }
+            val regex = Regex(
+                "^" + Regex.escape(p).replace("\\*", ".*").replace("\\?", ".") + "$",
+            )
+            return regex.matches(h)
+        }
+
+        fun navigateWithClearnetGate(rawInput: String) {
+            val trimmed = rawInput.trim()
+            val normalized = if (trimmed.contains("://")) trimmed else "https://$trimmed"
+            val host = trimmed.removePrefix("https://").removePrefix("http://")
+                .substringBefore('/').lowercase()
+            val allowed = state.clearnetRules.any { matchesSimpleGlob(it.pattern, host) }
+            if (allowed) {
+                state = state.copy(
+                    url = normalized,
+                    title = host,
+                    blocked = false,
+                    status = "",
+                    clearnetPrompt = null,
+                )
+            } else {
+                state = state.copy(
+                    blocked = false,
+                    status = "",
+                    clearnetPrompt = ClearnetPromptState(
+                        host = host,
+                        pendingUrl = normalized,
+                        suggestedPattern = OvNative.suggestGlobForHost(host),
+                    ),
+                )
+            }
+        }
+
+        compose.setContent {
+            BrowserScreen(
+                state = state,
+                onNavigate = { input -> navigateWithClearnetGate(input) },
+                onAllowClearnet = { prompt, pattern, ttlSeconds ->
+                    recordedAllows += pattern to ttlSeconds
+                    val now = System.currentTimeMillis()
+                    val newRule = OvNative.ClearnetRuleItem(
+                        pattern = pattern,
+                        createdAtMs = now,
+                        expiresAtMs = if (ttlSeconds > 0L) now + ttlSeconds * 1_000L else 0L,
+                        sessionOnly = ttlSeconds <= 0L,
+                    )
+                    val updated = state.clearnetRules.filterNot { it.pattern == pattern } + newRule
+                    state = state.copy(clearnetPrompt = null, clearnetRules = updated)
+                    if (prompt.pendingUrl != null) {
+                        navigateWithClearnetGate(prompt.pendingUrl)
+                    }
+                },
+                onBlockClearnet = { prompt ->
+                    recordedBlocks += prompt.host
+                    state = state.copy(clearnetPrompt = null)
+                },
+                onRevokeClearnetRule = { pattern ->
+                    state = state.copy(
+                        clearnetRules = state.clearnetRules.filterNot { it.pattern == pattern },
+                    )
+                },
+                onClearClearnetRules = {
+                    state = state.copy(clearnetRules = emptyList())
+                },
+            )
+        }
+
+        // 1. Navigating to bare clearnet `tor.taxi` opens ClearnetConsentSheet (no red error banner).
+        compose.onNodeWithTag("address_input").performTextInput("tor.taxi")
+        compose.onNodeWithTag("address_go").performClick()
+        compose.waitForIdle()
+
+        compose.onNodeWithTag("status_notice_banner").assertDoesNotExist()
+        compose.onNodeWithTag("clearnet_consent_sheet").assertIsDisplayed()
+        compose.onNodeWithText("Allow clearnet site over Tor?").assertIsDisplayed()
+        compose.onNodeWithText("tor.taxi").assertIsDisplayed()
+        compose.onNodeWithTag("clearnet_pattern_input").assertTextEquals("*.tor.taxi")
+
+        // 2. Scope chips toggle cleanly between Exact host and *.domain.
+        compose.onNodeWithTag("clearnet_scope_exact").performClick()
+        compose.onNodeWithTag("clearnet_pattern_input").assertTextEquals("tor.taxi")
+        compose.onNodeWithTag("clearnet_scope_domain").performClick()
+        compose.onNodeWithTag("clearnet_pattern_input").assertTextEquals("*.tor.taxi")
+
+        // 3. One click on "Allow for 3 days" persists 259,200s rule, dismisses sheet, and navigates to https://tor.taxi!
+        compose.onNodeWithTag("clearnet_allow_3d_button").performClick()
+        compose.waitForIdle()
+
+        assertEquals(listOf("*.tor.taxi" to 259_200L), recordedAllows)
+        compose.onNodeWithTag("clearnet_consent_sheet").assertDoesNotExist()
+        assertEquals("https://tor.taxi", state.url)
+        compose.onNodeWithTag("address_input").assertTextEquals("https://tor.taxi")
+
+        // 4. Custom glob editing + "Allow once" (`ttlSeconds = 0L`) on SOCKS5 subresource prompt (`pendingUrl = null`).
+        state = state.copy(
+            clearnetPrompt = ClearnetPromptState(
+                host = "cdn.assets.net",
+                pendingUrl = null,
+                suggestedPattern = "*.assets.net",
+            ),
+        )
+        compose.waitForIdle()
+        compose.onNodeWithTag("clearnet_consent_sheet").assertIsDisplayed()
+        compose.onNodeWithTag("clearnet_pattern_input").performTextReplacement("*cdn.assets.net")
+        compose.onNodeWithTag("clearnet_allow_once_button").performClick()
+        compose.waitForIdle()
+
+        assertEquals(
+            listOf("*.tor.taxi" to 259_200L, "*cdn.assets.net" to 0L),
+            recordedAllows,
+        )
+
+        // 5. "Block" records session denial without navigating.
+        state = state.copy(
+            clearnetPrompt = ClearnetPromptState(
+                host = "telemetry.example.com",
+                pendingUrl = "https://telemetry.example.com",
+                suggestedPattern = "*.example.com",
+            ),
+        )
+        compose.waitForIdle()
+        compose.onNodeWithTag("clearnet_block_button").performClick()
+        compose.waitForIdle()
+        assertEquals(listOf("telemetry.example.com"), recordedBlocks)
+        assertEquals("https://tor.taxi", state.url)
+
+        // 6. SecurityCircuitSheet displays active rules ("3d left" & "Session"), Revoke removes rule, Clear all empties list.
+        compose.onNodeWithTag("address_security_button").performClick()
+        compose.onNodeWithTag("security_circuit_sheet").assertIsDisplayed()
+        compose.onNodeWithText("*.tor.taxi").assertIsDisplayed()
+        compose.onNodeWithText("3d left").assertIsDisplayed()
+        compose.onNodeWithText("*cdn.assets.net").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Session").assertIsDisplayed()
+
+        compose.onNodeWithTag("clearnet_revoke_*.tor.taxi").performScrollTo().performClick()
+        compose.waitForIdle()
+        assertEquals(listOf("*cdn.assets.net"), state.clearnetRules.map { it.pattern })
+        compose.onNodeWithText("*.tor.taxi").assertDoesNotExist()
+
+        compose.onNodeWithTag("clearnet_clear_all_button").performScrollTo().performClick()
+        compose.waitForIdle()
+        assertTrue(state.clearnetRules.isEmpty())
+    }
+
+    @Test
+    fun ov_native_clearnet_json_parsers_and_glob_suggestions_match_contract() {
+        assertEquals("*.tor.taxi", OvNative.suggestGlobForHost("tor.taxi"))
+        assertEquals("*.tor.taxi", OvNative.suggestGlobForHost("www.tor.taxi"))
+        assertEquals("*.tor.taxi", OvNative.suggestGlobForHost("sub.tor.taxi"))
+        assertEquals("1.1.1.1", OvNative.suggestGlobForHost("1.1.1.1"))
+
+        val consentPolicy = OvNative.parseUrlPolicy(
+            """
+            {
+              "allowed": false,
+              "normalizedUrl": "https://tor.taxi",
+              "isOnion": false,
+              "requiresClearnetConsent": true,
+              "host": "tor.taxi",
+              "suggestedPattern": "*.tor.taxi",
+              "reason": "Clearnet site requires user consent"
+            }
+            """.trimIndent(),
+        )
+        assertFalse(consentPolicy.allowed)
+        assertTrue(consentPolicy.requiresClearnetConsent)
+        assertEquals("https://tor.taxi", consentPolicy.normalizedUrl)
+        assertEquals("tor.taxi", consentPolicy.host)
+        assertEquals("*.tor.taxi", consentPolicy.suggestedPattern)
+
+        val torStatus = OvNative.parseTorStatus(
+            """
+            {
+              "bootstrapped": true,
+              "bootstrapPercent": 100,
+              "bootstrapSummary": "ready",
+              "socksAddr": "127.0.0.1:41952",
+              "hiddenServiceOnly": false,
+              "pendingClearnetHost": "cdn.tor.taxi"
+            }
+            """.trimIndent(),
+        )
+        assertTrue(torStatus.bootstrapped)
+        assertFalse(torStatus.hiddenServiceOnly)
+        assertEquals("cdn.tor.taxi", torStatus.pendingClearnetHost)
+
+        val rules = OvNative.parseClearnetRules(
+            """
+            [
+              {"pattern":"*.tor.taxi","createdAtMs":1700000000000,"expiresAtMs":1700259200000,"sessionOnly":false},
+              {"pattern":"exact.example.org","createdAtMs":1700000000000,"expiresAtMs":0,"sessionOnly":true}
+            ]
+            """.trimIndent(),
+        )
+        assertEquals(2, rules.size)
+        assertEquals("*.tor.taxi", rules[0].pattern)
+        assertFalse(rules[0].sessionOnly)
+        assertTrue(rules[1].sessionOnly)
+    }
+
+    // --- Interactive Compose Controls & Persisted State Verification ---
 
     @Test
     fun settings_sheet_persists_theme_family_mode_and_zoom_to_shared_preferences() {
@@ -240,13 +586,16 @@ class ScreenshotTest {
     }
 
     @Test
-    fun tor_pill_opens_security_sheet_and_wires_policy_and_identity_reset() {
+    fun tor_shield_and_menu_wire_security_navigation_and_identity_reset() {
         var hiddenOnly = true
         var resetCount = 0
+        var reloadCount = 0
+        var forwardCount = 0
         var uiState by mutableStateOf(
             BrowserUiState(
                 url = DUCKDUCKGO_ONION_URL,
                 title = "DuckDuckGo",
+                canGoForward = true,
                 hiddenServiceOnly = true,
                 tor = TorBootstrapState(
                     percent = 100,
@@ -262,6 +611,8 @@ class ScreenshotTest {
         compose.setContent {
             BrowserScreen(
                 state = uiState,
+                onReload = { reloadCount += 1 },
+                onForward = { forwardCount += 1 },
                 onToggleRouting = { enabled ->
                     hiddenOnly = enabled
                     uiState = uiState.copy(hiddenServiceOnly = enabled)
@@ -272,17 +623,28 @@ class ScreenshotTest {
             )
         }
 
-        compose.onNodeWithTag("top_tor_pill").performClick()
+        compose.onNodeWithTag("address_security_button").performClick()
         compose.onNodeWithTag("security_circuit_sheet").assertIsDisplayed()
         compose.onNode(
             hasText("iso-duckduckgogg42xj") and hasAnyAncestor(hasTestTag("security_circuit_sheet")),
         ).assertIsDisplayed()
 
-        compose.onNodeWithTag("security_hidden_service_switch").performClick()
+        compose.onNodeWithTag("security_hidden_service_switch").performScrollTo().performClick()
         assertFalse(hiddenOnly)
 
-        compose.onNodeWithTag("security_reset_identity").performClick()
+        compose.onNodeWithTag("security_reset_identity").performScrollTo().performClick()
         assertEquals(1, resetCount)
+        compose.onNodeWithTag("sheet_close_button").performClick()
+
+        // Inline reload icon inside capsule when unfocused on non-start page.
+        compose.onNodeWithTag("nav_reload").performClick()
+        assertEquals(1, reloadCount)
+
+        // BrowserMenuSheet provides 1-tap Forward, Reload, New Tab, Keyring, Tor & Clearnet Rules, Settings.
+        compose.onNodeWithTag("nav_menu").performClick()
+        compose.onNodeWithTag("browser_menu_sheet").assertIsDisplayed()
+        compose.onNodeWithTag("menu_forward").performClick()
+        assertEquals(1, forwardCount)
     }
 
     @Test
@@ -295,7 +657,7 @@ class ScreenshotTest {
             BrowserScreen(
                 state = BrowserUiState(
                     tabs = listOf(
-                        TabItemState(id = "tab-1", title = "Trap Start", url = "about:blank", isActive = true),
+                        TabItemState(id = "tab-1", title = "Trap", url = "about:blank", isActive = true),
                         TabItemState(id = "tab-2", title = "DuckDuckGo", url = DUCKDUCKGO_ONION_URL, isActive = false, isOnion = true),
                     ),
                     activeTabId = "tab-1",
@@ -436,8 +798,9 @@ class ScreenshotTest {
         assertEquals("Verified reply from newsroom", insertedPlaintext)
         compose.onNodeWithTag("plaintext_close").performClick()
 
-        // 3. KeyringSheet custom User ID + passphrase key generation
-        compose.onNodeWithTag("top_keyring_button").performClick()
+        // 3. KeyringSheet accessed cleanly via Menu -> PGP Keyring
+        compose.onNodeWithTag("nav_menu").performClick()
+        compose.onNodeWithTag("menu_keyring").performScrollTo().performClick()
         compose.onNodeWithTag("keyring_sheet").assertIsDisplayed()
         compose.onNodeWithText("Generate").performClick()
         compose.onNodeWithTag("keygen_userid_input").performTextInput("Journalist <j@onion>")
@@ -584,16 +947,27 @@ class ScreenshotTest {
         val dialog = org.robolectric.shadows.ShadowDialog.getLatestDialog()
         if (dialog != null && dialog.isShowing) {
             val decor = dialog.window?.decorView
-            if (decor != null && decor.width > 0 && decor.height > 0) {
-                val overlay = Bitmap.createBitmap(decor.width, decor.height, Bitmap.Config.ARGB_8888)
-                decor.draw(Canvas(overlay))
-                val attributes = dialog.window?.attributes
-                canvas.drawBitmap(
-                    overlay,
-                    (attributes?.x ?: 0).toFloat(),
-                    (attributes?.y ?: 0).toFloat(),
-                    null,
-                )
+            if (decor != null) {
+                if (decor.width <= 0 || decor.height <= 0) {
+                    val w = view.width.coerceAtLeast(1)
+                    val h = view.height.coerceAtLeast(1)
+                    decor.measure(
+                        android.view.View.MeasureSpec.makeMeasureSpec(w, android.view.View.MeasureSpec.AT_MOST),
+                        android.view.View.MeasureSpec.makeMeasureSpec(h, android.view.View.MeasureSpec.AT_MOST),
+                    )
+                    decor.layout(0, 0, decor.measuredWidth, decor.measuredHeight)
+                }
+                if (decor.width > 0 && decor.height > 0) {
+                    val overlay = Bitmap.createBitmap(decor.width, decor.height, Bitmap.Config.ARGB_8888)
+                    decor.draw(Canvas(overlay))
+                    val attributes = dialog.window?.attributes
+                    canvas.drawBitmap(
+                        overlay,
+                        (attributes?.x ?: 0).toFloat(),
+                        (attributes?.y ?: 0).toFloat(),
+                        null,
+                    )
+                }
             }
         }
 
