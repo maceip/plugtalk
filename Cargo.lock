@@ -2860,6 +2860,7 @@ dependencies = [
  "rand_core 0.6.4",
  "rusqlite",
  "sequoia-openpgp",
+ "serde",
  "thiserror 2.0.21",
 ]
 

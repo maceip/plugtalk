@@ -86,6 +86,9 @@ ov-tor = { path = "crates/ov-tor" }
 log = { workspace = true }
 anyhow = { workspace = true }
 
+[profile.dev.package.sha2]
+opt-level = 2
+
 [profile.release]
 opt-level = "z"
 lto = true
