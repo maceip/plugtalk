@@ -295,50 +295,44 @@ async function startMockLimrunServer(toolsDir, mode) {
       }
 
       if (type === 'getElementTree') {
-        const headerTitle =
-          mode === 'premature_onion_still_loading' ? 'about:blank' : 'DuckDuckGo';
+        const navActionDesc =
+          mode === 'premature_onion_still_loading' ? 'Stop loading' : 'Reload';
         const xml =
           mode === 'crash_on_launch'
             ? '<hierarchy><node package="com.android.launcher3" text="Home" /></hierarchy>'
             : state.navigatedOnion
               ? '<hierarchy>' +
-                `<node package="dev.onionvault" text="${headerTitle}" />` +
+                '<node package="dev.onionvault" content-desc="Back" />' +
+                '<node package="dev.onionvault" content-desc="Tor security status" />' +
                 '<node package="dev.onionvault" text="https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/" />' +
-                '<node package="dev.onionvault" text="Tor ready" />' +
-                '<node package="dev.onionvault" text="iso-duckduckgogg42xj" />' +
+                `<node package="dev.onionvault" content-desc="${navActionDesc}" />` +
+                '<node package="dev.onionvault" text="Go" content-desc="Go" />' +
                 '</hierarchy>'
               : '<hierarchy>' +
-                '<node package="dev.onionvault" text="Trap Start" />' +
-                '<node package="dev.onionvault" text="about:blank · zero-JS" />' +
-                '<node package="dev.onionvault" text="DuckDuckGo (.onion v3)" />' +
+                '<node package="dev.onionvault" text="Trap" />' +
                 '<node package="dev.onionvault" text="Tor ready" />' +
+                '<node package="dev.onionvault" content-desc="Tor security status" />' +
+                '<node package="dev.onionvault" text="Enter address" />' +
+                '<node package="dev.onionvault" text="Go" content-desc="Go" />' +
                 '</hierarchy>';
 
         const nodes = state.navigatedOnion
           ? [
-              { packageName: 'dev.onionvault', text: headerTitle },
+              { packageName: 'dev.onionvault', contentDesc: 'Back' },
+              { packageName: 'dev.onionvault', contentDesc: 'Tor security status' },
               {
                 packageName: 'dev.onionvault',
                 text: 'https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/',
               },
-              { packageName: 'dev.onionvault', text: 'Tor ready' },
-              { packageName: 'dev.onionvault', text: 'iso-duckduckgogg42xj' },
+              { packageName: 'dev.onionvault', contentDesc: navActionDesc },
+              { packageName: 'dev.onionvault', text: 'Go', contentDesc: 'Go' },
             ]
           : [
-              { packageName: 'dev.onionvault', text: 'Trap Start' },
-              {
-                packageName: 'dev.onionvault',
-                text: 'DuckDuckGo (.onion v3)',
-                parsedBounds: {
-                  left: 40,
-                  top: 300,
-                  right: 680,
-                  bottom: 420,
-                  centerX: 360,
-                  centerY: 360,
-                },
-              },
+              { packageName: 'dev.onionvault', text: 'Trap' },
               { packageName: 'dev.onionvault', text: 'Tor ready' },
+              { packageName: 'dev.onionvault', contentDesc: 'Tor security status' },
+              { packageName: 'dev.onionvault', text: 'Enter address' },
+              { packageName: 'dev.onionvault', text: 'Go', contentDesc: 'Go' },
             ];
 
         ws.send(
@@ -569,9 +563,8 @@ async function runTests() {
       assert.equal(summary.readiness.engineReady, true);
       assert.equal(summary.readiness.socksEndpoint, '127.0.0.1:41955');
       assert.equal(summary.readiness.torBootstrapped, true);
-      assert.equal(summary.onionSmoke.triggerMethod, 'ui-tap-start-card');
+      assert.equal(summary.onionSmoke.triggerMethod, 'am-start-action-view');
       assert.equal(summary.onionSmoke.isolationCreatedInLogcat, true);
-      assert.equal(summary.onionSmoke.isolationVisibleInUi, true);
       assert.equal(summary.onionSmoke.onionHostVisibleInUi, true);
       assert.equal(summary.onionSmoke.pageLoadedInLogcat, true);
       assert.equal(summary.onionSmoke.mainFrameHttpStatus, 200);
@@ -657,8 +650,8 @@ async function runTests() {
         `Expected missing OnLoadEnd failure in summary.failures: ${JSON.stringify(summary.failures)}`,
       );
       assert.ok(
-        summary.failures.some((f) => /stale 'about:blank' title/.test(f)),
-        `Expected stale about:blank title failure in summary.failures: ${JSON.stringify(summary.failures)}`,
+        summary.failures.some((f) => /loading \/ stale 'about:blank' state/.test(f)),
+        `Expected unfinished loading / stale about:blank failure in summary.failures: ${JSON.stringify(summary.failures)}`,
       );
       console.log('  PASS: Unrendered .onion still-loading state failed closed and deleted instance');
     } finally {

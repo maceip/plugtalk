@@ -211,6 +211,16 @@ function hasStaleAboutBlankTitle(tree) {
   return /\btext="about:blank"/i.test(tree?.xml || '');
 }
 
+function isStillLoadingInUi(tree) {
+  if (
+    Array.isArray(tree?.nodes) &&
+    tree.nodes.some((n) => String(n.contentDesc || '').trim() === 'Stop loading')
+  ) {
+    return true;
+  }
+  return /\bcontent-desc="Stop loading"/i.test(tree?.xml || '');
+}
+
 function extractLatestMainFrameHttpStatus(logBuffer, targetUrl) {
   if (!logBuffer) return null;
   const loadIdx = logBuffer.lastIndexOf(`loadUrl: ${targetUrl}`);
@@ -622,6 +632,11 @@ async function main() {
       if (!hasPackageNode && !summary.unexpectedExit) {
         summary.failures.push(`UIAutomator hierarchy does not show ${PACKAGE} in foreground after launch`);
       }
+      if (/Trap Start|about:blank\s*·\s*zero-JS|DuckDuckGo \(\.onion v3\)/i.test(startTree.xml || '')) {
+        summary.failures.push(
+          'Legacy top header or multi-card StartPage clutter detected instead of 1-row bottom chrome',
+        );
+      }
     } else {
       summary.failures.push('Failed to inspect UIAutomator element tree after launch');
     }
@@ -721,8 +736,14 @@ async function main() {
           if (!allText.includes('about:blank · zero-JS') && allText.includes(ONION_EXPECTED_HOST)) {
             summary.onionSmoke.onionHostVisibleInUi = true;
           }
-          if (summary.onionSmoke.onionHostVisibleInUi && !hasStaleAboutBlankTitle(finalTree)) {
+          if (
+            summary.onionSmoke.onionHostVisibleInUi &&
+            !hasStaleAboutBlankTitle(finalTree) &&
+            !isStillLoadingInUi(finalTree)
+          ) {
             summary.onionSmoke.onionTitleRenderedInUi = true;
+          } else {
+            summary.onionSmoke.onionTitleRenderedInUi = false;
           }
           if (/Navigation failed/i.test(allText)) {
             const elapsedSec = (Date.now() - onionStarted) / 1000;
@@ -789,7 +810,7 @@ async function main() {
       }
       if (!summary.onionSmoke.onionTitleRenderedInUi) {
         summary.failures.push(
-          `Browser header remained on stale 'about:blank' title instead of rendering ${ONION_EXPECTED_HOST}`,
+          `Browser UI remained in loading / stale 'about:blank' state instead of finishing render for ${ONION_EXPECTED_HOST}`,
         );
       }
 
