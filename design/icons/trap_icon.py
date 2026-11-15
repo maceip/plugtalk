@@ -26,6 +26,7 @@ import argparse
 import base64
 import io
 import math
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -288,6 +289,46 @@ def unexpected_files(expected: set[Path]) -> list[Path]:
     return found
 
 
+_SVG_PNG_RE = re.compile(r"data:image/png;base64,([A-Za-z0-9+/=]+)")
+
+
+def _png_pixels_equal(actual: bytes, expected: bytes) -> bool:
+    if actual == expected:
+        return True
+    with Image.open(io.BytesIO(actual)) as im_cur, Image.open(io.BytesIO(expected)) as im_exp:
+        rgba_cur = im_cur.convert("RGBA")
+        rgba_exp = im_exp.convert("RGBA")
+        return rgba_cur.size == rgba_exp.size and rgba_cur.tobytes() == rgba_exp.tobytes()
+
+
+def _asset_matches(current: Path, expected_data: bytes) -> bool:
+    """Compare rendered icon assets across platforms with differing zlib PNG encoders."""
+    if not current.exists():
+        return False
+    current_bytes = current.read_bytes()
+    if current_bytes == expected_data:
+        return True
+    suffix = current.suffix.lower()
+    if suffix == ".png":
+        return _png_pixels_equal(current_bytes, expected_data)
+    if suffix == ".svg":
+        cur_text = current_bytes.decode("utf-8", errors="strict")
+        exp_text = expected_data.decode("utf-8", errors="strict")
+        m_cur = _SVG_PNG_RE.search(cur_text)
+        m_exp = _SVG_PNG_RE.search(exp_text)
+        if not m_cur or not m_exp:
+            return False
+        cur_skeleton = _SVG_PNG_RE.sub("data:image/png;base64,<PNG>", cur_text, count=1)
+        exp_skeleton = _SVG_PNG_RE.sub("data:image/png;base64,<PNG>", exp_text, count=1)
+        if cur_skeleton != exp_skeleton:
+            return False
+        return _png_pixels_equal(
+            base64.b64decode(m_cur.group(1)),
+            base64.b64decode(m_exp.group(1)),
+        )
+    return False
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -315,7 +356,7 @@ def main(argv: list[str]) -> int:
                 )
                 if relative.parts[0] == "res":
                     expected_res.add(current)
-                if not current.exists() or current.read_bytes() != data:
+                if not _asset_matches(current, data):
                     stale.append(str(current.relative_to(ROOT)))
             for path in stale_files():
                 if path.exists():
