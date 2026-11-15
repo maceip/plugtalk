@@ -113,13 +113,13 @@ android {
 
     sourceSets {
         getByName("main") {
-            java.srcDirs("src/main/kotlin")
+            kotlin.directories.add("src/main/kotlin")
         }
         getByName("test") {
-            java.srcDirs("src/test/kotlin")
+            kotlin.directories.add("src/test/kotlin")
         }
         getByName("androidTest") {
-            java.srcDirs("src/androidTest/kotlin")
+            kotlin.directories.add("src/androidTest/kotlin")
         }
     }
 
@@ -132,7 +132,7 @@ android {
  * Build `libonion_vault.so` with `cargo-ndk` for Android ABIs (`arm64-v8a` and `x86_64` by default).
  * Override via `ONIONVAULT_ANDROID_ABIS=arm64-v8a` when iterating locally on a single-ABI device.
  */
-val cargoBuild by tasks.registering(Exec::class) {
+val cargoBuild = tasks.register<Exec>("cargoBuild") {
     group = "build"
     description = "Builds Trap's Rust library (libonion_vault.so) with cargo-ndk."
 
@@ -166,7 +166,7 @@ val cargoBuild by tasks.registering(Exec::class) {
  * Bundle license texts (`GPL-3.0.txt`, `LGPL-2.1.txt`, `LGPL-3.0.txt`) into APK assets
  * so the in-app Open-Source Licences sheet always displays verbatim legal texts offline.
  */
-val copyLegalNotices by tasks.registering(Copy::class) {
+val copyLegalNotices = tasks.register<Copy>("copyLegalNotices") {
     group = "build"
     description = "Copies license documents into APK assets."
 
