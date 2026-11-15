@@ -264,6 +264,19 @@ def render(target: Path) -> dict[Path, bytes]:
     return files
 
 
+def _png_matches(current: Path, expected_data: bytes) -> bool:
+    """Compare decoded RGBA pixels so zlib vs zlib-ng IDAT streams do not cause false drift."""
+    if not current.exists():
+        return False
+    current_bytes = current.read_bytes()
+    if current_bytes == expected_data:
+        return True
+    with Image.open(io.BytesIO(current_bytes)) as im_cur, Image.open(io.BytesIO(expected_data)) as im_exp:
+        rgba_cur = im_cur.convert("RGBA")
+        rgba_exp = im_exp.convert("RGBA")
+        return rgba_cur.size == rgba_exp.size and rgba_cur.tobytes() == rgba_exp.tobytes()
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -282,7 +295,7 @@ def main(argv: list[str]) -> int:
             stale: list[str] = []
             for path, data in sorted(files.items()):
                 current = RES / path.name
-                if not current.exists() or current.read_bytes() != data:
+                if not _png_matches(current, data):
                     stale.append(str(current.relative_to(ROOT)))
             if stale:
                 print("the neon assets drifted:", file=sys.stderr)

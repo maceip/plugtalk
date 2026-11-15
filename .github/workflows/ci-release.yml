@@ -62,7 +62,8 @@ jobs:
             cmake \
             ninja-build \
             libclang-dev \
-            python3-pil
+            python3-pil \
+            python3-numpy
 
       - name: Install the Rust toolchain
         run: |
