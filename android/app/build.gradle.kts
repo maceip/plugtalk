@@ -125,12 +125,13 @@ android {
         testImplementation("androidx.test:core:1.6.1")
         testImplementation("androidx.compose.ui:ui-test-junit4")
 
-        // On-device / emulator instrumentation tests
+        // On-device / emulator instrumentation tests (espresso-core 3.7.0+ supports Android 16+ InputManagerGlobal)
         androidTestImplementation("androidx.compose.ui:ui-test-junit4")
-        androidTestImplementation("androidx.test.ext:junit:1.2.1")
-        androidTestImplementation("androidx.test:runner:1.6.2")
+        androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
+        androidTestImplementation("androidx.test.ext:junit:1.3.0")
+        androidTestImplementation("androidx.test:runner:1.7.0")
         androidTestImplementation("androidx.test:rules:1.6.1")
-        androidTestImplementation("androidx.test:core:1.6.1")
+        androidTestImplementation("androidx.test:core:1.7.0")
     }
 
     compileOptions {
