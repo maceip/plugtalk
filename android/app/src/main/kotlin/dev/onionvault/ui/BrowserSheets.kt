@@ -38,6 +38,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
@@ -64,6 +65,7 @@ fun ClearnetConsentSheet(
     modifier: Modifier = Modifier,
 ) {
     val colors = TrapTheme.colors
+    val focusManager = LocalFocusManager.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     val exactHost = remember(prompt.host) {
@@ -191,6 +193,7 @@ fun ClearnetConsentSheet(
                         enabled = canAllow,
                         role = Role.Button,
                         onClick = {
+                            focusManager.clearFocus()
                             onAllow(prompt, cleanPattern, OvNative.DEFAULT_CLEARNET_TTL_SECONDS)
                         },
                     )
@@ -214,7 +217,10 @@ fun ClearnetConsentSheet(
                 OvSecondaryButton(
                     text = "Allow once",
                     enabled = canAllow,
-                    onClick = { onAllow(prompt, cleanPattern, 0L) },
+                    onClick = {
+                        focusManager.clearFocus()
+                        onAllow(prompt, cleanPattern, 0L)
+                    },
                     modifier = Modifier
                         .weight(1f)
                         .height(42.dp)
@@ -223,7 +229,10 @@ fun ClearnetConsentSheet(
                 OvSecondaryButton(
                     text = "Block",
                     accent = colors.danger,
-                    onClick = { onBlock(prompt) },
+                    onClick = {
+                        focusManager.clearFocus()
+                        onBlock(prompt)
+                    },
                     modifier = Modifier
                         .weight(1f)
                         .height(42.dp)

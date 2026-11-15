@@ -202,10 +202,19 @@ class BrowserChromeInstrumentedTest {
                 composeRule.onNodeWithTag("clearnet_allow_3d_button").performClick()
                 composeRule.waitUntil(timeoutMillis = 10_000L) {
                     OvNative.parseClearnetRules(OvNative.nativeListClearnetRulesJson())
-                        .any { it.pattern == "*example.org" }
+                        .any { it.pattern == "*example.org" } &&
+                        composeRule.onAllNodesWithTag("clearnet_consent_sheet")
+                            .fetchSemanticsNodes()
+                            .isEmpty()
                 }
+                composeRule.waitForIdle()
 
                 composeRule.onNodeWithTag("address_security_button").performClick()
+                composeRule.waitUntil(timeoutMillis = 5_000L) {
+                    composeRule.onAllNodesWithTag("security_circuit_sheet")
+                        .fetchSemanticsNodes()
+                        .isNotEmpty()
+                }
                 composeRule.onNodeWithTag("security_circuit_sheet").assertIsDisplayed()
                 composeRule.onNodeWithTag("clearnet_revoke_*example.org")
                     .performScrollTo()

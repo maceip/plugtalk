@@ -439,12 +439,22 @@ private fun BrowserScreenContent(
         }
 
         // Modal Sheets & Dialogs
-        state.clearnetPrompt?.let { prompt ->
-            ClearnetConsentSheet(
-                prompt = prompt,
-                onAllow = onAllowClearnet,
-                onBlock = onBlockClearnet,
-            )
+        val managementSheetOpen = menuOpen ||
+            tabsOpen ||
+            securityOpen ||
+            settingsOpen ||
+            keysOpen ||
+            legalOpen ||
+            legalDocument != null
+
+        if (!managementSheetOpen) {
+            state.clearnetPrompt?.let { prompt ->
+                ClearnetConsentSheet(
+                    prompt = prompt,
+                    onAllow = onAllowClearnet,
+                    onBlock = onBlockClearnet,
+                )
+            }
         }
 
         if (menuOpen) {
