@@ -2,16 +2,8 @@
 //!
 //! Trap does not use JavaScript, so DOM scan reports, field metadata, and
 //! cryptographic requests are represented by pure Rust/JSON data structures
-//! defined in this module.  When the optional `cef-runtime` feature is
-//! enabled, helpers for `CefProcessMessage` transport are also compiled.
+//! defined in this module.
 
-#[cfg(feature = "cef-runtime")]
-use cef::{
-    process_message_create, CefString, Frame, ImplFrame, ImplListValue, ImplProcessMessage,
-    ProcessId, ProcessMessage,
-};
-#[cfg(feature = "cef-runtime")]
-use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 /// The render process reports the fields it found.
@@ -246,83 +238,4 @@ pub struct NavigationInfo {
     pub title: String,
     /// `true` when the navigation was blocked by the leak prevention rules.
     pub blocked: bool,
-}
-
-/// Send a JSON payload to the browser process.
-#[cfg(feature = "cef-runtime")]
-pub fn send_json<T: Serialize>(frame: &Frame, name: &str, payload: &T) -> bool {
-    let text = match serde_json::to_string(payload) {
-        Ok(text) => text,
-        Err(err) => {
-            log::error!("cannot serialize the payload of {name}: {err}");
-            return false;
-        }
-    };
-    send_text(frame, name, &text)
-}
-
-/// Send a JSON payload to the render process.
-#[cfg(feature = "cef-runtime")]
-pub fn send_json_to_renderer<T: Serialize>(frame: &Frame, name: &str, payload: &T) -> bool {
-    let text = match serde_json::to_string(payload) {
-        Ok(text) => text,
-        Err(err) => {
-            log::error!("cannot serialize the payload of {name}: {err}");
-            return false;
-        }
-    };
-    send_text_to(frame, name, &text, ProcessId::RENDERER)
-}
-
-/// Send a plain text payload to the browser process.
-#[cfg(feature = "cef-runtime")]
-pub fn send_text(frame: &Frame, name: &str, text: &str) -> bool {
-    send_text_to(frame, name, text, ProcessId::BROWSER)
-}
-
-/// Send a plain text payload to the given process.
-#[cfg(feature = "cef-runtime")]
-pub fn send_text_to(frame: &Frame, name: &str, text: &str, target: ProcessId) -> bool {
-    let Some(mut message) = process_message_create(Some(&CefString::from(name))) else {
-        log::error!("cannot create the process message {name}");
-        return false;
-    };
-    let Some(list) = message.argument_list() else {
-        log::error!("the process message {name} has no argument list");
-        return false;
-    };
-    list.set_size(1);
-    list.set_string(0, Some(&CefString::from(text)));
-    frame.send_process_message(target, Some(&mut message));
-    true
-}
-
-/// Read a JSON payload from a process message.
-#[cfg(feature = "cef-runtime")]
-pub fn read_json<T: DeserializeOwned>(message: &mut ProcessMessage) -> Option<T> {
-    let text = read_text(message)?;
-    match serde_json::from_str(&text) {
-        Ok(value) => Some(value),
-        Err(err) => {
-            log::error!("cannot deserialize the process message: {err}");
-            None
-        }
-    }
-}
-
-/// Read the first argument of a process message as text.
-#[cfg(feature = "cef-runtime")]
-pub fn read_text(message: &mut ProcessMessage) -> Option<String> {
-    let list = message.argument_list()?;
-    if list.size() == 0 {
-        return None;
-    }
-    let value = list.string(0);
-    Some(crate::dom_pgp::userfree_to_string(&value))
-}
-
-/// The name of a process message.
-#[cfg(feature = "cef-runtime")]
-pub fn message_name(message: &mut ProcessMessage) -> String {
-    crate::dom_pgp::userfree_to_string(&message.name())
 }

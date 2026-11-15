@@ -10,9 +10,9 @@ description = "JNI entry point, Android event bridge and NDK surface renderer fo
 ov-cef = { workspace = true }
 ov-tor = { workspace = true }
 ov-pgp = { workspace = true }
-cef = { workspace = true }
 anyhow = { workspace = true }
 log = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 sequoia-openpgp = { workspace = true }
 thiserror = { workspace = true }
