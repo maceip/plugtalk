@@ -11,16 +11,18 @@
 
 ## Downloads & Attestations
 
-Every push to `main` that passes Rust tests, multi-ABI (`arm64-v8a` + `x86_64`) Android packaging/DEX/ELF audits, and the live Android 15 emulator runtime gate publishes an attested [Latest GitHub Release](https://github.com/maceip/trap/releases/latest):
+Every push to `main` runs Rust workspace checks, multi-ABI (`arm64-v8a` + `x86_64`) APK packaging/ARMv9-MTE/16KB-ELF/DEX/certificate audits (`scripts/audit-apk.sh`), the live Android 15 emulator runtime gate (`scripts/emulator-gate.sh`), and the fail-closed **Limrun cloud Android 15 device gate** (`limrun-device-gate`: `scripts/limrun-gate.sh` / `scripts/limrun-gate.mjs`) before publishing an attested [Latest GitHub Release](https://github.com/maceip/trap/releases/latest):
 
 | Artifact | Direct Download | Description |
 |---|---|---|
-| **Android Debug APK** | [`app-debug.apk`](https://github.com/maceip/trap/releases/latest/download/app-debug.apk) | Universal debug APK (`arm64-v8a` + `x86_64`) bundling Cefrium `0.19.0` + `libonion_vault.so` |
+| **Android Debug APK** | [`app-debug.apk`](https://github.com/maceip/trap/releases/latest/download/app-debug.apk) | Universal debug APK (`arm64-v8a` + `x86_64`) bundling Cefrium `0.19.0` + `libonion_vault.so` (pinned v2 debug cert for `adb install -r` upgrades) |
 | **CycloneDX 1.5 SBOM** | [`app-debug.sbom.cdx.json`](https://github.com/maceip/trap/releases/latest/download/app-debug.sbom.cdx.json) | Complete Cargo + Maven/Android (`debugRuntimeClasspath`) + native `.so` SHA-256 inventory |
 | **SPDX 2.3 SBOM** | [`app-debug.sbom.spdx.json`](https://github.com/maceip/trap/releases/latest/download/app-debug.sbom.spdx.json) | Sigstore-attested SPDX 2.3 JSON inventory for `app-debug.apk` |
-| **SHA-256 Checksums** | [`SHA256SUMS.txt`](https://github.com/maceip/trap/releases/latest/download/SHA256SUMS.txt) | SHA-256 digests of the APK, SBOMs, emulator screenshot, and bundled license files |
+| **SHA-256 Checksums** | [`SHA256SUMS.txt`](https://github.com/maceip/trap/releases/latest/download/SHA256SUMS.txt) | SHA-256 digests of all published release artifacts |
 | **Emulator Gate Capture** | [`emulator-launch.png`](https://github.com/maceip/trap/releases/latest/download/emulator-launch.png) | Live Android 15 runtime screenshot captured during `scripts/emulator-gate.sh` |
 | **Bundled License Texts** | [`LGPL-3.0.txt`](https://github.com/maceip/trap/releases/latest/download/LGPL-3.0.txt) · [`GPL-3.0.txt`](https://github.com/maceip/trap/releases/latest/download/GPL-3.0.txt) · [`LGPL-2.1.txt`](https://github.com/maceip/trap/releases/latest/download/LGPL-2.1.txt) | Verbatim third-party license texts also embedded offline inside `assets/licenses/` |
+
+> **Limrun Cloud Android 15 Gate (`LIM_API_KEY`)**: `limrun-device-gate` runs `node scripts/test-limrun-gate.mjs` on every push and then provisions a fresh Limrun cloud Android 15 phone (`@limrun/api@0.73.2` + `lim@0.57.3`) via repository secret `LIM_API_KEY` (from `https://console.limrun.com/settings`) to verify cold launch, isolated child processes, Arti SOCKS5 bootstrap, and live DuckDuckGo v3 `.onion` navigation (`limrun-launch.png`, `limrun-onion.png`, `limrun-summary.json`). If `LIM_API_KEY` is unset or any check fails, `limrun-device-gate` fails closed and skips `release`, keeping the previously verified release as `latest`.
 
 Verify the downloaded APK checksum, SLSA build provenance attestation, and SPDX 2.3 SBOM attestation with the [GitHub CLI](https://cli.github.com/):
 
@@ -51,10 +53,13 @@ trap/
 ├── licenses/                   Bundled LGPL-3.0, GPL-3.0, and LGPL-2.1 texts copied into `assets/licenses/` by Gradle (`copyLegalNotices`)
 ├── scripts/
 │   ├── bump-version.py         Monotonic `VERSION`, `Cargo.toml`, `Cargo.lock`, and Gradle `versionCode` bumper
-│   ├── audit-apk.sh            Pre-release APK multi-ABI ELF, DEX class-table, `.pak`, and `aapt2` packaging gate
+│   ├── audit-apk.sh            Pre-release APK ARMv9 `memtagMode="off"`, 16KB ELF `PT_LOAD`, DEX, `.pak` & v2 cert gate
 │   ├── generate-sbom.py        Real Cargo + Gradle + APK binary CycloneDX 1.5 & SPDX 2.3 SBOM generator
-│   └── emulator-gate.sh        Automated Android emulator launch, Cefrium + `ov_tor` SOCKS5 & crash/linkage gate
-└── android/                    Gradle Android application (`com.cefrium:cefrium-sdk:0.19.0`, Jetpack Compose)
+│   ├── emulator-gate.sh        Automated Android emulator launch, Cefrium + `ov_tor` SOCKS5 & crash/linkage gate
+│   ├── limrun-gate.sh          Fail-closed Limrun CLI/SDK bootstrap & cloud Android 15 runtime gate wrapper
+│   ├── limrun-gate.mjs         Limrun WebSocket/ADB/UI driver (`syncApp`, `launchApp`, Arti SOCKS5 & `.onion` smoke gate)
+│   └── test-limrun-gate.mjs    Self-contained local WebSocket mock server E2E test suite for `limrun-gate.mjs`
+└── android/                    Gradle Android application (`com.cefrium:cefrium-sdk:0.19.0`, Jetpack Compose, pinned `app/debug.keystore`)
     └── app/src/main/kotlin/dev/onionvault/
         ├── TrapApplication.kt          Process-isolated Cefrium initialization & fail-closed incognito profile
         ├── MainActivity.kt             Compose host binding Arti, Sequoia/BiometricPrompt, Cefrium & preferences
@@ -73,7 +78,8 @@ trap/
 | **100% Zero JavaScript** | Every `CefriumBrowser` tab enforces `setJavaScriptEnabled(false)` **and** Chrome DevTools Protocol `Emulation.setScriptExecutionDisabled({"value": true})`. `TabSessionManager` additionally cancels `TYPE_SCRIPT` subresource requests at the network layer. Neither websites nor Trap ever evaluate JavaScript. |
 | **Fail-Closed Tor Routing (Zero Clearnet Leaks)** | `TrapApplication` boots an ephemeral in-memory `CefriumProfile.incognito()` pinned to a blackhole loopback proxy (`socks5://127.0.0.1:1`), `--host-resolver-rules="MAP * ~NOTFOUND , EXCLUDE 127.0.0.1"`, `--disable-webrtc` (`WEBRTC_DISABLE_NON_PROXIED_UDP`), `--disable-quic`, `--disable-features=NetworkPrediction,DnsOverHttps,AsyncDns`, and `--no-pings` until Arti binds `127.0.0.1:<port>`. Non-`about:blank` navigations wait fail-closed until Arti's SOCKS5 listener is live. |
 | **Dual-Layer `.onion` Policy & Stream Isolation** | When **Hidden Service Only** (default `true`) is enabled, both `TabSessionManager` (`OvNative.nativeCheckUrlPolicy`) and Arti's Rust SOCKS5 proxy reject every non-v3-`.onion` host, `TYPE_PING`, and `TYPE_CSP_REPORT`. Each v3 `.onion` destination receives an isolated Tor circuit derived from its 16-character base32 `.onion` apex (`iso-<apex16>`), resettable on demand via **New Identity / Reset Tor Isolation**. |
-| **Android Child-Process Isolation** | Chromium spawns isolated `:sandboxed_process*` and `:privileged_process*` services from the APK. `TrapApplication.isBrowserProcess()` restricts `CrashReporter`, `libonion_vault.so`, Arti, and Keystore access strictly to the primary browser process. |
+| **Android Child-Process & GPU Isolation** | Chromium spawns isolated `:sandboxed_process*` renderer and `:privileged_process*` GPU (`Cefrium.setGpuProcessEnabled(true)`) services from the APK rather than running GPU work inside the browser process. `TrapApplication.isBrowserProcess()` restricts `CrashReporter`, `libonion_vault.so`, Arti, and Keystore access strictly to the primary browser process. |
+| **ARMv9 `FEAT_MTE` & 16KB Page-Size Hardening** | `<application android:memtagMode="off">` prevents Zygote from locking Bionic heap tagging on ARMv9 devices (including GrapheneOS seccomp-locked `PR_SET_TAGGED_ADDR_CTRL`), while `TrapApplication.appendDisabledFeature(cmd, "PartitionAllocMemoryTagging")` disables Chromium's `PartitionAlloc` MTE reconfiguration across all processes. `scripts/audit-apk.sh` enforces `memtagMode="off"`, `16 KB` ELF `PT_LOAD` alignment (`p_align >= 0x4000`), and the deterministic v2 debug signing certificate (`android/app/debug.keystore`). |
 | **Hardware-Backed OpenPGP Secret Keys** | Transferable secret keys are encrypted with a 256-bit AES-GCM master wrapping key inside `AndroidKeyStore` (`onionvault.master.wrap.v1`, or `onionvault.master.wrap.biometric.v1` gated by `BiometricPrompt` with `BIOMETRIC_STRONG or DEVICE_CREDENTIAL`) before storage in SQLite (`android:allowBackup="false"`). Toggling biometric protection atomically rewraps stored secret keys. |
 | **Native-Only Plaintext Display & Hardened Selection** | Decrypted PGP messages render exclusively in native Compose (`PlaintextSheet`), preventing CSS/DOM exfiltration side channels; plaintext is written into a page control only on explicit **Insert into page** confirmation. `TabSessionManager` wraps Chromium's `ActionMode.Callback` to strip external `WEB_SEARCH`, `SHARE`, and `ACTION_PROCESS_TEXT` intents while offering in-app PGP Encrypt/Decrypt/Import actions. |
 
@@ -123,9 +129,11 @@ cargo ndk -t arm64-v8a -t x86_64 --platform 29 -o android/app/src/main/jniLibs b
 # 4. Run JVM / Robolectric Compose UI, screenshot, JNI parity, and crash-guard tests
 ./android/gradlew --project-dir android :app:testDebugUnitTest
 
-# 5. Run on-device / emulator instrumentation tests & runtime stability gate
+# 5. Run on-device / emulator instrumentation tests & runtime stability gates
 ./android/gradlew --project-dir android :app:connectedDebugAndroidTest
 ./scripts/emulator-gate.sh android/app/build/outputs/apk/debug/app-debug.apk
+node scripts/test-limrun-gate.mjs
+LIM_API_KEY="$LIM_API_KEY" ./scripts/limrun-gate.sh android/app/build/outputs/apk/debug/app-debug.apk dist/limrun
 ```
 
 ## Empirical Verification Status
@@ -136,10 +144,11 @@ Every item below reflects commands executed and verified against this codebase:
 |---|---|---|
 | **Rust Formatting & Lint** (`ov-core`, `ov-cef`, `ov-pgp`, `ov-tor`) | `cargo fmt --all -- --check` & `cargo clippy --workspace --all-targets -- -D warnings` | **PASS** (`0` warnings) |
 | **Rust Crypto, Tor SOCKS5/Isolation & CDP DOM Suite** | `cargo test --workspace` | **PASS** (`62` passed, `0` failed, `2` live-Tor `#[ignore]`) |
-| **Android Native NDK Build & ELF Audit** (`arm64-v8a`, `x86_64`) | `cargo ndk -t arm64-v8a -t x86_64 --platform 29 build` + `llvm-readobj` / `llvm-nm` | **PASS** (19/19 `Java_dev_onionvault_OvNative_*` symbols exported; zero `libcef.so` `DT_NEEDED`) |
-| **Compose Previews, 13 Visual Captures & Interactive Chrome Tests** | `./android/gradlew --project-dir android :app:testDebugUnitTest` (`OnionVaultPreviewsTest`, `ScreenshotTest`, `CrashGuardTest`, `OvNativeTest`) | **PASS** (`36` passed, `0` failed; 13 PNG screenshots rendered across `SecureDrop` & `NeonGraffiti` Dark/Light) |
-| **On-Device Instrumentation E2E (`connectedDebugAndroidTest`)** | `BrowserChromeInstrumentedTest` on `emulator-5554` (Android 15 `arm64-v8a`) | **PASS** (`2` passed, `0` failed in `6.6s`: Chrome settings/security/tabs/Keystore keyring E2E + live `CefriumBrowser` zero-JS CDP DOM PGP `Insert My PubKey`, `Encrypt Field` UA shadow read-back verification, and `Decrypt Block` -> `PlaintextSheet` signature verification) |
-| **Emulator Runtime Gate & Live `.onion` Circuit Isolation** | `./scripts/emulator-gate.sh app-debug.apk` + live v3 `.onion` navigation on `emulator-5554` | **PASS** (`TrapApplication` initialized Cefrium `0.19.0`, held 12s with zero Java/native crashes or ANRs, bootstrapped embedded `ov_tor` Arti client, and loaded `duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion` over isolated circuit `iso-duckduckgogg42xj` with zero-JS CDP DOM field anchoring) |
+| **Android Native NDK Build, ARMv9 MTE & 16KB ELF Audit** (`arm64-v8a`, `x86_64`) | `./scripts/audit-apk.sh app-debug.apk` + QEMU `virt,mte=on` 4-process `FEAT_MTE` harness | **PASS** (5/5 APK audit checks: `memtagMode="off"`, `PT_LOAD >= 0x4000`, 19/19 JNI exports, zero `libcef.so` `DT_NEEDED`, pinned v2 cert; `fail=0` across `browser`, `renderer`, `gpu-process`, `zygote` under ARMv9 TBI/locked-TBI/Async/Sync MTE) |
+| **Compose Previews, 13 Visual Captures & Crash-Guard Unit Tests** | `./android/gradlew --project-dir android :app:testDebugUnitTest` (`OnionVaultPreviewsTest`, `ScreenshotTest`, `CrashGuardTest`, `OvNativeTest`) | **PASS** (`38` passed, `0` failed; 13 PNG screenshots rendered across `SecureDrop` & `NeonGraffiti` Dark/Light) |
+| **On-Device Instrumentation E2E (`connectedDebugAndroidTest`)** | `BrowserChromeInstrumentedTest` on `arm64-v8a` (`PAGESIZE=16384` `pixel16k_hvf` & API 35) | **PASS** (`2` passed, `0` failed: Chrome settings/security/tabs/Keystore keyring E2E + live `CefriumBrowser` zero-JS CDP DOM PGP `Insert My PubKey`, `Encrypt Field` UA shadow read-back verification, and `Decrypt Block` -> `PlaintextSheet` signature verification) |
+| **Emulator Runtime Gate & Isolated GPU / `.onion` Circuit Verification** | `./scripts/emulator-gate.sh app-debug.apk` across `pixel16k_hvf` (`16 KB`), `xtool-api36` (`4 KB`), and `codex_cosmo_api35` (`4 KB`) | **PASS** (Cold launch + `adb install -r` upgrade, isolated `:privileged_process0` GPU + `:sandboxed_process0` renderer, embedded `ov_tor` SOCKS5 ready, zero MTE/GPU/native crashes) |
+| **Limrun Cloud Android Gate Protocol Self-Test** | `node scripts/test-limrun-gate.mjs` (`@limrun/api@0.73.2`, `lim@0.57.3`) | **PASS** (`4` passed, `0` failed: happy-path `.onion` smoke gate, `SIGTRAP`/MTE crash rejection, clearnet leak rejection, and missing `LIM_API_KEY` fail-closed guard) |
 
 ## License
 
