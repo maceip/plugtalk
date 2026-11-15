@@ -10,11 +10,13 @@
 //! application process.  On other platforms (unit tests, desktop builds) an
 //! equivalent software key is used.
 
+use std::path::Path;
+
 use aes_gcm::{
     aead::{Aead, AeadCore, KeyInit},
     Aes256Gcm, Key, Nonce,
 };
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use rand_core::OsRng;
 
 /// Version byte of the wrapping format.
@@ -45,6 +47,16 @@ fn split_blob(blob: &[u8]) -> Result<(&[u8], &[u8])> {
     Ok((&blob[1..1 + NONCE_LEN], &blob[1 + NONCE_LEN..]))
 }
 
+/// Scrub sensitive byte slices using volatile writes so the compiler cannot
+/// elide zeroization before deallocation.
+pub fn zeroize_slice(buf: &mut [u8]) {
+    for byte in buf.iter_mut() {
+        // SAFETY: `byte` is a valid, aligned mutable reference to an initialized `u8`.
+        unsafe { std::ptr::write_volatile(byte, 0) };
+    }
+    std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+}
+
 /// A software master key, used on platforms without an Android Keystore.
 pub struct SoftwareMasterKey {
     key: [u8; KEY_LEN],
@@ -56,6 +68,30 @@ impl SoftwareMasterKey {
         let mut key = [0u8; KEY_LEN];
         getrandom::fill(&mut key).map_err(|e| anyhow!("the system CSPRNG failed: {e}"))?;
         Ok(Self { key })
+    }
+
+    /// Load an existing 32-byte software master key from `path`, or generate
+    /// and atomically persist one with owner-only permissions (`0600` on Unix).
+    pub fn open_or_create(path: &Path) -> Result<Self> {
+        if path.exists() {
+            let mut bytes = std::fs::read(path)
+                .with_context(|| format!("cannot read master key {}", path.display()))?;
+            let result = Self::from_bytes(&bytes);
+            zeroize_slice(&mut bytes);
+            return result;
+        }
+
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("cannot create {}", parent.display()))?;
+        }
+
+        let generated = Self::generate()?;
+        let tmp_path = path.with_extension("key.tmp");
+        write_private_file(&tmp_path, &generated.key)?;
+        std::fs::rename(&tmp_path, path)
+            .with_context(|| format!("cannot persist master key {}", path.display()))?;
+        Ok(generated)
     }
 
     /// Import a master key from raw bytes.
@@ -72,11 +108,35 @@ impl SoftwareMasterKey {
     }
 }
 
+fn write_private_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .mode(0o600)
+            .open(path)
+            .with_context(|| format!("cannot create {}", path.display()))?;
+        file.write_all(bytes)
+            .with_context(|| format!("cannot write {}", path.display()))?;
+        file.sync_all()
+            .with_context(|| format!("cannot sync {}", path.display()))?;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, bytes).with_context(|| format!("cannot write {}", path.display()))?;
+        Ok(())
+    }
+}
+
 impl Drop for SoftwareMasterKey {
     fn drop(&mut self) {
-        // Best effort scrubbing of the key material.
-        let mut key = self.key;
-        key.fill(0);
+        zeroize_slice(&mut self.key);
     }
 }
 
@@ -136,5 +196,20 @@ mod tests {
         let b = SoftwareMasterKey::generate().unwrap();
         let blob = a.wrap(b"secret").unwrap();
         assert!(b.unwrap(&blob).is_err());
+    }
+
+    #[test]
+    fn open_or_create_persists_across_reloads() {
+        let dir = std::env::temp_dir().join(format!("ov-mk-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let key_path = dir.join("pgp").join("master.key");
+
+        let first = SoftwareMasterKey::open_or_create(&key_path).unwrap();
+        let blob = first.wrap(b"persisted secret").unwrap();
+
+        let second = SoftwareMasterKey::open_or_create(&key_path).unwrap();
+        assert_eq!(second.unwrap(&blob).unwrap(), b"persisted secret");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -1,45 +1,38 @@
-//! The shared state of the browser engine.
+//! Shared runtime state of the Trap native engine.
 
-use std::sync::Arc;
+use std::{
+    path::PathBuf,
+    sync::{atomic::Ordering, Arc},
+};
 
-use cef::Browser;
-use ov_cef::{BrowserSlot, OvConfig, SnapshotCollector};
+use ov_cef::{OvConfig, SnapshotCollector};
 use ov_pgp::Keyring;
 use ov_tor::TorService;
 
 use crate::surface::SurfaceRenderer;
 
-/// Everything that the JNI layer, the CEF handlers and the Tor client share.
+/// Shared engine state coordinated across JNI entry points and background tasks.
 pub struct EngineState {
-    /// The browser, once CEF created it.
-    pub slot: Arc<BrowserSlot>,
-    /// The OpenPGP key manager.
+    /// Root application private files directory.
+    pub data_dir: PathBuf,
+    /// Root application cache directory.
+    pub cache_dir: PathBuf,
+    /// Hardware-wrapped Sequoia OpenPGP key manager.
     pub keyring: Arc<Keyring>,
-    /// The embedded Tor client.
+    /// Embedded Arti Tor service + loopback SOCKS5 listener + isolation registry.
     pub tor: Arc<TorService>,
-    /// The renderer that copies the frames into the Android surface.
+    /// Viewport tracker.
     pub surface: Arc<SurfaceRenderer>,
-    /// The configuration of the CEF engine.
+    /// URL/leak policy configuration.
     pub config: Arc<OvConfig>,
-    /// The field actions that the native UI requested.
+    /// Pending DOM actions map.
     pub pending: ov_cef::PendingActions,
-    /// The collector of the page snapshots.
-    ///
-    /// The snapshots are the state of the pages that were visited: the
-    /// native UI shows them in the preview of the predictive back gesture.
+    /// Bounded snapshot collector.
     pub snapshots: Arc<SnapshotCollector>,
 }
 
 impl EngineState {
-    /// The browser, if CEF created it already.
-    pub fn browser(&self) -> Option<Browser> {
-        self.slot.get()
-    }
-
-    /// The fingerprints of the certificates that own a secret key.
-    ///
-    /// These are the "own" keys of the user: messages are encrypted for
-    /// them and their public key is published when the user asks for it.
+    /// Fingerprints of certificates in the keyring that possess a wrapped secret key.
     pub fn own_fingerprints(&self) -> Vec<sequoia_openpgp::Fingerprint> {
         match self.keyring.certificates() {
             Ok(certificates) => certificates
@@ -52,5 +45,18 @@ impl EngineState {
                 Vec::new()
             }
         }
+    }
+
+    /// Update `hidden_service_only` across both the SOCKS5 listener and URL policy.
+    pub fn set_hidden_service_only(&self, enabled: bool) {
+        self.tor.set_hidden_service_only(enabled);
+        self.config
+            .hidden_service_only
+            .store(enabled, Ordering::Release);
+    }
+
+    /// Current `hidden_service_only` enforcement state.
+    pub fn hidden_service_only(&self) -> bool {
+        self.tor.hidden_service_only()
     }
 }

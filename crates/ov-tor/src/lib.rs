@@ -2,16 +2,10 @@
 //!
 //! The crate owns a complete Arti client inside the application process:
 //!
-//!   * the client bootstraps against the Tor network using the application
-//!     sandbox for its state and cache,
-//!   * a SOCKS5 listener on `127.0.0.1:<ephemeral>` exposes the client to the
-//!     CEF network stack (Chromium is pointed at it with `--proxy-server`),
-//!   * every `.onion` apex domain is placed on its own circuit.
-//!
-//! Nothing is shelled out to an external `tor` process: the transport lives
-//! in the same address space as the browser, which keeps the traffic inside
-//! the app sandbox and lets the leak-prevention rules (no DNS outside the
-//! tunnel) be enforced by Chromium's host resolver rules.
+//!   * bootstraps against the Tor network using the application sandbox for
+//!     state and cache,
+//!   * exposes a loopback SOCKS5 listener on `127.0.0.1:<ephemeral>`,
+//!   * places every v3 `.onion` service on its own isolated circuit group.
 
 pub mod bootstrap;
 pub mod config;
@@ -22,23 +16,41 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::Context;
 use arti_client::TorClient;
-use tokio::sync::broadcast;
+use tokio::{
+    sync::{broadcast, watch},
+    task::JoinHandle,
+};
 use tor_rtcompat::PreferredRuntime;
 
 pub use bootstrap::{BootstrapMonitor, BootstrapProgress};
 pub use config::TorConfig;
-pub use isolation::IsolationRegistry;
+pub use isolation::{apex_domain, extract_host, is_valid_v3_onion_host, IsolationRegistry};
 pub use socks5::{Socks5Decision, Socks5Error, Socks5Request, Socks5Server};
 
 /// Number of buffered bootstrap events.
 const EVENT_BUFFER: usize = 32;
 
-/// Install the cryptography provider of rustls.
-///
-/// rustls does not carry a cryptography provider itself: the provider has to
-/// be installed once per process, before the first TLS connection is made.
-/// The Arti client panics without it, so every entry point of this crate
-/// calls this function first.  It is safe to call it more than once.
+/// Complete telemetry snapshot serialized by `OvNative.nativeTorStatusJson`.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TorStatusSnapshot {
+    /// `true` once Arti reports `ready_for_traffic()`.
+    pub bootstrapped: bool,
+    /// Bootstrap completion percentage (`0..=100`).
+    pub bootstrap_percent: u8,
+    /// Live human-readable Arti bootstrap stage or blockage summary.
+    pub bootstrap_summary: String,
+    /// Loopback SOCKS5 `host:port` endpoint (`127.0.0.1:<port>`).
+    pub socks_addr: String,
+    /// `true` when clearnet connections are refused at the SOCKS5 listener.
+    pub hidden_service_only: bool,
+    /// Circuit isolation token for `current_url` (`"iso-<16char_apex>"` or `""`).
+    pub isolation_token: String,
+    /// Number of currently allocated isolated `.onion` circuit groups.
+    pub isolated_group_count: usize,
+}
+
+/// Install the `ring` cryptography provider of `rustls` (idempotent).
 pub fn install_crypto_provider() {
     use std::sync::Once;
     static ONCE: Once = Once::new();
@@ -59,23 +71,19 @@ pub struct TorService {
     isolation: Arc<IsolationRegistry>,
     socks: Arc<Socks5Server>,
     events: broadcast::Sender<BootstrapProgress>,
+    shutdown_tx: watch::Sender<bool>,
+    bootstrap_task: JoinHandle<()>,
+    monitor_task: JoinHandle<()>,
     config: TorConfig,
 }
 
 impl TorService {
-    /// Bootstrap the client and start the SOCKS5 listener.
-    ///
-    /// The returned service owns the listener; the chosen ephemeral port is
-    /// available through [`TorService::socks_endpoint`].
+    /// Bootstrap the client in the background and start the loopback SOCKS5 listener.
     pub async fn start(config: TorConfig) -> anyhow::Result<Arc<Self>> {
         install_crypto_provider();
         config.validate()?;
 
         let tor_config = config.build_tor_config()?;
-
-        // `PreferredRuntime` is Arti's tokio backed runtime; it is selected
-        // explicitly so that the runtime type is part of this crate's API
-        // surface instead of an implicit default.
         let runtime =
             tor_rtcompat::PreferredRuntime::current().context("cannot obtain the Tor runtime")?;
         let client = TorClient::with_runtime(runtime)
@@ -86,23 +94,29 @@ impl TorService {
             .context("cannot create the Arti Tor client")?;
 
         let (events, _) = broadcast::channel(EVENT_BUFFER);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let monitor = BootstrapMonitor::new(client.clone(), events.clone());
 
-        // Bootstrapping runs in the background: the UI shows the readiness bar
-        // while the user is already able to type an address.
-        {
+        let bootstrap_task = {
             let client = client.clone();
+            let mut stop_rx = shutdown_rx.clone();
             tokio::spawn(async move {
-                if let Err(err) = client.bootstrap().await {
-                    log::error!("Tor bootstrap failed: {err}");
-                    return;
+                tokio::select! {
+                    _ = stop_rx.changed() => {}
+                    res = client.bootstrap() => {
+                        match res {
+                            Ok(()) => log::info!("Tor client bootstrapped"),
+                            Err(err) => log::error!("Tor bootstrap failed: {err}"),
+                        }
+                    }
                 }
-                log::info!("Tor client bootstrapped");
-            });
-        }
+            })
+        };
 
-        tokio::spawn(async move {
-            monitor.run(Duration::from_millis(500)).await;
+        let monitor_task = tokio::spawn(async move {
+            monitor
+                .run_until_shutdown(Duration::from_millis(500), shutdown_rx)
+                .await;
         });
 
         let isolation = Arc::new(IsolationRegistry::new(
@@ -125,61 +139,103 @@ impl TorService {
             isolation,
             socks,
             events,
+            shutdown_tx,
+            bootstrap_task,
+            monitor_task,
             config,
         }))
     }
 
-    /// The address of the SOCKS5 listener, including the ephemeral port.
+    /// Loopback `127.0.0.1:<port>` address of the SOCKS5 listener.
     pub fn socks_endpoint(&self) -> SocketAddr {
         self.socks.local_addr()
     }
 
-    /// Change the traffic policy of the SOCKS5 listener.
-    ///
-    /// `false` refuses every clearnet destination: only hidden services can
-    /// be reached.  The change does not restart the Tor client.
+    /// Change whether clearnet destinations are permitted (`false` = hidden-service-only).
     pub fn set_allow_clearnet(&self, allow: bool) {
         self.socks.set_allow_clearnet(allow);
     }
 
-    /// The `socks5://` proxy URL that Chromium has to be pointed at.
+    /// Enable or disable strict hidden-service-only mode at runtime.
+    pub fn set_hidden_service_only(&self, enabled: bool) {
+        self.socks.set_allow_clearnet(!enabled);
+    }
+
+    /// `true` when clearnet traffic is blocked at the SOCKS5 listener.
+    pub fn hidden_service_only(&self) -> bool {
+        !self.socks.allow_clearnet()
+    }
+
+    /// `socks5://127.0.0.1:<port>` URL for Chromium's proxy configuration.
     pub fn proxy_url(&self) -> String {
         format!("socks5://{}", self.socks_endpoint())
     }
 
-    /// Subscribe to the bootstrap progress events.
+    /// Subscribe to live bootstrap progress updates.
     pub fn subscribe(&self) -> broadcast::Receiver<BootstrapProgress> {
         self.events.subscribe()
     }
 
-    /// The current bootstrap progress.
+    /// Current live bootstrap progress.
     pub fn bootstrap_progress(&self) -> BootstrapProgress {
         BootstrapMonitor::new(self.client.clone(), self.events.clone()).current()
     }
 
-    /// `true` when the client can carry traffic.
+    /// Snapshot of all live Tor, SOCKS5, and circuit-isolation telemetry for `current_url`.
+    pub fn status_snapshot(&self, current_url: &str) -> TorStatusSnapshot {
+        let progress = self.bootstrap_progress();
+        TorStatusSnapshot {
+            bootstrapped: progress.ready,
+            bootstrap_percent: progress.percent,
+            bootstrap_summary: progress.stage,
+            socks_addr: self.socks_endpoint().to_string(),
+            hidden_service_only: self.hidden_service_only(),
+            isolation_token: self.isolation.isolation_token_for_url(current_url),
+            isolated_group_count: self.isolation.group_count_sync(),
+        }
+    }
+
+    /// Evict circuit isolation group(s) (`""` resets all `.onion` circuits).
+    pub fn reset_isolation(&self, target_url_or_empty: &str) -> usize {
+        self.isolation.reset_isolation(target_url_or_empty)
+    }
+
+    /// `true` when Arti reports `ready_for_traffic()`.
     pub fn is_ready(&self) -> bool {
         self.client.bootstrap_status().ready_for_traffic()
     }
 
-    /// The main (non isolated) Arti client.
+    /// Main unisolated Arti client.
     pub fn client(&self) -> Arc<TorClient<PreferredRuntime>> {
         self.client.clone()
     }
 
-    /// The circuit isolation registry.
+    /// Circuit isolation registry.
     pub fn isolation(&self) -> Arc<IsolationRegistry> {
         self.isolation.clone()
     }
 
-    /// The configuration this service was started with.
+    /// Configuration this service was started with.
     pub fn config(&self) -> &TorConfig {
         &self.config
     }
 
-    /// Stop the listener.
+    /// Stop the SOCKS5 listener, clear isolated circuit handles, and cancel background tasks.
     pub fn shutdown(&self) {
+        let _ = self.shutdown_tx.send(true);
         self.socks.shutdown();
+        self.bootstrap_task.abort();
+        self.monitor_task.abort();
+        let _ = self.isolation.reset_isolation("");
+    }
+}
+
+impl Drop for TorService {
+    fn drop(&mut self) {
+        let _ = self.shutdown_tx.send(true);
+        self.socks.shutdown();
+        self.bootstrap_task.abort();
+        self.monitor_task.abort();
     }
 }
 

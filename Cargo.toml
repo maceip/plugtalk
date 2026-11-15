@@ -10,7 +10,6 @@ build = "build.rs"
 
 [workspace]
 members = [
-    "crates/cefpack",
     "crates/ov-core",
     "crates/ov-cef",
     "crates/ov-pgp",
@@ -39,11 +38,6 @@ ov-tor = { path = "crates/ov-tor" }
 
 # Android
 jni = "0.21"
-ndk = { version = "0.9", features = ["nativewindow", "api-level-29"] }
-ndk-sys = "0.6"
-# The C library of the platform: the native guard against the crashes needs
-# the signal handling of it.
-libc = "0.2"
 
 # Tor
 arti-client = { version = "0.47", default-features = false, features = [
@@ -60,11 +54,8 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 
 # PGP
 sequoia-openpgp = { version = "1.22", default-features = false, features = [
-    # The RustCrypto backend is pure Rust: it needs no OpenSSL, which keeps
-    # the cross compilation for the Android NDK simple.
     "crypto-rust",
     "allow-experimental-crypto",
-    # The RustCrypto backend does not provide constant time operations.
     "allow-variable-time-crypto",
 ] }
 rusqlite = { version = "0.37", features = ["bundled"] }
@@ -75,18 +66,6 @@ base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hex = "0.4"
-
-# CEF
-cef = { version = "156.4.0", default-features = false, features = ["resources"] }
-
-[patch.crates-io]
-# Upstream cef-rs has no `aarch64-linux-android` support: it ships per-target
-# bindings for desktop triples only and its build script downloads a desktop
-# CEF distribution.  `third_party/` holds the patched crates (Android binding
-# alias + an Android-aware build script) that make the OSR pipeline buildable
-# for the NDK target.
-cef = { path = "third_party/cef" }
-cef-dll-sys = { path = "third_party/cef-dll-sys" }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = { workspace = true }
@@ -103,6 +82,9 @@ ov-pgp = { path = "crates/ov-pgp" }
 ov-tor = { path = "crates/ov-tor" }
 log = { workspace = true }
 anyhow = { workspace = true }
+
+[profile.dev.package.sha2]
+opt-level = 2
 
 [profile.release]
 opt-level = "z"
