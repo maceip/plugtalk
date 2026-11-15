@@ -55,6 +55,7 @@ class TabSessionManager(
     ) -> Unit = { _, _, _ -> },
     private val onUrlBlocked: (tabId: String, blockedUrl: String, reason: String) -> Unit = { _, _, _ -> },
     private val onSecurityNotice: (String) -> Unit = {},
+    private val onNavigationRecovered: (tabId: String) -> Unit = {},
 ) {
 
     data class TabState(
@@ -92,6 +93,7 @@ class TabSessionManager(
         var state: TabState,
         var latestDomHtml: String = "",
         var overrideDisplayUrl: String? = null,
+        var hadErrorInCurrentLoad: Boolean = false,
     )
 
     private inner class TouchGateFrameLayout(
@@ -683,6 +685,7 @@ class TabSessionManager(
                     return
                 }
                 mainHandler.post {
+                    sessions[tabId]?.hadErrorInCurrentLoad = true
                     updateTabState(tabId) {
                         it.copy(isLoading = false, loadProgress = 100)
                     }
@@ -743,6 +746,9 @@ class TabSessionManager(
                 canGoForward: Boolean,
             ) {
                 mainHandler.post {
+                    if (isLoading) {
+                        sessions[tabId]?.hadErrorInCurrentLoad = false
+                    }
                     updateTabState(tabId) {
                         it.copy(
                             isLoading = isLoading,
@@ -753,6 +759,13 @@ class TabSessionManager(
                     }
                     if (!isLoading) {
                         val currentUrl = sessions[tabId]?.overrideDisplayUrl ?: browser.url.orEmpty()
+                        if (sessions[tabId]?.hadErrorInCurrentLoad == false &&
+                            currentUrl.isNotBlank() &&
+                            currentUrl != "about:blank" &&
+                            !currentUrl.startsWith("chrome-error://")
+                        ) {
+                            onNavigationRecovered(tabId)
+                        }
                         cdpController.attachAndScan(tabId, browser, currentUrl)
                         if (currentUrl.isNotBlank() && currentUrl != "about:blank") {
                             mainHandler.postDelayed({

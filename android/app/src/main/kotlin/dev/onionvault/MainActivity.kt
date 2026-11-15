@@ -427,6 +427,13 @@ class MainActivity : FragmentActivity() {
                 onSecurityNotice = { notice ->
                     showStatus(notice, blocked = false)
                 },
+                onNavigationRecovered = { tabId ->
+                    if (tabId == tabSessionManager.activeTabId.value &&
+                        uiState.status.startsWith("Navigation failed")
+                    ) {
+                        uiState = uiState.copy(status = "", blocked = false)
+                    }
+                },
             )
             controllersReady = true
             startControllerStateSync()
