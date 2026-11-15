@@ -41,6 +41,19 @@ static LAST_INIT_ERROR: OnceLock<Mutex<String>> = OnceLock::new();
 /// Shared multi-threaded Tokio runtime hosting Arti and its SOCKS5 listener.
 static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
+/// Fallback in-memory clearnet consent allowlist used when policy functions are
+/// invoked prior to `init_engine`.
+static PRE_INIT_CLEARNET: OnceLock<Arc<ov_tor::ClearnetAllowlist>> = OnceLock::new();
+
+fn active_clearnet() -> Arc<ov_tor::ClearnetAllowlist> {
+    match engine() {
+        Some(state) => state.tor.clearnet().clone(),
+        None => PRE_INIT_CLEARNET
+            .get_or_init(|| Arc::new(ov_tor::ClearnetAllowlist::in_memory()))
+            .clone(),
+    }
+}
+
 fn engine_slot() -> &'static Mutex<Option<Arc<EngineState>>> {
     ENGINE.get_or_init(|| Mutex::new(None))
 }
@@ -165,6 +178,7 @@ impl Engine {
             state_dir: arti_state_dir,
             cache_dir: arti_cache_dir,
             allow_clearnet: !hidden_service_only,
+            clearnet_allowlist_path: Some(data_dir.join(ov_tor::CLEARNET_ALLOWLIST_FILENAME)),
             ..Default::default()
         };
         let tor = block_on_runtime(ov_tor::TorService::start(tor_config))
@@ -321,13 +335,14 @@ pub fn tor_status_json(current_url: &str) -> String {
             bootstrap_percent: 0,
             bootstrap_summary: last_init_error_or("Engine not initialized"),
             socks_addr: String::new(),
-            hidden_service_only: true,
+            hidden_service_only: false,
             isolation_token: String::new(),
             isolated_group_count: 0,
+            pending_clearnet_host: String::new(),
         },
     };
     serde_json::to_string(&snapshot).unwrap_or_else(|_| {
-        r#"{"bootstrapped":false,"bootstrapPercent":0,"bootstrapSummary":"serialization error","socksAddr":"","hiddenServiceOnly":true,"isolationToken":"","isolatedGroupCount":0}"#.to_string()
+        r#"{"bootstrapped":false,"bootstrapPercent":0,"bootstrapSummary":"serialization error","socksAddr":"","hiddenServiceOnly":false,"isolationToken":"","isolatedGroupCount":0,"pendingClearnetHost":""}"#.to_string()
     })
 }
 
@@ -355,12 +370,11 @@ pub fn reset_tor_isolation(target_url_or_empty: &str) -> i32 {
     }
 }
 
-/// 7. Evaluate URL leak policy (`nativeCheckUrlPolicy`).
+/// 7. Evaluate URL leak & clearnet consent policy (`nativeCheckUrlPolicy`).
 pub fn check_url_policy_json(url: &str, hidden_service_only: bool) -> String {
-    let decision = ov_cef::check_url_policy(url, hidden_service_only);
-    serde_json::to_string(&decision).unwrap_or_else(|_| {
-        r#"{"allowed":false,"reason":"URL policy serialization failed","isOnion":false,"normalizedUrl":""}"#.to_string()
-    })
+    let clearnet = active_clearnet();
+    let decision = ov_cef::check_url_policy_with_clearnet(url, hidden_service_only, &clearnet);
+    decision.to_json()
 }
 
 /// 8. Classify CDP `DOM.getDocument({"depth":-1,"pierce":true})` JSON (`nativeClassifyCdpDom`).
@@ -727,6 +741,40 @@ pub fn shutdown_engine() {
     if let Some(state) = removed {
         state.tor.shutdown();
     }
+    if let Some(pre) = PRE_INIT_CLEARNET.get() {
+        let _ = pre.clear_all();
+    }
+}
+
+/// Approve a clearnet host or glob pattern (`nativeAllowClearnet`), persist if
+/// `ttl_seconds > 0`, wake waiting SOCKS5 connections, and return active rules JSON.
+pub fn allow_clearnet_json(pattern: &str, ttl_seconds: i64) -> String {
+    let rules = active_clearnet().allow(pattern, ttl_seconds);
+    serde_json::to_string(&rules).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// Deny a clearnet host for this session (`nativeDenyClearnet`) and wake waiting
+/// SOCKS5 connections.
+pub fn deny_clearnet(host: &str) -> bool {
+    active_clearnet().deny(host)
+}
+
+/// List active clearnet consent rules as a JSON array (`nativeListClearnetRulesJson`).
+pub fn list_clearnet_rules_json() -> String {
+    let rules = active_clearnet().list_rules();
+    serde_json::to_string(&rules).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// Revoke a clearnet consent rule by pattern (`nativeRevokeClearnetRule`) and return
+/// the updated active rules JSON array.
+pub fn revoke_clearnet_rule_json(pattern: &str) -> String {
+    let rules = active_clearnet().revoke_rule(pattern);
+    serde_json::to_string(&rules).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// Clear all clearnet consent rules and session denials (`nativeClearClearnetRules`).
+pub fn clear_clearnet_rules() -> bool {
+    active_clearnet().clear_all()
 }
 
 /// Stateless OpenPGP packet fingerprint/KeyID extractor used when `classify_cdp_dom_json`
@@ -781,7 +829,7 @@ fn standalone_fingerprint_hint(armored: &str) -> Option<String> {
 pub mod jni_api {
     use super::*;
     use jni::objects::{JObject, JString};
-    use jni::sys::{jboolean, jint, jstring};
+    use jni::sys::{jboolean, jint, jlong, jstring};
     use jni::JNIEnv;
     use std::path::PathBuf;
 
@@ -1029,6 +1077,51 @@ pub mod jni_api {
     ) {
         shutdown_engine();
     }
+
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeAllowClearnet(
+        mut env: JNIEnv,
+        _this: JObject,
+        pattern: jstring,
+        ttl_seconds: jlong,
+    ) -> jstring {
+        let pat = read_jstring(&mut env, pattern);
+        let json = allow_clearnet_json(&pat, ttl_seconds);
+        into_jstring(env, &json)
+    }
+
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeDenyClearnet(
+        mut env: JNIEnv,
+        _this: JObject,
+        host: jstring,
+    ) -> jboolean {
+        let h = read_jstring(&mut env, host);
+        u8::from(deny_clearnet(&h))
+    }
+
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeListClearnetRulesJson(
+        env: JNIEnv,
+        _this: JObject,
+    ) -> jstring {
+        let json = list_clearnet_rules_json();
+        into_jstring(env, &json)
+    }
+
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeRevokeClearnetRule(
+        mut env: JNIEnv,
+        _this: JObject,
+        pattern: jstring,
+    ) -> jstring {
+        let pat = read_jstring(&mut env, pattern);
+        let json = revoke_clearnet_rule_json(&pat);
+        into_jstring(env, &json)
+    }
+
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeClearClearnetRules(
+        _env: JNIEnv,
+        _this: JObject,
+    ) -> jboolean {
+        u8::from(clear_clearnet_rules())
+    }
 }
 
 #[cfg(test)]
@@ -1074,12 +1167,54 @@ mod tests {
         assert_eq!(tor_status["hiddenServiceOnly"], true);
         assert_eq!(tor_status["isolationToken"], "iso-2gzyxa5ihm7nsggf");
         assert_eq!(tor_status["isolatedGroupCount"], 0);
+        assert_eq!(tor_status["pendingClearnetHost"], "");
 
         set_hidden_service_only(false);
         let tor_status_clearnet: serde_json::Value =
             serde_json::from_str(&tor_status_json("https://example.com")).unwrap();
         assert_eq!(tor_status_clearnet["hiddenServiceOnly"], false);
         assert_eq!(tor_status_clearnet["isolationToken"], "");
+        assert_eq!(tor_status_clearnet["pendingClearnetHost"], "");
+
+        // Clearnet consent flow end-to-end (`tor.taxi` -> `*.tor.taxi` for 3 days):
+        let unapproved: serde_json::Value =
+            serde_json::from_str(&check_url_policy_json("tor.taxi", false)).unwrap();
+        assert_eq!(unapproved["allowed"], false);
+        assert_eq!(unapproved["requiresClearnetConsent"], true);
+        assert_eq!(unapproved["normalizedUrl"], "https://tor.taxi");
+        assert_eq!(unapproved["host"], "tor.taxi");
+        assert_eq!(unapproved["suggestedPattern"], "*.tor.taxi");
+
+        let rules_after_allow: serde_json::Value = serde_json::from_str(&allow_clearnet_json(
+            "*.tor.taxi",
+            ov_tor::DEFAULT_CLEARNET_TTL_SECS as i64,
+        ))
+        .unwrap();
+        assert_eq!(rules_after_allow.as_array().unwrap().len(), 1);
+        assert_eq!(rules_after_allow[0]["pattern"], "*.tor.taxi");
+        assert_eq!(rules_after_allow[0]["sessionOnly"], false);
+
+        let approved_root: serde_json::Value =
+            serde_json::from_str(&check_url_policy_json("tor.taxi", false)).unwrap();
+        assert_eq!(approved_root["allowed"], true);
+        assert_eq!(approved_root["requiresClearnetConsent"], false);
+
+        let approved_sub: serde_json::Value =
+            serde_json::from_str(&check_url_policy_json("https://www.tor.taxi/", false)).unwrap();
+        assert_eq!(approved_sub["allowed"], true);
+        assert_eq!(approved_sub["requiresClearnetConsent"], false);
+
+        let listed_rules: serde_json::Value =
+            serde_json::from_str(&list_clearnet_rules_json()).unwrap();
+        assert_eq!(listed_rules.as_array().unwrap().len(), 1);
+
+        let after_revoke: serde_json::Value =
+            serde_json::from_str(&revoke_clearnet_rule_json("*.tor.taxi")).unwrap();
+        assert!(after_revoke.as_array().unwrap().is_empty());
+
+        assert!(deny_clearnet("tor.taxi"));
+        assert!(clear_clearnet_rules());
+
         set_hidden_service_only(true);
 
         // Key generation (unlocked + passphrase-locked) & listing:

@@ -20,8 +20,12 @@ pub struct TorConfig {
     /// `Socks5Server::local_addr`.
     pub socks_bind: SocketAddr,
     /// When `false` the client refuses every clearnet destination: the browser
-    /// can then only reach `.onion` services (hidden service only mode).
+    /// can then only reach `.onion` services (strict hidden-service-only mode).
+    /// When `true` (the default), clearnet connections are gated by `ClearnetAllowlist`.
     pub allow_clearnet: bool,
+    /// Optional explicit path for `clearnet_allowlist.json` (defaults to
+    /// `<state_dir>/clearnet_allowlist.json` when `None`).
+    pub clearnet_allowlist_path: Option<PathBuf>,
     /// When `true` every `.onion` apex domain gets its own circuit.
     pub isolate_per_apex: bool,
     /// Timeout for a single SOCKS5 CONNECT.
@@ -36,7 +40,8 @@ impl Default for TorConfig {
             // Loopback only: the listener must never be reachable from
             // outside the application sandbox.
             socks_bind: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-            allow_clearnet: false,
+            allow_clearnet: true,
+            clearnet_allowlist_path: None,
             isolate_per_apex: true,
             connect_timeout: Duration::from_secs(60),
         }

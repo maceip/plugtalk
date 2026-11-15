@@ -1,7 +1,5 @@
 package dev.onionvault
 
-import androidx.compose.runtime.Immutable
-import java.net.URI
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -16,8 +14,12 @@ object OvNative {
 
     const val LIBRARY_NAME: String = "onion_vault"
 
-    /** Default 3-day clearnet allowlist TTL (`3 * 24 * 60 * 60` seconds). */
-    const val CLEARNET_DEFAULT_TTL_SECONDS: Long = 259_200L
+    /** Default clearnet consent rule TTL: 3 days (`259,200` seconds). */
+    const val DEFAULT_CLEARNET_TTL_SECONDS: Long = 3L * 24L * 60L * 60L
+
+    private val COMPOUND_CCTLD_SECOND_LEVELS = setOf(
+        "ac", "co", "com", "edu", "go", "gov", "gob", "mil", "ne", "net", "nom", "or", "org", "sch",
+    )
 
     @Volatile
     var isLoaded: Boolean = false
@@ -110,8 +112,8 @@ object OvNative {
 
     data class UrlPolicyResult(
         val allowed: Boolean,
-        val normalizedUrl: String,
-        val isOnion: Boolean,
+        val normalizedUrl: String = "",
+        val isOnion: Boolean = false,
         val requiresClearnetConsent: Boolean = false,
         val host: String = "",
         val suggestedPattern: String = "",
@@ -120,7 +122,6 @@ object OvNative {
 
     typealias UrlPolicyDecision = UrlPolicyResult
 
-    @Immutable
     data class ClearnetRuleItem(
         val pattern: String,
         val createdAtMs: Long,
@@ -213,26 +214,21 @@ object OvNative {
                 allowed = false,
                 normalizedUrl = "",
                 isOnion = false,
+                requiresClearnetConsent = false,
+                host = "",
+                suggestedPattern = "",
                 reason = "Empty URL policy response",
             )
         }
         return runCatching {
             val obj = JSONObject(json)
-            val normalizedUrl = obj.optString("normalizedUrl", "")
-            val requiresConsent = obj.optBoolean("requiresClearnetConsent", false)
-            val host = obj.optString("host", "").ifBlank {
-                extractHost(normalizedUrl)
-            }
-            val suggestedPattern = obj.optString("suggestedPattern", "").ifBlank {
-                if (requiresConsent && host.isNotBlank()) suggestGlobForHost(host) else ""
-            }
             UrlPolicyResult(
                 allowed = obj.optBoolean("allowed", false),
-                normalizedUrl = normalizedUrl,
+                normalizedUrl = obj.optString("normalizedUrl", ""),
                 isOnion = obj.optBoolean("isOnion", false),
-                requiresClearnetConsent = requiresConsent,
-                host = host,
-                suggestedPattern = suggestedPattern,
+                requiresClearnetConsent = obj.optBoolean("requiresClearnetConsent", false),
+                host = obj.optString("host", ""),
+                suggestedPattern = obj.optString("suggestedPattern", ""),
                 reason = obj.optString("reason", ""),
             )
         }.getOrElse {
@@ -240,6 +236,9 @@ object OvNative {
                 allowed = false,
                 normalizedUrl = "",
                 isOnion = false,
+                requiresClearnetConsent = false,
+                host = "",
+                suggestedPattern = "",
                 reason = "Invalid URL policy response",
             )
         }
@@ -254,27 +253,12 @@ object OvNative {
                     val obj = arr.optJSONObject(i) ?: continue
                     val pattern = obj.optString("pattern", "").trim()
                     if (pattern.isEmpty()) continue
-                    val createdAtMs = if (obj.has("createdAtMs")) {
-                        obj.optLong("createdAtMs", 0L)
-                    } else {
-                        obj.optLong("created_at_ms", 0L)
-                    }
-                    val expiresAtMs = if (obj.has("expiresAtMs")) {
-                        obj.optLong("expiresAtMs", 0L)
-                    } else {
-                        obj.optLong("expires_at_ms", 0L)
-                    }
-                    val sessionOnly = if (obj.has("sessionOnly")) {
-                        obj.optBoolean("sessionOnly", false)
-                    } else {
-                        obj.optBoolean("session_only", expiresAtMs <= 0L)
-                    }
                     add(
                         ClearnetRuleItem(
                             pattern = pattern,
-                            createdAtMs = createdAtMs,
-                            expiresAtMs = expiresAtMs,
-                            sessionOnly = sessionOnly,
+                            createdAtMs = obj.optLong("createdAtMs", 0L),
+                            expiresAtMs = obj.optLong("expiresAtMs", 0L),
+                            sessionOnly = obj.optBoolean("sessionOnly", false),
                         ),
                     )
                 }
@@ -282,29 +266,48 @@ object OvNative {
         }.getOrElse { emptyList() }
     }
 
-    fun suggestGlobForHost(rawHost: String): String {
-        val clean = rawHost.trim().trimEnd('.').lowercase()
-        if (clean.isEmpty()) return ""
-        if (clean.endsWith(".onion")) return clean
-        if (clean.contains(':') || clean.startsWith("[") || clean.all { it.isDigit() || it == '.' }) {
-            return clean
-        }
-        val withoutWww = clean.removePrefix("www.")
-        val labels = withoutWww.split('.').filter { it.isNotEmpty() }
-        if (labels.size < 2) return clean
-        val base = if (labels.size >= 3 && labels[labels.size - 2].length <= 3 && labels.last().length == 2) {
-            labels.takeLast(3).joinToString(".")
+    /**
+     * Pure string-only helper (zero OS DNS calls) matching `ov_tor::suggested_glob_for_host`:
+     * returns normalized host for IPv4/IPv6 literals or single-label hosts, and `*.<registrable>`
+     * for clearnet domain names (`tor.taxi` -> `*.tor.taxi`, `www.tor.taxi` -> `*.tor.taxi`).
+     */
+    fun suggestGlob(host: String): String {
+        val normalized = host.trim()
+            .removePrefix("[")
+            .removeSuffix("]")
+            .trimEnd('.')
+            .lowercase()
+        if (normalized.isEmpty()) return ""
+        if (isIpv4Literal(normalized) || normalized.contains(':')) return normalized
+        if (normalized == "onion" || normalized.endsWith(".onion")) return normalized
+
+        val labels = normalized.split('.').filter { it.isNotEmpty() }
+        if (labels.size <= 1) return normalized
+
+        val tld = labels.last()
+        val second = labels[labels.size - 2]
+        val isCompoundCcTld = tld.length == 2 &&
+            tld.all { it in 'a'..'z' } &&
+            second in COMPOUND_CCTLD_SECOND_LEVELS
+
+        return if (isCompoundCcTld) {
+            if (labels.size >= 3) {
+                "*.${labels.takeLast(3).joinToString(".")}"
+            } else {
+                normalized
+            }
         } else {
-            labels.takeLast(2).joinToString(".")
+            "*.${labels.takeLast(2).joinToString(".")}"
         }
-        return "*.$base"
     }
 
-    private fun extractHost(url: String): String {
-        if (url.isBlank()) return ""
-        return runCatching {
-            URI(url).host?.trim()?.trimEnd('.')?.lowercase().orEmpty()
-        }.getOrDefault("")
+    private fun isIpv4Literal(candidate: String): Boolean {
+        val parts = candidate.split('.')
+        if (parts.size != 4) return false
+        return parts.all { part ->
+            val n = part.toIntOrNull() ?: return false
+            n in 0..255 && part == n.toString()
+        }
     }
 
     fun parseTextClassification(json: String): TextClassification {
