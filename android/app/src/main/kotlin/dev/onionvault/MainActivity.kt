@@ -1288,7 +1288,7 @@ class MainActivity : FragmentActivity() {
             },
         )
         val promptInfo = BiometricPrompt.PromptInfo.Builder()
-            .setTitle(getString(R.string.auth_title))
+            .setTitle(getString(R.string.authenticate_for_key))
             .setSubtitle(subtitle)
             .setAllowedAuthenticators(authenticators)
             .build()
