@@ -1,57 +1,47 @@
 package dev.onionvault
 
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 
 /**
- * The callbacks of the native engine.
+ * Static callback target invoked from Rust via JNI (`dev/onionvault/OvBridge`).
  *
- * The Rust side calls these static methods through JNI; they are dispatched
- * to the activity that is currently in the foreground.
+ * All callbacks are marshaled onto the Android main looper before reaching the
+ * foreground [Listener]. Every method on [Listener] carries a default no-op
+ * implementation so callers only override the events they consume.
  */
 object OvBridge {
 
     private const val TAG = "OvBridge"
+    private val mainHandler = Handler(Looper.getMainLooper())
 
-    /** The UI that receives the callbacks. */
     interface Listener {
-        /** The render process found new DOM fields (JSON encoded report). */
-        fun onDomScan(json: String)
-
-        /** The browser navigated to a new document (JSON encoded). */
-        fun onNavigation(json: String)
-
-        /** A decrypted message has to be shown in the native sheet. */
-        fun showPlaintext(nodeId: String, title: String, body: String, verified: Boolean)
-
-        /**
-         * The engine changed a field of the page (JSON encoded result).
-         *
-         * The result tells whether the page carries the new text; a field
-         * that still holds the old text would send it.
-         */
-        fun onMutationResult(json: String)
-
-        /** An error has to be shown to the user. */
-        fun showError(message: String)
-
-        /** The progress of the Tor bootstrap changed. */
-        fun onTorProgress(percent: Int, stage: String)
-
-        /**
-         * A page was left and its snapshot is complete.
-         *
-         * The UI pulls the snapshot from the engine; the callback only tells
-         * it that the back stack changed.
-         */
-        fun onPageSnapshot(url: String)
+        fun onTorProgress(percent: Int, stage: String) {}
+        fun showError(message: String) {}
+        fun onDomScan(json: String) {}
+        fun onNavigation(json: String) {}
+        fun showPlaintext(nodeId: String, title: String, body: String, verified: Boolean) {}
+        fun onMutationResult(json: String) {}
+        fun onPageSnapshot(url: String) {}
     }
 
     @Volatile
     private var listener: Listener? = null
 
-    /** Register the UI that receives the callbacks. */
     fun setListener(value: Listener?) {
         listener = value
+    }
+
+    @JvmStatic
+    fun onTorProgress(percent: Int, stage: String) {
+        dispatch { it.onTorProgress(percent, stage) }
+    }
+
+    @JvmStatic
+    fun showError(message: String) {
+        Log.w(TAG, message)
+        dispatch { it.showError(message) }
     }
 
     @JvmStatic
@@ -75,29 +65,25 @@ object OvBridge {
     }
 
     @JvmStatic
-    fun showError(message: String) {
-        Log.w(TAG, message)
-        dispatch { it.showError(message) }
-    }
-
-    @JvmStatic
-    fun onTorProgress(percent: Int, stage: String) {
-        dispatch { it.onTorProgress(percent, stage) }
-    }
-
-    @JvmStatic
     fun onPageSnapshot(url: String) {
         dispatch { it.onPageSnapshot(url) }
     }
 
-    /** Run the callback on the UI thread. */
     private fun dispatch(action: (Listener) -> Unit) {
         val target = listener ?: return
-        android.os.Handler(android.os.Looper.getMainLooper()).post {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
             try {
                 action(target)
             } catch (error: Throwable) {
-                Log.e(TAG, "the native callback failed", error)
+                Log.e(TAG, "OvBridge listener callback failed", error)
+            }
+        } else {
+            mainHandler.post {
+                try {
+                    action(target)
+                } catch (error: Throwable) {
+                    Log.e(TAG, "OvBridge listener callback failed", error)
+                }
             }
         }
     }

@@ -1,78 +1,180 @@
 package dev.onionvault
 
 import android.app.Application
+import android.content.Context
+import android.os.Build
 import android.util.Log
+import com.cefrium.Cefrium
+import com.cefrium.CefriumBrowser
+import com.cefrium.CefriumProfile
+import org.chromium.base.CommandLine
 
 /**
- * The application object of Trap.
+ * Main application entry point for Trap.
  *
- * Its duties are three:
- *
- *   * install the guard against the crashes before the first activity is
- *     created, because that is where the crashes of the native code
- *     happen;
- *   * prepare the Java half of the engine, which the native half expects
- *     to find ready when it initializes itself;
- *   * declare that the native libraries of the application are extracted to
- *     the disk, which the engine needs to map them.
+ * Strictly enforces process isolation: Chromium spawns isolated `:sandboxed_process*`
+ * and `:privileged_process*` child services from the same APK. Only the primary
+ * browser process installs [CrashReporter], loads `libonion_vault.so`, configures
+ * Chromium's zero-clearnet command-line switches, and initializes [Cefrium].
  */
 class TrapApplication : Application() {
 
-    private companion object {
-        const val TAG = "TrapApplication"
-    }
+    companion object {
+        private const val TAG = "Trap"
 
-    override fun attachBaseContext(base: android.content.Context) {
-        super.attachBaseContext(base)
+        /** Fail-closed loopback blackhole used until Arti binds its SOCKS5 listener. */
+        const val FAIL_CLOSED_SOCKS_SERVER: String = "socks5://127.0.0.1:1"
 
-        // The guard against the crashes is armed first, before anything
-        // else can fail: the Java half catches the exceptions, and the
-        // native half catches the signals of the engine.
-        CrashGuard.install(this)
+        @Volatile
+        var isEngineReady: Boolean = false
+            private set
 
-        // The engine is prepared before anything else: the native side
-        // initializes Chromium, and Chromium reads the application context,
-        // the command line and the resource files of the APK while it does
-        // so.
-        //
-        // The preparation is limited to the browser process: the child
-        // processes of Chromium bootstrap themselves through the services
-        // that the bundle declares in the manifest.
-        val prepared = try {
-            CefRuntime.prepare(this)
-        } catch (error: Throwable) {
-            Log.e(TAG, "the engine could not be prepared", error)
-            false
+        @Volatile
+        var engineInitError: String? = null
+            private set
+
+        @Volatile
+        var nativeLoaded: Boolean = false
+            private set
+
+        @Volatile
+        var nativeLoadError: String? = null
+            private set
+
+        @Volatile
+        private var currentProfile: CefriumProfile? = null
+
+        @Volatile
+        private var currentSocksServer: String = FAIL_CLOSED_SOCKS_SERVER
+
+        fun isBrowserProcess(context: Context? = null): Boolean {
+            val processName = runCatching { getProcessName() }.getOrNull()
+                ?: context?.packageName
+                ?: return true
+            return !processName.contains(":")
         }
-        if (!prepared && CefRuntime.isBrowserProcess(this)) {
-            Log.e(TAG, "the browser cannot start without the engine")
+
+        private fun isJvmUnitTestRuntime(): Boolean =
+            Build.FINGERPRINT.equals("robolectric", ignoreCase = true)
+
+        @Synchronized
+        fun incognitoProfile(): CefriumProfile {
+            currentProfile?.let { return it }
+            val profile = CefriumProfile.incognito()
+            applyHardenedProfilePolicy(profile, currentSocksServer)
+            currentProfile = profile
+            return profile
         }
 
-        // The library of Trap is loaded after the engine, because it links
-        // against it: the loader of the engine has to be the one that puts
-        // `libcef.so` into the process.
-        //
-        // The load is inside the guard, so that a failure is reported like
-        // any other error: the trace is shown on the next start instead of
-        // the application dying silently.
-        //
-        // The child processes do not need the library of Trap: they render
-        // the pages, and the work of the application happens in the browser
-        // process.
-        if (CefRuntime.isBrowserProcess(this)) {
-            try {
-                OvNative.load()
-                OvNative.nativeInstallCrashGuard(
-                    CrashGuard.nativeReportFile(this).absolutePath,
-                )
-            } catch (error: Throwable) {
-                Log.e(TAG, "the native library of Trap could not be loaded", error)
-                CrashGuard.record(this, error)
+        @Synchronized
+        fun resetIncognitoProfile(): CefriumProfile {
+            val fresh = CefriumProfile.incognito()
+            applyHardenedProfilePolicy(fresh, currentSocksServer)
+            currentProfile = fresh
+            return fresh
+        }
+
+        @Synchronized
+        fun applyProfileSocksServer(socksAddr: String) {
+            val normalized = socksAddr.trim()
+            val server = if (normalized.isEmpty()) {
+                FAIL_CLOSED_SOCKS_SERVER
+            } else if (normalized.startsWith("socks5://")) {
+                normalized
+            } else {
+                "socks5://$normalized"
+            }
+            currentSocksServer = server
+            currentProfile?.let { profile ->
+                applyHardenedProfilePolicy(profile, server)
+            }
+        }
+
+        private fun applyHardenedProfilePolicy(profile: CefriumProfile, socksServer: String) {
+            runCatching {
+                profile.setWebRtcIpHandlingPolicy(CefriumProfile.WEBRTC_DISABLE_NON_PROXIED_UDP)
+            }.onFailure {
+                Log.w(TAG, "Could not set WebRTC IP policy on CefriumProfile", it)
+            }
+            runCatching {
+                profile.setProxy(CefriumBrowser.PROXY_FIXED, socksServer)
+            }.onFailure {
+                Log.e(TAG, "Could not apply SOCKS5 proxy ($socksServer) on CefriumProfile", it)
             }
         }
     }
 
+    override fun attachBaseContext(base: Context) {
+        super.attachBaseContext(base)
+        if (!isBrowserProcess(base)) {
+            return
+        }
+        CrashReporter.install(this)
+    }
+
     override fun onCreate() {
         super.onCreate()
+        if (!isBrowserProcess(this)) {
+            return
+        }
+        if (isJvmUnitTestRuntime()) {
+            // Robolectric JVM unit tests inflate Compose previews without Android
+            // native `.so` binaries; skip JNI/Cefrium native boot cleanly.
+            return
+        }
+
+        try {
+            OvNative.load()
+            nativeLoaded = true
+            nativeLoadError = null
+        } catch (error: Throwable) {
+            nativeLoaded = false
+            nativeLoadError = "${error.javaClass.simpleName}: ${error.message ?: "failed to load libonion_vault.so"}"
+            Log.e(TAG, "Failed to load libonion_vault.so", error)
+            CrashReporter.record(this, error)
+        }
+
+        try {
+            initializeHardenedCefrium()
+        } catch (error: Throwable) {
+            isEngineReady = false
+            engineInitError = "${error.javaClass.simpleName}: ${error.message ?: "Cefrium failed to initialize"}"
+            Log.e(TAG, "Cefrium initialization failed", error)
+            CrashReporter.record(this, error)
+        }
+    }
+
+    private fun initializeHardenedCefrium() {
+        // Disable all background clearnet connections before starting Chromium.
+        Cefrium.setComponentUpdatesEnabled(false)
+        Cefrium.setNetworkTimeQueriesEnabled(false)
+        Cefrium.setDrmPreprovisioningAtStartupEnabled(false)
+
+        if (!CommandLine.isInitialized()) {
+            CommandLine.init(null)
+        }
+        CommandLine.getInstance().apply {
+            // Block OS DNS resolution for every hostname except 127.0.0.1 (Arti's
+            // local SOCKS5 listener); all `.onion` and remote names traverse SOCKS5h.
+            appendSwitchWithValue("host-resolver-rules", "MAP * ~NOTFOUND , EXCLUDE 127.0.0.1")
+            appendSwitch("dns-prefetch-disable")
+            appendSwitch("no-pings")
+            appendSwitch("disable-background-networking")
+        }
+
+        val initialized = Cefrium.initialize(this)
+        if (!initialized) {
+            throw IllegalStateException("Cefrium.initialize(Context) returned false in browser process")
+        }
+
+        // Disable system DNS-over-HTTPS fallback so Chromium never bypasses SOCKS5.
+        Cefrium.setSecureDns(Cefrium.SECURE_DNS_OFF, null)
+
+        // Prime the ephemeral in-memory profile with fail-closed loopback proxy until Arti binds.
+        incognitoProfile()
+
+        isEngineReady = true
+        engineInitError = null
+        Log.i(TAG, "the engine is ready")
     }
 }

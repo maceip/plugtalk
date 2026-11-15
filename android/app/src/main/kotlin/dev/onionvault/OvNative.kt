@@ -1,177 +1,329 @@
 package dev.onionvault
 
-import android.view.Surface
+import org.json.JSONArray
+import org.json.JSONObject
 
 /**
- * The JNI bridge to the native engine.
+ * JNI bridge to Trap's Rust library (`libonion_vault.so`, crate `ov-core`).
  *
- * Every function is implemented in `crates/ov-core/src/lib.rs`; the names of
- * the methods are part of the ABI, the `Java_dev_onionvault_OvNative_*`
- * symbols of the native library.
+ * Every `external fun` declared on [OvNative] maps 1:1 to an exported
+ * `Java_dev_onionvault_OvNative_*` C-ABI symbol in `src/lib.rs`, verified on
+ * every test run by `OvNativeTest`.
  */
 object OvNative {
 
-    /**
-     * The name of the native library of Trap.
-     *
-     * The library carries the engine of the browser, the Tor client and the
-     * key manager; it is built by cargo-ndk and lands in the directory of
-     * the shared objects of the APK.
-     */
-    private const val LIBRARY = "onion_vault"
+    const val LIBRARY_NAME: String = "onion_vault"
 
-    /**
-     * Load the native library.
-     *
-     * The call has to happen before any other function of this object is
-     * used: the methods below are implemented in the native library, and the
-     * loader throws an `UnsatisfiedLinkError` when the library is not yet in
-     * the process.  Loading it twice is harmless: the loader remembers the
-     * libraries it has already loaded.
-     */
+    @Volatile
+    var isLoaded: Boolean = false
+        private set
+
+    @Synchronized
     fun load() {
-        System.loadLibrary(LIBRARY)
+        if (!isLoaded) {
+            System.loadLibrary(LIBRARY_NAME)
+            isLoaded = true
+        }
     }
 
-    /**
-     * Arm the native guard against the crashes.
-     *
-     * A crash inside the engine of the browser is a signal, not an
-     * exception: the handler of Java never sees it and the process is
-     * killed by the kernel.  The guard catches those signals and writes a
-     * report of them into the given file, which the [CrashGuard] reads on
-     * the next start of the application and shows to the user.
-     *
-     * The call has to happen before the engine starts.
-     *
-     * @param reportPath the file the report of the crash is written to.
-     */
-    external fun nativeInstallCrashGuard(reportPath: String)
+    // --- Exact 19 JNI entry points exported by `src/lib.rs` ---
 
-    /** Start the engine: Tor, the key manager and the off-screen browser. */
     external fun nativeInit(
-        filesDir: String,
+        dataDir: String,
         cacheDir: String,
         hiddenServiceOnly: Boolean,
-        requireAuth: Boolean,
     ): Boolean
 
-    /** Stop the engine. */
+    external fun nativeLastInitError(): String
+
+    external fun nativeSocksProxy(): String
+
+    external fun nativeTorStatusJson(currentUrl: String): String
+
+    external fun nativeSetHiddenServiceOnly(enabled: Boolean)
+
+    external fun nativeResetTorIsolation(targetUrlOrEmpty: String): Int
+
+    external fun nativeCheckUrlPolicy(url: String, hiddenServiceOnly: Boolean): String
+
+    external fun nativeClassifyCdpDom(cdpDomJson: String): String
+
+    external fun nativeClassifyText(text: String): String
+
+    external fun nativeListKeysJson(): String
+
+    external fun nativeGenerateKey(userId: String, passphrase: String): String
+
+    external fun nativeImportKey(armored: String, passphrase: String): String
+
+    external fun nativeExportPublicKey(fingerprintOrEmpty: String): String
+
+    external fun nativeDeleteKey(fingerprint: String): Boolean
+
+    external fun nativeEncrypt(
+        plaintext: String,
+        recipientFingerprint: String,
+        signerFingerprintOrEmpty: String,
+        passphrase: String,
+    ): String
+
+    external fun nativeDecrypt(armoredCiphertext: String, passphrase: String): String
+
+    external fun nativeSetRequireBiometric(required: Boolean): Boolean
+
+    external fun nativeGetRequireBiometric(): Boolean
+
     external fun nativeShutdown()
 
-    /** Attach the surface of the [OvSurfaceView] to the renderer. */
-    external fun nativeCreateSurface(surface: Surface, width: Int, height: Int)
+    // --- Typed JSON Data Models & Parsers ---
 
-    /** Detach the surface. */
-    external fun nativeDestroySurface()
-
-    /** The surface was resized. */
-    external fun nativeResize(width: Int, height: Int)
-
-    /**
-     * Run one iteration of the CEF message loop.
-     *
-     * CEF runs with an external message pump on Android: the platform does
-     * not have a windowing system that CEF could use, so the native UI drives
-     * the loop from the [android.view.Choreographer].
-     */
-    external fun nativeDoMessageLoopWork()
-
-    /** Load a URL. */
-    external fun nativeLoadUrl(url: String)
-
-    /** Forward a touch event. */
-    external fun nativeTouch(action: Int, x: Float, y: Float, id: Int, modifiers: Int)
-
-    /** Forward a mouse button event. */
-    external fun nativeMouseButton(
-        x: Float,
-        y: Float,
-        button: Int,
-        mouseUp: Int,
-        modifiers: Int,
-        clickCount: Int,
+    data class TorStatusSnapshot(
+        val bootstrapped: Boolean = false,
+        val bootstrapPercent: Int = 0,
+        val bootstrapSummary: String = "",
+        val socksAddr: String = "",
+        val hiddenServiceOnly: Boolean = true,
+        val isolationToken: String = "",
+        val isolatedGroupCount: Int = 0,
     )
 
-    /** Forward a mouse move event. */
-    external fun nativeMouseMove(x: Float, y: Float, modifiers: Int)
-
-    /** Forward a scroll event. */
-    external fun nativeMouseWheel(
-        x: Float,
-        y: Float,
-        deltaX: Float,
-        deltaY: Float,
-        modifiers: Int,
+    data class UrlPolicyDecision(
+        val allowed: Boolean,
+        val reason: String,
+        val isOnion: Boolean,
+        val normalizedUrl: String,
     )
 
-    /** Forward a key event (0 = down, 1 = up, 2 = character). */
-    external fun nativeKey(
-        action: Int,
-        keyCode: Int,
-        character: Int,
-        modifiers: Int,
-        isSystemKey: Int,
+    data class TextClassification(
+        val kind: String = "plain",
+        val actionLabel: String = "",
+        val armored: String = "",
+        val fingerprintHint: String = "",
+    ) {
+        val isPgp: Boolean
+            get() = kind == "pgp_message" || kind == "pgp_public_key"
+    }
+
+    data class ClassifiedDomNode(
+        val nodeId: Int,
+        val backendNodeId: Int,
+        val tag: String,
+        val kind: String,
+        val actionLabel: String,
+        val text: String,
+        val fingerprintHint: String,
     )
 
-    /** Commit the text of the soft keyboard. */
-    external fun nativeImeCommitText(text: String)
+    data class KeyringEntry(
+        val fingerprint: String,
+        val userId: String,
+        val createdEpochSecs: Long,
+        val hasSecret: Boolean,
+        val canSign: Boolean,
+        val canEncrypt: Boolean,
+        val isOwnKey: Boolean,
+    )
 
-    /** Write a decrypted plaintext into a field of the page. */
-    external fun nativeInsertPlaintext(nodeId: String, text: String)
+    data class KeyGenResult(
+        val ok: Boolean,
+        val fingerprint: String = "",
+        val publicKeyArmored: String = "",
+        val error: String = "",
+    )
 
-    /** Encrypt the content of a field. */
-    external fun nativeEncryptField(nodeId: String, recipients: Array<String>)
+    data class KeyImportResult(
+        val ok: Boolean,
+        val fingerprint: String = "",
+        val userId: String = "",
+        val hasSecret: Boolean = false,
+        val error: String = "",
+    )
 
-    /** Insert the armored public key of the local user into a field. */
-    external fun nativeInsertPublicKey(nodeId: String)
+    data class EncryptResult(
+        val ok: Boolean,
+        val ciphertext: String = "",
+        val signed: Boolean = false,
+        val error: String = "",
+    )
 
-    /** Decrypt the armored message of a node. */
-    external fun nativeDecryptNode(nodeId: String, armored: String)
+    data class DecryptResult(
+        val ok: Boolean,
+        val plaintext: String = "",
+        val signatureStatus: String = "",
+        val signerFingerprint: String = "",
+        val signerUserId: String = "",
+        val needsPassphrase: Boolean = false,
+        val error: String = "",
+    )
 
-    /** Import an armored public key that was found in the page. */
-    external fun nativeImportKey(armored: String)
+    fun parseTorStatus(json: String): TorStatusSnapshot {
+        if (json.isBlank()) return TorStatusSnapshot()
+        return runCatching {
+            val obj = JSONObject(json)
+            TorStatusSnapshot(
+                bootstrapped = obj.optBoolean("bootstrapped", false),
+                bootstrapPercent = obj.optInt("bootstrapPercent", 0),
+                bootstrapSummary = obj.optString("bootstrapSummary", ""),
+                socksAddr = obj.optString("socksAddr", ""),
+                hiddenServiceOnly = obj.optBoolean("hiddenServiceOnly", true),
+                isolationToken = obj.optString("isolationToken", ""),
+                isolatedGroupCount = obj.optInt("isolatedGroupCount", 0),
+            )
+        }.getOrElse { TorStatusSnapshot() }
+    }
 
-    /** Generate a new key pair and return its fingerprint. */
-    external fun nativeGenerateKey(userId: String): String?
+    fun parseUrlPolicy(json: String): UrlPolicyDecision {
+        if (json.isBlank()) {
+            return UrlPolicyDecision(
+                allowed = false,
+                reason = "Empty URL policy response",
+                isOnion = false,
+                normalizedUrl = "",
+            )
+        }
+        return runCatching {
+            val obj = JSONObject(json)
+            UrlPolicyDecision(
+                allowed = obj.optBoolean("allowed", false),
+                reason = obj.optString("reason", ""),
+                isOnion = obj.optBoolean("isOnion", false),
+                normalizedUrl = obj.optString("normalizedUrl", ""),
+            )
+        }.getOrElse {
+            UrlPolicyDecision(
+                allowed = false,
+                reason = "Invalid URL policy response",
+                isOnion = false,
+                normalizedUrl = "",
+            )
+        }
+    }
 
-    /** The keys of the keyring, as a JSON document. */
-    external fun nativeListKeys(): String?
+    fun parseTextClassification(json: String): TextClassification {
+        if (json.isBlank()) return TextClassification()
+        return runCatching {
+            val obj = JSONObject(json)
+            TextClassification(
+                kind = obj.optString("kind", "plain"),
+                actionLabel = obj.optString("actionLabel", ""),
+                armored = obj.optString("armored", ""),
+                fingerprintHint = obj.optString("fingerprintHint", ""),
+            )
+        }.getOrElse { TextClassification() }
+    }
 
-    /** Go forward in the history of the browser. */
-    external fun nativeGoForward(): Boolean
+    fun parseClassifiedDom(json: String): List<ClassifiedDomNode> {
+        if (json.isBlank()) return emptyList()
+        return runCatching {
+            val arr = JSONArray(json)
+            buildList(arr.length()) {
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val nodeId = obj.optInt("nodeId", 0)
+                    val backendNodeId = obj.optInt("backendNodeId", 0)
+                    if (nodeId <= 0 && backendNodeId <= 0) continue
+                    add(
+                        ClassifiedDomNode(
+                            nodeId = nodeId,
+                            backendNodeId = backendNodeId,
+                            tag = obj.optString("tag", ""),
+                            kind = obj.optString("kind", ""),
+                            actionLabel = obj.optString("actionLabel", ""),
+                            text = obj.optString("text", ""),
+                            fingerprintHint = obj.optString("fingerprintHint", ""),
+                        ),
+                    )
+                }
+            }
+        }.getOrElse { emptyList() }
+    }
 
-    /**
-     * Set the zoom level of the page.
-     *
-     * The level is the one of CEF: `0.0` is the default size and every step
-     * of `0.25` is one notch of the zoom of the browser.
-     */
-    external fun nativeSetZoom(level: Double)
+    fun parseKeys(json: String): List<KeyringEntry> {
+        if (json.isBlank()) return emptyList()
+        return runCatching {
+            val arr = JSONArray(json)
+            buildList(arr.length()) {
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val fp = obj.optString("fingerprint", "")
+                    if (fp.isBlank()) continue
+                    add(
+                        KeyringEntry(
+                            fingerprint = fp,
+                            userId = obj.optString("userId", ""),
+                            createdEpochSecs = obj.optLong("createdEpochSecs", 0L),
+                            hasSecret = obj.optBoolean("hasSecret", false),
+                            canSign = obj.optBoolean("canSign", false),
+                            canEncrypt = obj.optBoolean("canEncrypt", false),
+                            isOwnKey = obj.optBoolean("isOwnKey", false),
+                        ),
+                    )
+                }
+            }
+        }.getOrElse { emptyList() }
+    }
 
-    /**
-     * Change the traffic policy of the browser.
-     *
-     * `true` refuses every clearnet request: only hidden services can be
-     * reached.  The change is effective at once, without a restart.
-     */
-    external fun nativeSetHiddenServiceOnly(hiddenServiceOnly: Boolean)
+    fun parseGenerateKey(json: String): KeyGenResult {
+        if (json.isBlank()) return KeyGenResult(ok = false, error = "Empty response from keyring")
+        return runCatching {
+            val obj = JSONObject(json)
+            KeyGenResult(
+                ok = obj.optBoolean("ok", false),
+                fingerprint = obj.optString("fingerprint", ""),
+                publicKeyArmored = obj.optString("publicKeyArmored", ""),
+                error = obj.optString("error", ""),
+            )
+        }.getOrElse { err ->
+            KeyGenResult(ok = false, error = err.message ?: "Malformed key generation response")
+        }
+    }
 
-    /** Export the armored public key of a fingerprint. */
-    external fun nativeExportPublicKey(fingerprint: String): String?
+    fun parseImportKey(json: String): KeyImportResult {
+        if (json.isBlank()) return KeyImportResult(ok = false, error = "Empty response from keyring")
+        return runCatching {
+            val obj = JSONObject(json)
+            KeyImportResult(
+                ok = obj.optBoolean("ok", false),
+                fingerprint = obj.optString("fingerprint", ""),
+                userId = obj.optString("userId", ""),
+                hasSecret = obj.optBoolean("hasSecret", false),
+                error = obj.optString("error", ""),
+            )
+        }.getOrElse { err ->
+            KeyImportResult(ok = false, error = err.message ?: "Malformed key import response")
+        }
+    }
 
-    /** The number of snapshots of the back stack. */
-    external fun nativeSnapshotCount(): Int
+    fun parseEncrypt(json: String): EncryptResult {
+        if (json.isBlank()) return EncryptResult(ok = false, error = "Empty encryption response")
+        return runCatching {
+            val obj = JSONObject(json)
+            EncryptResult(
+                ok = obj.optBoolean("ok", false),
+                ciphertext = obj.optString("ciphertext", ""),
+                signed = obj.optBoolean("signed", false),
+                error = obj.optString("error", ""),
+            )
+        }.getOrElse { err ->
+            EncryptResult(ok = false, error = err.message ?: "Malformed encryption response")
+        }
+    }
 
-    /** The metadata of a snapshot of the back stack (JSON encoded). */
-    external fun nativeSnapshotInfo(index: Int): String?
-
-    /** The pixels of the frame of a snapshot, in the R, G, B, A order. */
-    external fun nativeSnapshotFrame(index: Int): ByteArray?
-
-    /** The markup of a snapshot of the back stack. */
-    external fun nativeSnapshotMarkup(index: Int): ByteArray?
-
-    /** Go back in the history of the browser. */
-    external fun nativeGoBack(): Boolean
+    fun parseDecrypt(json: String): DecryptResult {
+        if (json.isBlank()) return DecryptResult(ok = false, error = "Empty decryption response")
+        return runCatching {
+            val obj = JSONObject(json)
+            DecryptResult(
+                ok = obj.optBoolean("ok", false),
+                plaintext = obj.optString("plaintext", ""),
+                signatureStatus = obj.optString("signatureStatus", ""),
+                signerFingerprint = obj.optString("signerFingerprint", ""),
+                signerUserId = obj.optString("signerUserId", ""),
+                needsPassphrase = obj.optBoolean("needsPassphrase", false),
+                error = obj.optString("error", ""),
+            )
+        }.getOrElse { err ->
+            DecryptResult(ok = false, error = err.message ?: "Malformed decryption response")
+        }
+    }
 }
