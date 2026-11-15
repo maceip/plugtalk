@@ -19,6 +19,8 @@ name: CI & Release
 
 on:
   push:
+    branches:
+      - "**"
     tags-ignore:
       - "v*"
       - "build-*"
