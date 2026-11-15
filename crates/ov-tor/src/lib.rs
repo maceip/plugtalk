@@ -8,6 +8,7 @@
 //!   * places every v3 `.onion` service on its own isolated circuit group.
 
 pub mod bootstrap;
+pub mod clearnet;
 pub mod config;
 pub mod isolation;
 pub mod socks5;
@@ -23,6 +24,11 @@ use tokio::{
 use tor_rtcompat::PreferredRuntime;
 
 pub use bootstrap::{BootstrapMonitor, BootstrapProgress};
+pub use clearnet::{
+    is_chromium_background_endpoint, matches_host_glob, normalize_host_or_pattern,
+    suggested_glob_for_host, ClearnetAllowlist, ClearnetRule, CLEARNET_ALLOWLIST_FILENAME,
+    DEFAULT_CLEARNET_TTL_SECS, DEFAULT_CONSENT_WAIT_TIMEOUT,
+};
 pub use config::TorConfig;
 pub use isolation::{apex_domain, extract_host, is_valid_v3_onion_host, IsolationRegistry};
 pub use socks5::{Socks5Decision, Socks5Error, Socks5Request, Socks5Server};
@@ -42,12 +48,14 @@ pub struct TorStatusSnapshot {
     pub bootstrap_summary: String,
     /// Loopback SOCKS5 `host:port` endpoint (`127.0.0.1:<port>`).
     pub socks_addr: String,
-    /// `true` when clearnet connections are refused at the SOCKS5 listener.
+    /// `true` when clearnet connections are refused unconditionally at the SOCKS5 listener.
     pub hidden_service_only: bool,
     /// Circuit isolation token for `current_url` (`"iso-<16char_apex>"` or `""`).
     pub isolation_token: String,
     /// Number of currently allocated isolated `.onion` circuit groups.
     pub isolated_group_count: usize,
+    /// Oldest unresolved pending clearnet host awaiting user consent on `Socks5Server`, or `""`.
+    pub pending_clearnet_host: String,
 }
 
 /// Install the `ring` cryptography provider of `rustls` (idempotent).
@@ -69,6 +77,7 @@ pub fn install_crypto_provider() {
 pub struct TorService {
     client: Arc<TorClient<PreferredRuntime>>,
     isolation: Arc<IsolationRegistry>,
+    clearnet: Arc<ClearnetAllowlist>,
     socks: Arc<Socks5Server>,
     events: broadcast::Sender<BootstrapProgress>,
     shutdown_tx: watch::Sender<bool>,
@@ -124,11 +133,19 @@ impl TorService {
             config.isolate_per_apex,
         ));
 
-        let socks = Socks5Server::start(
+        let allowlist_path = config
+            .clearnet_allowlist_path
+            .clone()
+            .unwrap_or_else(|| config.state_dir.join(CLEARNET_ALLOWLIST_FILENAME));
+        let clearnet = Arc::new(ClearnetAllowlist::load_or_new(allowlist_path));
+
+        let socks = Socks5Server::start_with_clearnet(
             config.socks_bind,
             isolation.clone(),
             config.allow_clearnet,
+            clearnet.clone(),
             config.connect_timeout,
+            DEFAULT_CONSENT_WAIT_TIMEOUT,
         )
         .await?;
 
@@ -137,6 +154,7 @@ impl TorService {
         Ok(Arc::new(Self {
             client,
             isolation,
+            clearnet,
             socks,
             events,
             shutdown_tx,
@@ -184,15 +202,27 @@ impl TorService {
     /// Snapshot of all live Tor, SOCKS5, and circuit-isolation telemetry for `current_url`.
     pub fn status_snapshot(&self, current_url: &str) -> TorStatusSnapshot {
         let progress = self.bootstrap_progress();
+        let hidden_service_only = self.hidden_service_only();
+        let pending_clearnet_host = if hidden_service_only {
+            String::new()
+        } else {
+            self.clearnet.oldest_pending_host().unwrap_or_default()
+        };
         TorStatusSnapshot {
             bootstrapped: progress.ready,
             bootstrap_percent: progress.percent,
             bootstrap_summary: progress.stage,
             socks_addr: self.socks_endpoint().to_string(),
-            hidden_service_only: self.hidden_service_only(),
+            hidden_service_only,
             isolation_token: self.isolation.isolation_token_for_url(current_url),
             isolated_group_count: self.isolation.group_count_sync(),
+            pending_clearnet_host,
         }
+    }
+
+    /// Persistent clearnet consent allowlist & pending-host coordinator.
+    pub fn clearnet(&self) -> &Arc<ClearnetAllowlist> {
+        &self.clearnet
     }
 
     /// Evict circuit isolation group(s) (`""` resets all `.onion` circuits).

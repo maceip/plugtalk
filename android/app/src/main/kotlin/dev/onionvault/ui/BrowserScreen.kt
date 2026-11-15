@@ -12,7 +12,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -26,15 +25,14 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -43,21 +41,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.onionvault.R
-import java.net.URI
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -65,17 +62,23 @@ import kotlinx.coroutines.withContext
 /**
  * Primary Compose Browser Chrome for Trap.
  *
- * Implements the `Securedrop+Browser+Chrome+Fixed` structural geometry (44dp touch targets,
- * 8dp gaps, unified `[Shield · .onion Input · Clear ✕ | Go]` capsule with `0dp` seam and
- * `#E8A33D` `Go` fill, compact Top Identity Header, real Transport Footer Line, and
- * `<= 2:1` label density across every component) across both `SecureDrop` and `NeonGraffiti`
- * theme families in `Dark` and `Light` modes.
+ * Enforces a strict single-row bottom-only bar (`56.dp` content height before system
+ * navigation bar inset, `0` top app bars, `0` footer bars):
+ * - Full-bleed viewport from `statusBarsPadding()` down to `bottom_control_dock`
+ *   with only a thin `2.dp` loading bar overlaid at top edge while loading.
+ * - Unfocused (`< 560.dp`): `[ Back (40dp) · Capsule (Shield + URL + Reload | Go) · Tabs · Menu ]`
+ * - Unfocused (`>= 560.dp`): adds `Forward (44dp)` next to `Back`.
+ * - Focused: `[ Cancel (40dp) · Capsule (URL + Clear ✕ | Go) ]` in the same `44.dp` row.
  */
 @Composable
 fun BrowserScreen(
     state: BrowserUiState,
     modifier: Modifier = Modifier,
     onNavigate: (String) -> Unit = {},
+    onAllowClearnet: (prompt: ClearnetPromptState, pattern: String, ttlSeconds: Long) -> Unit = { _, _, _ -> },
+    onBlockClearnet: (prompt: ClearnetPromptState) -> Unit = {},
+    onRevokeClearnetRule: (String) -> Unit = {},
+    onClearClearnetRules: () -> Unit = {},
     onFieldAction: (PgpFieldState) -> Unit = {},
     onInsertMyPubKey: (PgpFieldState) -> Unit = {},
     onConfirmEncrypt: (
@@ -140,6 +143,10 @@ fun BrowserScreen(
             state = state,
             modifier = modifier,
             onNavigate = onNavigate,
+            onAllowClearnet = onAllowClearnet,
+            onBlockClearnet = onBlockClearnet,
+            onRevokeClearnetRule = onRevokeClearnetRule,
+            onClearClearnetRules = onClearClearnetRules,
             onFieldAction = onFieldAction,
             onInsertMyPubKey = onInsertMyPubKey,
             onConfirmEncrypt = onConfirmEncrypt,
@@ -198,6 +205,10 @@ private fun BrowserScreenContent(
     state: BrowserUiState,
     modifier: Modifier,
     onNavigate: (String) -> Unit,
+    onAllowClearnet: (prompt: ClearnetPromptState, pattern: String, ttlSeconds: Long) -> Unit,
+    onBlockClearnet: (prompt: ClearnetPromptState) -> Unit,
+    onRevokeClearnetRule: (String) -> Unit,
+    onClearClearnetRules: () -> Unit,
     onFieldAction: (PgpFieldState) -> Unit,
     onInsertMyPubKey: (PgpFieldState) -> Unit,
     onConfirmEncrypt: (
@@ -277,6 +288,7 @@ private fun BrowserScreenContent(
         tabsOpen ||
         securityOpen ||
         settingsOpen ||
+        state.clearnetPrompt != null ||
         state.pgp.plaintext != null ||
         state.pgp.encryptRequest != null ||
         state.pgp.decryptPassphraseRequest != null ||
@@ -318,24 +330,14 @@ private fun BrowserScreenContent(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .statusBarsPadding()
-                .navigationBarsPadding()
-                .imePadding(),
+                .statusBarsPadding(),
         ) {
-            // Top Identity Header (40dp onion mark · Title + .onion host · TOR pill · 40dp Keyring)
-            TopIdentityHeader(
-                state = state,
-                onBrandClick = onHome,
-                onTorClick = { securityOpen = true },
-                onKeyringClick = { keysOpen = true },
-            )
-
-            // Center Viewport
+            // Full-bleed Center Viewport (no top app bar, no top address bar)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .background(colors.surface2),
+                    .background(colors.background),
             ) {
                 if (progress > 0f && state.backPreview != null) {
                     BackPreviewLayer(state = state, progress = progress)
@@ -359,12 +361,6 @@ private fun BrowserScreenContent(
                     if (state.isStartPage && progress == 0f) {
                         StartPage(
                             state = state,
-                            onNavigate = { target ->
-                                address = target
-                                onNavigate(target)
-                            },
-                            onOpenKeyring = { keysOpen = true },
-                            onOpenSettings = { settingsOpen = true },
                             onOpenSecurity = { securityOpen = true },
                         )
                     }
@@ -378,7 +374,7 @@ private fun BrowserScreenContent(
                     )
                 }
 
-                // Top Viewport Banners (Loading Bar, Snapshot Live Reload, Blocked/Error Notice)
+                // Thin 2.dp top-edge loading indicator + transient notices
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -387,8 +383,10 @@ private fun BrowserScreenContent(
                     if (state.isLoading) {
                         OvProgressBar(
                             progress = (state.loadProgress.coerceIn(8, 100)) / 100f,
-                            height = 2.5.dp,
-                            modifier = Modifier.fillMaxWidth(),
+                            height = 2.dp,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("top_loading_bar"),
                         )
                     }
 
@@ -396,9 +394,17 @@ private fun BrowserScreenContent(
                         SnapshotReloadBanner(onReloadLive = onReloadLive)
                     }
 
-                    val bannerMessage = state.pgp.error?.takeIf { it.isNotBlank() }
-                        ?: state.status.takeIf { it.isNotBlank() }
-                        ?: if (state.blocked) "Clearnet request refused by Hidden Service Only policy." else null
+                    val bannerMessage = if (state.clearnetPrompt != null) {
+                        null
+                    } else {
+                        state.pgp.error?.takeIf { it.isNotBlank() }
+                            ?: state.status.takeIf { it.isNotBlank() }
+                            ?: if (state.blocked) {
+                                "Clearnet request refused by Hidden Service Only policy."
+                            } else {
+                                null
+                            }
+                    }
 
                     if (bannerMessage != null) {
                         StatusNoticeBanner(
@@ -410,7 +416,7 @@ private fun BrowserScreenContent(
                 }
             }
 
-            // Bottom Controls + Transport Footer Line
+            // Strictly single-row Bottom Control Dock (~56.dp content height)
             BottomControlDock(
                 state = state,
                 address = address,
@@ -420,6 +426,9 @@ private fun BrowserScreenContent(
                     onNavigate(trimmed.ifEmpty { "about:blank" })
                 },
                 onClearAddress = { address = "" },
+                onCancelAddressEdit = {
+                    address = if (isBlankOrStartUrl(state.url)) "" else state.url
+                },
                 onSecurityClick = { securityOpen = true },
                 onBack = onBack,
                 onForward = onForward,
@@ -430,9 +439,19 @@ private fun BrowserScreenContent(
         }
 
         // Modal Sheets & Dialogs
+        state.clearnetPrompt?.let { prompt ->
+            ClearnetConsentSheet(
+                prompt = prompt,
+                onAllow = onAllowClearnet,
+                onBlock = onBlockClearnet,
+            )
+        }
+
         if (menuOpen) {
             BrowserMenuSheet(
                 state = state,
+                onForward = onForward,
+                onReload = onReload,
                 onNewTab = {
                     address = ""
                     onNewTab()
@@ -470,6 +489,8 @@ private fun BrowserScreenContent(
                 state = state,
                 onToggleHiddenServiceOnly = onToggleRouting,
                 onResetTorIsolation = onResetTorIsolation,
+                onRevokeClearnetRule = onRevokeClearnetRule,
+                onClearClearnetRules = onClearClearnetRules,
                 onDismiss = { securityOpen = false },
             )
         }
@@ -482,6 +503,8 @@ private fun BrowserScreenContent(
                 onToggleHiddenServiceOnly = onToggleRouting,
                 onToggleRequireBiometric = onToggleRequireBiometric,
                 onSelectDefaultZoom = onSelectDefaultZoom,
+                onRevokeClearnetRule = onRevokeClearnetRule,
+                onClearClearnetRules = onClearClearnetRules,
                 onClearSession = onClearSession,
                 onOpenLegalNotices = { legalOpen = true },
                 onDismiss = { settingsOpen = false },
@@ -579,137 +602,11 @@ private fun BrowserScreenContent(
 }
 
 /**
- * Top Identity Header matching `Securedrop+Browser+Chrome+Fixed` (`App.tsx:62-101`):
- * - 40dp Trap onion mark
- * - Page Title + `.onion` host (`1:1` label ratio, `<= 2:1`)
- * - Tappable `TOR` status pill (opens Tor Security & Circuit Sheet)
- * - 40dp Keyring circular button
- */
-@Composable
-private fun TopIdentityHeader(
-    state: BrowserUiState,
-    onBrandClick: () -> Unit,
-    onTorClick: () -> Unit,
-    onKeyringClick: () -> Unit,
-) {
-    val colors = TrapTheme.colors
-    val headerTitle = when {
-        state.isStartPage -> "Trap Start"
-        state.title.isNotBlank() -> state.title
-        else -> formatDisplayHost(state.url)
-    }
-    val headerSubtitle = when {
-        state.isStartPage -> "about:blank · zero-JS"
-        else -> state.url
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(colors.surface)
-            .testTag("top_identity_header"),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(colors.control)
-                    .border(1.dp, colors.border, CircleShape)
-                    .clickable(role = Role.Button, onClick = onBrandClick)
-                    .semantics { contentDescription = "Trap Start Page" },
-                contentAlignment = Alignment.Center,
-            ) {
-                Image(
-                    painter = painterResource(R.drawable.ov_trap_mark),
-                    contentDescription = null,
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.size(26.dp),
-                )
-            }
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = headerTitle,
-                    color = colors.textPrimary,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = headerSubtitle,
-                    color = colors.textMuted,
-                    fontSize = 11.5.sp,
-                    fontFamily = FontFamily.Monospace,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-
-            // Tappable TOR status pill
-            val torReady = state.tor.ready
-            val pillShape = RoundedCornerShape(50)
-            Box(
-                modifier = Modifier
-                    .height(28.dp)
-                    .clip(pillShape)
-                    .background(if (torReady) colors.greenContainer else colors.control)
-                    .border(
-                        width = 1.dp,
-                        color = if (torReady) colors.greenBorder else colors.amber,
-                        shape = pillShape,
-                    )
-                    .clickable(role = Role.Button, onClick = onTorClick)
-                    .padding(horizontal = 10.dp)
-                    .semantics { contentDescription = "Tor security and circuit status" }
-                    .testTag("top_tor_pill"),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = if (torReady) "TOR" else "TOR ${state.tor.percent}%",
-                    color = if (torReady) colors.green else colors.amber,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                )
-            }
-
-            // 40dp Keyring button
-            OvIconButton(
-                glyph = TrapGlyph.Key,
-                contentDescription = "PGP Keyring",
-                onClick = onKeyringClick,
-                tint = colors.teal,
-                containerColor = colors.tealContainer,
-                borderColor = if (state.keys.isNotEmpty()) colors.teal else colors.border,
-                size = 40.dp,
-                modifier = Modifier.testTag("top_keyring_button"),
-            )
-        }
-
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(1.dp)
-                .background(colors.cardBorder),
-        )
-    }
-}
-
-/**
- * Bottom Control Dock + Transport Footer Line:
- * - Responsive adaptive layout:
- *   - `< 520dp` portrait phones: 2 rows so 56-char `.onion` addresses get full width on Row 1,
- *     and Row 2 holds the five `44dp` circular controls (`Back`, `Forward`, single `Reload`,
- *     `Tabs [tabs.size]`, `Menu ☰`) with `8dp` gaps.
- *   - `>= 520dp` landscape/tablet: single `44dp` row with `8dp` gaps matching `App.tsx`.
+ * Strictly one-row Bottom Control Dock (`44.dp` control row inside `horizontal = 8.dp, vertical = 6.dp`
+ * padding = `56.dp` dock content height before system navigation/IME insets):
+ * - Focused: `[ Cancel (40dp) · OvUnifiedAddressCapsule (weight 1f) ]`
+ * - Unfocused (`< 560.dp`): `[ Back (40dp) · OvUnifiedAddressCapsule (weight 1f) · Tabs (40dp) · Menu (40dp) ]`
+ * - Unfocused (`>= 560.dp`): `[ Back (44dp) · Forward (44dp) · OvUnifiedAddressCapsule (weight 1f) · Tabs (44dp) · Menu (44dp) ]`
  */
 @Composable
 private fun BottomControlDock(
@@ -718,6 +615,7 @@ private fun BottomControlDock(
     onAddressChange: (String) -> Unit,
     onSubmitAddress: () -> Unit,
     onClearAddress: () -> Unit,
+    onCancelAddressEdit: () -> Unit,
     onSecurityClick: () -> Unit,
     onBack: () -> Unit,
     onForward: () -> Unit,
@@ -726,6 +624,10 @@ private fun BottomControlDock(
     onOpenMenu: () -> Unit,
 ) {
     val colors = TrapTheme.colors
+    val focusManager = LocalFocusManager.current
+    var addressFocused by remember { mutableStateOf(false) }
+    val addressHint = stringResource(R.string.address_hint)
+
     val reloadRotation = if (state.isLoading) {
         val transition = rememberInfiniteTransition(label = "reload_spin")
         val angle by transition.animateFloat(
@@ -742,210 +644,109 @@ private fun BottomControlDock(
         0f
     }
 
-    Column(
+    val topBorderColor = colors.cardBorder
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxWidth()
             .background(colors.surface)
-            .testTag("bottom_control_dock"),
+            .navigationBarsPadding()
+            .imePadding()
+            .drawBehind {
+                val strokePx = 1.dp.toPx()
+                drawLine(
+                    color = topBorderColor,
+                    start = Offset(0f, strokePx / 2f),
+                    end = Offset(size.width, strokePx / 2f),
+                    strokeWidth = strokePx,
+                )
+            }
+            .testTag("bottom_control_dock")
+            .padding(horizontal = 8.dp, vertical = 6.dp),
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(1.dp)
-                .background(colors.cardBorder),
-        )
+        val isWide = maxWidth >= 560.dp
+        val navCircleSize = if (isWide) 44.dp else 40.dp
 
-        BoxWithConstraints(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
+                .height(44.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            val isWide = maxWidth >= 520.dp
-            if (isWide) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    OvNavCircleButton(
-                        glyph = TrapGlyph.Back,
-                        contentDescription = "Back",
-                        enabled = state.canGoBack,
-                        accent = colors.amber,
-                        onClick = onBack,
-                        testTag = "nav_back",
-                    )
+            if (addressFocused) {
+                OvNavCircleButton(
+                    glyph = TrapGlyph.Close,
+                    contentDescription = "Cancel editing address",
+                    accent = colors.textMuted,
+                    size = 40.dp,
+                    onClick = {
+                        onCancelAddressEdit()
+                        focusManager.clearFocus()
+                    },
+                    testTag = "address_cancel",
+                )
+            } else {
+                OvNavCircleButton(
+                    glyph = TrapGlyph.Back,
+                    contentDescription = "Back",
+                    enabled = state.canGoBack,
+                    accent = colors.amber,
+                    size = navCircleSize,
+                    onClick = onBack,
+                    testTag = "nav_back",
+                )
+                if (isWide) {
                     OvNavCircleButton(
                         glyph = TrapGlyph.Forward,
                         contentDescription = "Forward",
                         enabled = state.canGoForward,
                         accent = colors.amber,
+                        size = 44.dp,
                         onClick = onForward,
                         testTag = "nav_forward",
                     )
-                    OvNavCircleButton(
-                        glyph = TrapGlyph.Reload,
-                        contentDescription = "Reload",
-                        accent = colors.teal,
-                        rotationDegrees = reloadRotation,
-                        onClick = onReload,
-                        testTag = "nav_reload",
-                    )
-                    OvNavCircleButton(
-                        glyph = TrapGlyph.NewTab,
-                        contentDescription = "Tabs",
-                        accent = colors.teal,
-                        badge = state.tabCount,
-                        onClick = onOpenTabs,
-                        testTag = "nav_tabs",
-                    )
-                    OvUnifiedAddressCapsule(
-                        address = address,
-                        onAddressChange = onAddressChange,
-                        onGo = onSubmitAddress,
-                        onClear = onClearAddress,
-                        onSecurityClick = onSecurityClick,
-                        blocked = state.blocked,
-                        hiddenServiceOnly = state.hiddenServiceOnly,
-                        hint = "Enter .onion address",
-                        modifier = Modifier.weight(1f),
-                    )
-                    OvNavCircleButton(
-                        glyph = TrapGlyph.Menu,
-                        contentDescription = "Menu",
-                        accent = colors.teal,
-                        onClick = onOpenMenu,
-                        testTag = "nav_menu",
-                    )
-                }
-            } else {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    OvUnifiedAddressCapsule(
-                        address = address,
-                        onAddressChange = onAddressChange,
-                        onGo = onSubmitAddress,
-                        onClear = onClearAddress,
-                        onSecurityClick = onSecurityClick,
-                        blocked = state.blocked,
-                        hiddenServiceOnly = state.hiddenServiceOnly,
-                        hint = "Enter .onion address",
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(
-                            space = 8.dp,
-                            alignment = Alignment.CenterHorizontally,
-                        ),
-                    ) {
-                        OvNavCircleButton(
-                            glyph = TrapGlyph.Back,
-                            contentDescription = "Back",
-                            enabled = state.canGoBack,
-                            accent = colors.amber,
-                            onClick = onBack,
-                            testTag = "nav_back",
-                        )
-                        OvNavCircleButton(
-                            glyph = TrapGlyph.Forward,
-                            contentDescription = "Forward",
-                            enabled = state.canGoForward,
-                            accent = colors.amber,
-                            onClick = onForward,
-                            testTag = "nav_forward",
-                        )
-                        OvNavCircleButton(
-                            glyph = TrapGlyph.Reload,
-                            contentDescription = "Reload",
-                            accent = colors.teal,
-                            rotationDegrees = reloadRotation,
-                            onClick = onReload,
-                            testTag = "nav_reload",
-                        )
-                        OvNavCircleButton(
-                            glyph = TrapGlyph.NewTab,
-                            contentDescription = "Tabs",
-                            accent = colors.teal,
-                            badge = state.tabCount,
-                            onClick = onOpenTabs,
-                            testTag = "nav_tabs",
-                        )
-                        OvNavCircleButton(
-                            glyph = TrapGlyph.Menu,
-                            contentDescription = "Menu",
-                            accent = colors.teal,
-                            onClick = onOpenMenu,
-                            testTag = "nav_menu",
-                        )
-                    }
                 }
             }
-        }
 
-        // Transport Footer Line (real Arti status + real 16-char .onion isolation token)
-        TransportFooterLine(
-            tor = state.tor,
-            onClick = onSecurityClick,
-        )
-    }
-}
-
-@Composable
-private fun TransportFooterLine(
-    tor: TorBootstrapState,
-    onClick: () -> Unit,
-) {
-    val colors = TrapTheme.colors
-    val statusText = if (tor.ready) {
-        "Tor ready"
-    } else if (tor.stage.isNotBlank()) {
-        "Tor bootstrapping ${tor.percent}% · ${tor.stage}"
-    } else {
-        "Tor bootstrapping ${tor.percent}%"
-    }
-    val isolation = tor.isolationToken?.takeIf { it.isNotBlank() }
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(role = Role.Button, onClick = onClick)
-            .padding(start = 14.dp, end = 14.dp, bottom = 8.dp)
-            .testTag("transport_footer"),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = statusText,
-                color = if (tor.ready) colors.green else colors.amber,
-                fontSize = 11.5.sp,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.weight(1f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (isolation != null) {
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    text = isolation,
-                    color = colors.teal,
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace,
-                    maxLines = 1,
+            key("unified_address_capsule") {
+                OvUnifiedAddressCapsule(
+                    address = address,
+                    onAddressChange = onAddressChange,
+                    onGo = onSubmitAddress,
+                    onClear = onClearAddress,
+                    onSecurityClick = onSecurityClick,
+                    onReload = onReload,
+                    isFocused = addressFocused,
+                    onFocusChange = { addressFocused = it },
+                    torReady = state.tor.ready,
+                    isStartPage = state.isStartPage,
+                    isLoading = state.isLoading,
+                    reloadRotation = reloadRotation,
+                    blocked = state.blocked,
+                    hint = addressHint,
+                    modifier = Modifier.weight(1f),
                 )
             }
-        }
-        if (!tor.ready) {
-            Spacer(Modifier.height(4.dp))
-            OvProgressBar(
-                progress = tor.percent / 100f,
-                modifier = Modifier.fillMaxWidth(),
-            )
+
+            if (!addressFocused) {
+                OvNavCircleButton(
+                    glyph = TrapGlyph.Tabs,
+                    contentDescription = "Tabs",
+                    accent = colors.teal,
+                    size = navCircleSize,
+                    badge = state.tabCount,
+                    onClick = onOpenTabs,
+                    testTag = "nav_tabs",
+                )
+                OvNavCircleButton(
+                    glyph = TrapGlyph.Menu,
+                    contentDescription = "Menu",
+                    accent = colors.teal,
+                    size = navCircleSize,
+                    onClick = onOpenMenu,
+                    testTag = "nav_menu",
+                )
+            }
         }
     }
 }
@@ -1054,7 +855,7 @@ private fun BackPreviewLayer(state: BrowserUiState, progress: Float) {
                 modifier = Modifier.padding(24.dp),
             ) {
                 Text(
-                    text = preview.title.ifEmpty { "Previous Hidden Service" },
+                    text = preview.title.ifEmpty { "Previous Page" },
                     color = colors.textPrimary,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
@@ -1165,9 +966,3 @@ private fun PgpFieldState.isEditablePubKeyTarget(): Boolean =
 
 private fun PgpFieldState.isEditableTarget(): Boolean =
     kind in EDITABLE_FIELD_KINDS || isEditablePubKeyTarget()
-
-private fun formatDisplayHost(url: String): String = try {
-    URI(url).host?.takeIf { it.isNotBlank() } ?: url
-} catch (_: Throwable) {
-    url
-}

@@ -3,8 +3,9 @@ package dev.onionvault
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import dev.onionvault.ui.previews.BrowserChromePreview
-import dev.onionvault.ui.previews.CrashScreenPreview
 import dev.onionvault.ui.previews.BrowserMenuPreview
+import dev.onionvault.ui.previews.ClearnetConsentPreview
+import dev.onionvault.ui.previews.CrashScreenPreview
 import dev.onionvault.ui.previews.LegalNoticesPreview
 import dev.onionvault.ui.previews.PgpActionChipsPreview
 import dev.onionvault.ui.previews.PgpDecryptionModalPreview
@@ -84,6 +85,12 @@ class OnionVaultPreviewsTest {
     @Test
     fun the_crash_screen_preview_renders() {
         compose.setContent { CrashScreenPreview() }
+        compose.onAllNodes(isRoot())[0].assertExists()
+    }
+
+    @Test
+    fun the_clearnet_consent_preview_renders() {
+        compose.setContent { ClearnetConsentPreview() }
         compose.onAllNodes(isRoot())[0].assertExists()
     }
 }

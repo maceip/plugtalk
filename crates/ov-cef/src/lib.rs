@@ -28,8 +28,9 @@ pub use cdp::{
     live_form_control_value, parse_cdp_root, CdpClassifiedNode, CdpNode, ClassifiedText,
 };
 pub use config::{
-    check_url_policy, is_allowed_url, is_svg_url, is_valid_v3_onion_host, normalize_navigation_url,
-    OvConfig, UrlPolicyDecision, V3_ONION_LABEL_LEN,
+    check_url_policy, check_url_policy_with_clearnet, check_url_policy_with_clearnet_at,
+    is_allowed_url, is_svg_url, is_valid_v3_onion_host, normalize_navigation_url, OvConfig,
+    UrlPolicyDecision, V3_ONION_LABEL_LEN,
 };
 pub use dom_model::{
     analyze_document, analyze_html, classify, css_escape_ident, decode_html_entities,

@@ -3,7 +3,7 @@
     <string name="app_name">Trap</string>
     <string name="start_url">about:blank</string>
     <string name="ddg_onion_url">https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/</string>
-    <string name="address_hint">Enter .onion address</string>
+    <string name="address_hint">Enter address</string>
     <string name="blocked">Clearnet request refused by Hidden Service Only policy.</string>
     <string name="crash_copied">Crash trace copied to clipboard.</string>
     <string name="plaintext_copied">Decrypted plaintext copied to clipboard.</string>

@@ -19,9 +19,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.onionvault.OvNative
 import dev.onionvault.ui.BackPreviewState
 import dev.onionvault.ui.BrowserScreen
 import dev.onionvault.ui.BrowserUiState
+import dev.onionvault.ui.ClearnetPromptState
 import dev.onionvault.ui.EncryptRequestState
 import dev.onionvault.ui.KeyInfo
 import dev.onionvault.ui.LegalDocument
@@ -464,5 +466,27 @@ fun RecipientPickerPreview() {
             ),
         ),
         surface = { PreviewHiddenServiceSurface() },
+    )
+}
+
+@Preview(name = "14. Clearnet Consent Interstitial Sheet", heightDp = 760)
+@Composable
+fun ClearnetConsentPreview() {
+    BrowserScreen(
+        state = chromeState(TrapThemeFamily.SecureDrop, TrapThemeMode.Dark).copy(
+            clearnetPrompt = ClearnetPromptState(
+                host = "tor.taxi",
+                pendingUrl = "https://tor.taxi",
+                suggestedPattern = "*.tor.taxi",
+            ),
+            clearnetRules = listOf(
+                OvNative.ClearnetRuleItem(
+                    pattern = "*.proton.me",
+                    createdAtMs = 1_700_000_000_000L,
+                    expiresAtMs = System.currentTimeMillis() + 259_200_000L,
+                    sessionOnly = false,
+                ),
+            ),
+        ),
     )
 }

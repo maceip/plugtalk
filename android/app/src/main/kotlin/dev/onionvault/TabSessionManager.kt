@@ -45,9 +45,14 @@ class TabSessionManager(
     private val context: Context,
     private val cdpController: CdpDomPgpController,
     private val backStackManager: OnionBackStackManager,
-    initialHiddenServiceOnly: Boolean = true,
+    initialHiddenServiceOnly: Boolean = false,
     private val onContextMenu: (ContextMenuTarget) -> Unit = {},
     private val onSelectionPgpAction: (SelectionPgpAction) -> Unit = {},
+    private val onClearnetConsentRequired: (
+        host: String,
+        normalizedUrl: String,
+        suggestedPattern: String,
+    ) -> Unit = { _, _, _ -> },
     private val onUrlBlocked: (tabId: String, blockedUrl: String, reason: String) -> Unit = { _, _, _ -> },
     private val onSecurityNotice: (String) -> Unit = {},
 ) {
@@ -144,6 +149,9 @@ class TabSessionManager(
 
     @Volatile
     private var touchSuppressed: Boolean = false
+
+    @Volatile
+    private var lastConsentInterceptedUrl: String? = null
 
     fun activeTab(): TabState? {
         val currentId = _activeTabId.value ?: return null
@@ -328,18 +336,29 @@ class TabSessionManager(
     fun loadUrl(
         rawInput: String,
         tabId: String? = _activeTabId.value,
-    ): OvNative.UrlPolicyDecision {
+    ): OvNative.UrlPolicyResult {
         val targetTabId = tabId ?: ensureInitialTab()
-        val managed = sessions[targetTabId] ?: return OvNative.UrlPolicyDecision(
+        val managed = sessions[targetTabId] ?: return OvNative.UrlPolicyResult(
             allowed = false,
-            reason = "Tab not found",
-            isOnion = false,
             normalizedUrl = "",
+            isOnion = false,
+            reason = "Tab not found",
         )
 
         val candidate = normalizeUserAddressInput(rawInput)
         val decision = evaluateUrlPolicy(candidate, _hiddenServiceOnly.value)
         if (!decision.allowed) {
+            if (decision.requiresClearnetConsent) {
+                val normalized = decision.normalizedUrl.ifBlank { candidate }
+                val host = decision.host.ifBlank {
+                    runCatching { Uri.parse(normalized).host.orEmpty() }.getOrDefault("")
+                }.trim().trimEnd('.').lowercase()
+                val suggested = decision.suggestedPattern.ifBlank {
+                    OvNative.suggestGlob(host)
+                }
+                onClearnetConsentRequired(host, normalized, suggested)
+                return decision
+            }
             updateTabState(targetTabId) {
                 it.copy(
                     lastBlockedUrl = candidate,
@@ -360,11 +379,11 @@ class TabSessionManager(
                 )
             }
             onSecurityNotice(waitReason)
-            return OvNative.UrlPolicyDecision(
+            return OvNative.UrlPolicyResult(
                 allowed = false,
-                reason = waitReason,
-                isOnion = decision.isOnion,
                 normalizedUrl = normalized,
+                isOnion = decision.isOnion,
+                reason = waitReason,
             )
         }
 
@@ -587,9 +606,19 @@ class TabSessionManager(
         // Block unsolicited popups; route explicit user-gesture links into a managed tab if allowed.
         browser.setPopupHandler { targetUrl, userGesture ->
             if (userGesture && !targetUrl.isNullOrBlank()) {
-                val decision = evaluateUrlPolicy(targetUrl, _hiddenServiceOnly.value)
+                val normalizedInput = normalizeUserAddressInput(targetUrl)
+                val decision = evaluateUrlPolicy(normalizedInput, _hiddenServiceOnly.value)
                 if (decision.allowed) {
                     mainHandler.post { createTab(decision.normalizedUrl, select = true) }
+                } else if (decision.requiresClearnetConsent) {
+                    val normalized = decision.normalizedUrl.ifBlank { normalizedInput }
+                    val host = decision.host.ifBlank {
+                        runCatching { Uri.parse(normalized).host.orEmpty() }.getOrDefault("")
+                    }.trim().trimEnd('.').lowercase()
+                    val suggested = decision.suggestedPattern.ifBlank {
+                        OvNative.suggestGlob(host)
+                    }
+                    mainHandler.post { onClearnetConsentRequired(host, normalized, suggested) }
                 } else {
                     mainHandler.post { onUrlBlocked(tabId, targetUrl, decision.reason) }
                 }
@@ -644,6 +673,15 @@ class TabSessionManager(
             override fun onLoadError(errorCode: Int, errorText: String?, failedUrl: String?) {
                 // Ignore ERR_ABORTED (-3), which occurs during normal stop/redirect.
                 if (errorCode == -3) return
+                if (!failedUrl.isNullOrBlank() && failedUrl == lastConsentInterceptedUrl) {
+                    lastConsentInterceptedUrl = null
+                    mainHandler.post {
+                        updateTabState(tabId) {
+                            it.copy(isLoading = false, loadProgress = 100)
+                        }
+                    }
+                    return
+                }
                 mainHandler.post {
                     updateTabState(tabId) {
                         it.copy(isLoading = false, loadProgress = 100)
@@ -824,6 +862,26 @@ class TabSessionManager(
 
         val decision = evaluateUrlPolicy(url, _hiddenServiceOnly.value)
         if (!decision.allowed) {
+            if (decision.requiresClearnetConsent && !_hiddenServiceOnly.value) {
+                if (isMainFrame) {
+                    lastConsentInterceptedUrl = url
+                    val normalized = decision.normalizedUrl.ifBlank { url }
+                    val host = decision.host.ifBlank {
+                        runCatching { Uri.parse(normalized).host.orEmpty() }.getOrDefault("")
+                    }.trim().trimEnd('.').lowercase()
+                    val suggested = decision.suggestedPattern.ifBlank {
+                        OvNative.suggestGlob(host)
+                    }
+                    mainHandler.post {
+                        onClearnetConsentRequired(host, normalized, suggested)
+                    }
+                    return true
+                }
+                // Non-main-frame subresources flow to Trap's local Socks5Server, which
+                // drops Chromium Google background noise and holds legitimate clearnet
+                // subresources in `pendingClearnetHost` for live consent & resume.
+                return false
+            }
             if (isMainFrame || resourceType == CefriumBrowser.ResourceRequest.TYPE_SUB_FRAME) {
                 mainHandler.post {
                     updateTabState(tabId) {
@@ -869,22 +927,22 @@ class TabSessionManager(
     private fun evaluateUrlPolicy(
         url: String,
         hiddenServiceOnly: Boolean,
-    ): OvNative.UrlPolicyDecision {
+    ): OvNative.UrlPolicyResult {
         val trimmed = url.trim()
         if (trimmed.equals("about:blank", ignoreCase = true)) {
-            return OvNative.UrlPolicyDecision(
+            return OvNative.UrlPolicyResult(
                 allowed = true,
-                reason = "",
-                isOnion = false,
                 normalizedUrl = "about:blank",
+                isOnion = false,
+                reason = "",
             )
         }
         if (!OvNative.isLoaded) {
-            return OvNative.UrlPolicyDecision(
+            return OvNative.UrlPolicyResult(
                 allowed = false,
-                reason = "Native Tor/policy engine not loaded",
-                isOnion = false,
                 normalizedUrl = trimmed,
+                isOnion = false,
+                reason = "Native Tor/policy engine not loaded",
             )
         }
         val json = runCatching {

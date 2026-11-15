@@ -120,4 +120,24 @@ class CrashGuardTest {
             cl.getSwitchValue("disable-features", ""),
         )
     }
+
+    @Test
+    fun hardened_disabled_features_suppress_chromium_clearnet_background_endpoints() {
+        CommandLine.init(null)
+        val cl = CommandLine.getInstance()
+
+        TrapApplication.HARDENED_DISABLED_FEATURES.forEach { feature ->
+            TrapApplication.appendDisabledFeature(cl, feature)
+        }
+        // Re-applying comma-joined list must remain deduplicated in exact order.
+        TrapApplication.appendDisabledFeature(
+            cl,
+            "AutofillServerCommunication,OptimizationHints,Translate,MediaRouter",
+        )
+
+        assertEquals(
+            "PartitionAllocMemoryTagging,AutofillServerCommunication,OptimizationHints,Translate,MediaRouter",
+            cl.getSwitchValue("disable-features", ""),
+        )
+    }
 }

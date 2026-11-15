@@ -22,7 +22,13 @@ use tokio::{
     sync::watch,
 };
 
-use crate::isolation::{apex_domain, is_valid_v3_onion_host, IsolationRegistry};
+use crate::{
+    clearnet::{
+        is_chromium_background_endpoint, now_epoch_ms, ClearnetAllowlist, PendingRegistration,
+        DEFAULT_CONSENT_WAIT_TIMEOUT,
+    },
+    isolation::{apex_domain, is_valid_v3_onion_host, IsolationRegistry},
+};
 
 /// SOCKS5 protocol version.
 pub const VERSION: u8 = 0x05;
@@ -264,15 +270,37 @@ pub struct Socks5Server {
     shutdown: watch::Sender<bool>,
     accept_task: tokio::task::JoinHandle<()>,
     allow_clearnet: Arc<AtomicBool>,
+    clearnet: Arc<ClearnetAllowlist>,
 }
 
 impl Socks5Server {
-    /// Bind the listener and start accepting connections.
+    /// Bind the listener and start accepting connections with a default in-memory
+    /// [`ClearnetAllowlist`] and 30-second interactive consent wait window.
     pub async fn start(
         bind: SocketAddr,
         isolation: Arc<IsolationRegistry>,
         allow_clearnet: bool,
         connect_timeout: Duration,
+    ) -> anyhow::Result<Arc<Self>> {
+        Self::start_with_clearnet(
+            bind,
+            isolation,
+            allow_clearnet,
+            Arc::new(ClearnetAllowlist::in_memory()),
+            connect_timeout,
+            DEFAULT_CONSENT_WAIT_TIMEOUT,
+        )
+        .await
+    }
+
+    /// Bind the listener and start accepting connections gated by `clearnet`.
+    pub async fn start_with_clearnet(
+        bind: SocketAddr,
+        isolation: Arc<IsolationRegistry>,
+        allow_clearnet: bool,
+        clearnet: Arc<ClearnetAllowlist>,
+        connect_timeout: Duration,
+        consent_timeout: Duration,
     ) -> anyhow::Result<Arc<Self>> {
         let listener = TcpListener::bind(bind)
             .await
@@ -284,6 +312,7 @@ impl Socks5Server {
         let accept_task = {
             let shutdown = shutdown.clone();
             let allow_clearnet = allow_clearnet.clone();
+            let clearnet = clearnet.clone();
             tokio::spawn(async move {
                 loop {
                     tokio::select! {
@@ -297,13 +326,16 @@ impl Socks5Server {
                             let isolation = isolation.clone();
                             let shutdown = shutdown.subscribe();
                             let allow_clearnet = allow_clearnet.clone();
+                            let clearnet = clearnet.clone();
                             tokio::spawn(async move {
                                 if let Err(err) = handle_connection(
                                     stream,
                                     peer,
                                     isolation,
                                     allow_clearnet,
+                                    clearnet,
                                     connect_timeout,
+                                    consent_timeout,
                                     shutdown,
                                 )
                                 .await
@@ -322,12 +354,18 @@ impl Socks5Server {
             shutdown,
             accept_task,
             allow_clearnet,
+            clearnet,
         }))
     }
 
     /// The address the listener is bound to, including the ephemeral port.
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
+    }
+
+    /// Shared clearnet consent allowlist & pending-host coordinator.
+    pub fn clearnet(&self) -> &Arc<ClearnetAllowlist> {
+        &self.clearnet
     }
 
     /// Current clearnet policy (`false` means hidden-service-only mode).
@@ -338,11 +376,17 @@ impl Socks5Server {
     /// Change the traffic policy of the listener immediately.
     pub fn set_allow_clearnet(&self, allow: bool) {
         self.allow_clearnet.store(allow, Ordering::Release);
+        if !allow {
+            self.clearnet.clear_pending();
+        } else {
+            self.clearnet.notify_policy_changed();
+        }
     }
 
-    /// Stop accepting new connections.
+    /// Stop accepting new connections and wake any pending clearnet waiters.
     pub fn shutdown(&self) {
         let _ = self.shutdown.send(true);
+        self.clearnet.clear_pending();
         self.accept_task.abort();
     }
 }
@@ -350,17 +394,21 @@ impl Socks5Server {
 impl Drop for Socks5Server {
     fn drop(&mut self) {
         let _ = self.shutdown.send(true);
+        self.clearnet.clear_pending();
         self.accept_task.abort();
     }
 }
 
 /// Serve a single SOCKS5 client connection.
+#[allow(clippy::too_many_arguments)]
 async fn handle_connection(
     mut stream: TcpStream,
     _peer: SocketAddr,
     isolation: Arc<IsolationRegistry>,
     allow_clearnet: Arc<AtomicBool>,
+    clearnet: Arc<ClearnetAllowlist>,
     connect_timeout: Duration,
+    consent_timeout: Duration,
     mut shutdown: watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
     stream.set_nodelay(true)?;
@@ -397,6 +445,86 @@ async fn handle_connection(
             return Ok(());
         }
         Socks5Decision::Proceed => {}
+    }
+
+    // Enforce interactive ClearnetAllowlist consent on EVERY non-`.onion` connection:
+    if !request.is_onion() {
+        let now_ms = now_epoch_ms();
+        if !clearnet.is_allowed(&request.host, now_ms) {
+            if is_chromium_background_endpoint(&request.host) {
+                log::debug!(
+                    "silently refusing unsolicited Chromium background endpoint {}:{}",
+                    request.host,
+                    request.port
+                );
+                write_reply(&mut stream, REP_NOT_ALLOWED).await?;
+                return Ok(());
+            }
+
+            match clearnet.try_begin_pending_wait(&request.host, now_ms) {
+                PendingRegistration::AlreadyAllowed => {}
+                PendingRegistration::SessionDenied => {
+                    log::debug!(
+                        "refusing session-denied clearnet host {}:{}",
+                        request.host,
+                        request.port
+                    );
+                    write_reply(&mut stream, REP_NOT_ALLOWED).await?;
+                    return Ok(());
+                }
+                PendingRegistration::Waiting(pending_guard, mut rx) => {
+                    log::info!(
+                        "holding clearnet SOCKS5 connection to {}:{} awaiting user consent",
+                        request.host,
+                        request.port
+                    );
+                    let deadline = tokio::time::Instant::now() + consent_timeout;
+                    loop {
+                        if !allow_clearnet.load(Ordering::Acquire) {
+                            pending_guard.release();
+                            write_reply(&mut stream, REP_NOT_ALLOWED).await?;
+                            return Ok(());
+                        }
+                        let check_ms = now_epoch_ms();
+                        if clearnet.is_allowed(&request.host, check_ms) {
+                            pending_guard.release();
+                            break;
+                        }
+                        if clearnet.is_session_denied(&request.host) {
+                            pending_guard.release();
+                            write_reply(&mut stream, REP_NOT_ALLOWED).await?;
+                            return Ok(());
+                        }
+
+                        tokio::select! {
+                            biased;
+                            changed = shutdown.changed() => {
+                                let _ = changed;
+                                pending_guard.release();
+                                return Ok(());
+                            }
+                            changed = rx.changed() => {
+                                if changed.is_err() {
+                                    pending_guard.release();
+                                    write_reply(&mut stream, REP_NOT_ALLOWED).await?;
+                                    return Ok(());
+                                }
+                            }
+                            _ = tokio::time::sleep_until(deadline) => {
+                                log::warn!(
+                                    "clearnet consent wait timed out for {}:{}",
+                                    request.host,
+                                    request.port
+                                );
+                                pending_guard.release();
+                                write_reply(&mut stream, REP_NOT_ALLOWED).await?;
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     let key = isolation_key(&request.host, &username);

@@ -20,7 +20,7 @@
 #   5. `classes*.dex` type tables contain `Lorg/chromium/`, `Lcom/cefrium/`, `Lorg/jni_zero/`,
 #      and `Ldev/onionvault/` (catching the missing-Java-layer crash from INCIDENT-REPORT.md).
 #   6. `libonion_vault.so` on BOTH `arm64-v8a` and `x86_64` has ZERO `libcef.so` `DT_NEEDED`
-#      entries and exports all 19 `Java_dev_onionvault_OvNative_*` JNI entry points.
+#      entries and exports all 24 `Java_dev_onionvault_OvNative_*` JNI entry points.
 #   7. Valid APK Signature Scheme v2+ signature (matching deterministic `android/app/debug.keystore`
 #      when signed with the Android Debug DN).
 
@@ -356,16 +356,19 @@ with zipfile.ZipFile(apk_path, "r") as zf:
             )
 PY
 
-echo "== [3/5] Auditing ELF DT_NEEDED & 19 JNI exports on arm64-v8a and x86_64 =="
+echo "== [3/5] Auditing ELF DT_NEEDED & 24 JNI exports on arm64-v8a and x86_64 =="
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 EXPECTED_JNI_SYMBOLS=(
+    "Java_dev_onionvault_OvNative_nativeAllowClearnet"
     "Java_dev_onionvault_OvNative_nativeCheckUrlPolicy"
     "Java_dev_onionvault_OvNative_nativeClassifyCdpDom"
     "Java_dev_onionvault_OvNative_nativeClassifyText"
+    "Java_dev_onionvault_OvNative_nativeClearClearnetRules"
     "Java_dev_onionvault_OvNative_nativeDecrypt"
     "Java_dev_onionvault_OvNative_nativeDeleteKey"
+    "Java_dev_onionvault_OvNative_nativeDenyClearnet"
     "Java_dev_onionvault_OvNative_nativeEncrypt"
     "Java_dev_onionvault_OvNative_nativeExportPublicKey"
     "Java_dev_onionvault_OvNative_nativeGenerateKey"
@@ -373,8 +376,10 @@ EXPECTED_JNI_SYMBOLS=(
     "Java_dev_onionvault_OvNative_nativeImportKey"
     "Java_dev_onionvault_OvNative_nativeInit"
     "Java_dev_onionvault_OvNative_nativeLastInitError"
+    "Java_dev_onionvault_OvNative_nativeListClearnetRulesJson"
     "Java_dev_onionvault_OvNative_nativeListKeysJson"
     "Java_dev_onionvault_OvNative_nativeResetTorIsolation"
+    "Java_dev_onionvault_OvNative_nativeRevokeClearnetRule"
     "Java_dev_onionvault_OvNative_nativeSetHiddenServiceOnly"
     "Java_dev_onionvault_OvNative_nativeSetRequireBiometric"
     "Java_dev_onionvault_OvNative_nativeShutdown"
@@ -409,7 +414,7 @@ for abi in arm64-v8a x86_64; do
     if (( missing_count > 0 )); then
         exit 1
     fi
-    echo "  [elf:${abi}] zero libcef.so DT_NEEDED; ${#EXPECTED_JNI_SYMBOLS[@]}/19 OvNative JNI symbols exported"
+    echo "  [elf:${abi}] zero libcef.so DT_NEEDED; ${#EXPECTED_JNI_SYMBOLS[@]}/24 OvNative JNI symbols exported"
 done
 
 echo "== [4/5] Auditing APK Signature Scheme v2+ & deterministic debug signing certificate =="

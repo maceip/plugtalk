@@ -4,15 +4,19 @@ import android.content.ClipboardManager
 import android.content.Context
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.height
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import dev.onionvault.ui.DUCKDUCKGO_ONION_URL
 import dev.onionvault.ui.TrapPreferences
 import dev.onionvault.ui.TrapThemeFamily
 import dev.onionvault.ui.TrapThemeMode
@@ -30,10 +34,11 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * End-to-end instrumentation suite running on a real Android device / emulator.
+ * End-to-end instrumentation suite running on a real Android device / Limrun instance.
  *
- * Exercises live [MainActivity], [BrowserScreen], [TrapPreferences], [TabSessionManager],
- * and [OvNative] (Arti Tor status/policy + Sequoia Android Keystore OpenPGP keyring).
+ * Exercises live [MainActivity], single-row [BrowserScreen] chrome, minimal [StartPage],
+ * [ClearnetConsentSheet] (3-day TTL persistence, custom `*` globbing, and rule revocation),
+ * [TrapPreferences], [TabSessionManager], and [OvNative] (Arti Tor + Sequoia OpenPGP).
  */
 @RunWith(AndroidJUnit4::class)
 class BrowserChromeInstrumentedTest {
@@ -42,17 +47,37 @@ class BrowserChromeInstrumentedTest {
     val composeRule = createAndroidComposeRule<MainActivity>()
 
     @Test
-    fun chrome_settings_security_tabs_and_native_keyring_e2e() {
+    fun chrome_settings_security_tabs_clearnet_consent_and_native_keyring_e2e() {
         val activity = composeRule.activity
         val prefs = TrapPreferences(activity)
 
-        // 1. StartPage renders on about:blank with empty EditableText + honest .onion placeholder
+        if (OvNative.isLoaded) {
+            OvNative.nativeClearClearnetRules()
+        }
+
+        // 1. Minimal StartPage + single-row bottom dock (~56.dp content height, zero top bar)
         composeRule.onNodeWithTag("browser_screen").assertIsDisplayed()
         composeRule.onNodeWithTag("start_page").assertIsDisplayed()
-        composeRule.onNodeWithTag("address_input").assertTextEquals("Enter .onion address", "")
+        composeRule.onNodeWithTag("start_tor_status").assertIsDisplayed()
+        composeRule.onNodeWithTag("top_identity_header").assertDoesNotExist()
+        composeRule.onNodeWithTag("transport_footer").assertDoesNotExist()
+        composeRule.onNodeWithTag("start_security_card").assertDoesNotExist()
+        composeRule.onNodeWithTag("start_ddg_onion_card").assertDoesNotExist()
+        composeRule.onNodeWithText("Launch").assertDoesNotExist()
+        composeRule.onNodeWithTag("address_input").assertTextEquals("Enter address", "")
 
-        // 2. Settings Sheet persists Theme Family, Mode, and Default Zoom
-        composeRule.onNodeWithTag("start_open_settings").performScrollTo().performClick()
+        val dockHeight = composeRule.onNodeWithTag("bottom_control_dock")
+            .getUnclippedBoundsInRoot()
+            .height
+        assertTrue(
+            "Expected single-row bottom_control_dock content height < 90dp, got $dockHeight",
+            dockHeight >= 48.dp && dockHeight < 90.dp,
+        )
+
+        // 2. Menu -> Settings Sheet persists Theme Family & Appearance Mode
+        composeRule.onNodeWithTag("nav_menu").performClick()
+        composeRule.onNodeWithTag("browser_menu_sheet").assertIsDisplayed()
+        composeRule.onNodeWithTag("menu_settings").performScrollTo().performClick()
         composeRule.onNodeWithTag("settings_sheet").assertIsDisplayed()
 
         composeRule.onNodeWithText("Neon Graffiti").performClick()
@@ -72,12 +97,12 @@ class BrowserChromeInstrumentedTest {
         composeRule.onNodeWithTag("sheet_close_button").performClick()
         composeRule.waitForIdle()
 
-        // 3. TOR Pill -> Security & Circuit Sheet -> toggle Hidden Service Only -> native state transition
-        composeRule.onNodeWithTag("top_tor_pill").performClick()
+        // 3. Tor Shield -> Security & Circuit Sheet -> verify Hidden Service Only toggle
+        composeRule.onNodeWithTag("address_security_button").performClick()
         composeRule.onNodeWithTag("security_circuit_sheet").assertIsDisplayed()
 
         val initialHiddenOnly = prefs.hiddenServiceOnly
-        composeRule.onNodeWithTag("security_hidden_service_switch").performClick()
+        composeRule.onNodeWithTag("security_hidden_service_switch").performScrollTo().performClick()
         composeRule.waitForIdle()
         assertEquals(!initialHiddenOnly, prefs.hiddenServiceOnly)
         if (OvNative.isLoaded) {
@@ -85,30 +110,26 @@ class BrowserChromeInstrumentedTest {
             assertEquals(!initialHiddenOnly, nativeStatus.hiddenServiceOnly)
         }
 
-        // Restore Hidden Service Only = true
-        if (!prefs.hiddenServiceOnly) {
-            composeRule.onNodeWithTag("security_hidden_service_switch").performClick()
+        // Ensure Hidden Service Only = false (default clearnet consent mode)
+        if (prefs.hiddenServiceOnly) {
+            composeRule.onNodeWithTag("security_hidden_service_switch").performScrollTo().performClick()
             composeRule.waitForIdle()
         }
-        assertTrue(prefs.hiddenServiceOnly)
+        assertFalse(prefs.hiddenServiceOnly)
         composeRule.onNodeWithTag("sheet_close_button").performClick()
         composeRule.waitForIdle()
 
-        // 4. Multi-Tab Sheet: create tab, verify tab count, close sheet
+        // 4. Multi-Tab Sheet: create tab, verify sheet, close sheet
         composeRule.onNodeWithTag("nav_tabs").performClick()
         composeRule.onNodeWithTag("tabs_sheet").assertIsDisplayed()
         composeRule.onNodeWithTag("tabs_new_tab").performClick()
         composeRule.waitForIdle()
 
-        composeRule.onNodeWithTag("nav_tabs").performClick()
-        composeRule.onNodeWithTag("tabs_sheet").assertIsDisplayed()
-        composeRule.onNodeWithTag("sheet_close_button").performClick()
-        composeRule.waitForIdle()
-
-        // 5. Keyring Sheet: generate real Sequoia OpenPGP keypair & export public key to clipboard
+        // 5. Keyring Sheet via Menu -> PGP Keyring: generate real Sequoia keypair & Copy PubKey
         if (OvNative.isLoaded) {
             val beforeCount = OvNative.parseKeys(OvNative.nativeListKeysJson()).size
-            composeRule.onNodeWithTag("top_keyring_button").performClick()
+            composeRule.onNodeWithTag("nav_menu").performClick()
+            composeRule.onNodeWithTag("menu_keyring").performScrollTo().performClick()
             composeRule.onNodeWithTag("keyring_sheet").assertIsDisplayed()
 
             composeRule.onNodeWithText("Generate").performClick()
@@ -132,23 +153,73 @@ class BrowserChromeInstrumentedTest {
             val clipText = clipboard.primaryClip?.getItemAt(0)?.text?.toString().orEmpty()
             assertTrue(clipText.contains("BEGIN PGP PUBLIC KEY BLOCK"))
 
-            // Clean up generated test key
             OvNative.nativeDeleteKey(created.fingerprint)
             composeRule.onNodeWithTag("sheet_close_button").performClick()
             composeRule.waitForIdle()
         }
 
-        // 6. Hidden Service Only policy blocks clearnet URL & StartPage launches v3 .onion address
-        composeRule.onNodeWithTag("address_input").performTextInput("https://example.com")
-        composeRule.onNodeWithTag("address_go").performClick()
-        composeRule.waitForIdle()
-        composeRule.onNodeWithTag("status_notice_banner").assertIsDisplayed()
-        composeRule.onNodeWithTag("address_clear").performClick()
-        composeRule.waitForIdle()
+        // 6. Clearnet Consent Interstitial Sheet E2E: `tor.taxi` -> `*.tor.taxi` -> Allow for 3 days -> Revoke
+        if (OvNative.isLoaded) {
+            try {
+                OvNative.nativeClearClearnetRules()
+                composeRule.onNodeWithTag("address_input").performTextInput("tor.taxi")
+                composeRule.onNodeWithTag("address_go").performClick()
 
-        composeRule.onNodeWithTag("start_ddg_onion_card").performScrollTo().performClick()
-        composeRule.waitForIdle()
-        composeRule.onNodeWithTag("address_input").assertTextEquals(DUCKDUCKGO_ONION_URL)
+                composeRule.waitUntil(timeoutMillis = 10_000L) {
+                    composeRule.onAllNodesWithTag("clearnet_consent_sheet")
+                        .fetchSemanticsNodes()
+                        .isNotEmpty()
+                }
+                composeRule.onNodeWithTag("status_notice_banner").assertDoesNotExist()
+                composeRule.onNodeWithTag("clearnet_consent_sheet").assertIsDisplayed()
+                composeRule.onNodeWithTag("clearnet_pattern_input").assertTextEquals("*.tor.taxi")
+
+                // One tap allows *.tor.taxi for 3 days and navigates to https://tor.taxi
+                composeRule.onNodeWithTag("clearnet_allow_3d_button").performClick()
+                composeRule.waitUntil(timeoutMillis = 10_000L) {
+                    OvNative.parseClearnetRules(OvNative.nativeListClearnetRulesJson())
+                        .any { it.pattern == "*.tor.taxi" && !it.sessionOnly } &&
+                        composeRule.onAllNodesWithTag("clearnet_consent_sheet")
+                            .fetchSemanticsNodes()
+                            .isEmpty()
+                }
+                composeRule.onNodeWithTag("address_input").assertTextEquals("https://tor.taxi")
+
+                // Custom glob editing + Revoke via SecurityCircuitSheet
+                composeRule.onNodeWithTag("nav_tabs").performClick()
+                composeRule.onNodeWithTag("tabs_new_tab").performClick()
+                composeRule.waitForIdle()
+
+                composeRule.onNodeWithTag("address_input").performTextInput("sub.example.org")
+                composeRule.onNodeWithTag("address_go").performClick()
+                composeRule.waitUntil(timeoutMillis = 10_000L) {
+                    composeRule.onAllNodesWithTag("clearnet_consent_sheet")
+                        .fetchSemanticsNodes()
+                        .isNotEmpty()
+                }
+                composeRule.onNodeWithTag("clearnet_pattern_input")
+                    .performTextReplacement("*example.org")
+                composeRule.onNodeWithTag("clearnet_allow_3d_button").performClick()
+                composeRule.waitUntil(timeoutMillis = 10_000L) {
+                    OvNative.parseClearnetRules(OvNative.nativeListClearnetRulesJson())
+                        .any { it.pattern == "*example.org" }
+                }
+
+                composeRule.onNodeWithTag("address_security_button").performClick()
+                composeRule.onNodeWithTag("security_circuit_sheet").assertIsDisplayed()
+                composeRule.onNodeWithTag("clearnet_revoke_*example.org")
+                    .performScrollTo()
+                    .performClick()
+                composeRule.waitUntil(timeoutMillis = 10_000L) {
+                    OvNative.parseClearnetRules(OvNative.nativeListClearnetRulesJson())
+                        .none { it.pattern == "*example.org" }
+                }
+                composeRule.onNodeWithTag("sheet_close_button").performClick()
+                composeRule.waitForIdle()
+            } finally {
+                OvNative.nativeClearClearnetRules()
+            }
+        }
     }
 
     @Test
@@ -163,11 +234,12 @@ class BrowserChromeInstrumentedTest {
         prefs.requireBiometric = false
 
         // Generate a dedicated Sequoia OpenPGP own keypair via the real KeyringSheet UI
-        // so MainActivity refreshes uiState.keys and defaultKeyFingerprint end-to-end.
+        // (opened via Menu -> PGP Keyring) so MainActivity refreshes uiState.keys end-to-end.
         val beforeKeys = OvNative.parseKeys(OvNative.nativeListKeysJson())
         val beforeFingerprints = beforeKeys.map { it.fingerprint }.toSet()
 
-        composeRule.onNodeWithTag("top_keyring_button").performClick()
+        composeRule.onNodeWithTag("nav_menu").performClick()
+        composeRule.onNodeWithTag("menu_keyring").performScrollTo().performClick()
         composeRule.onNodeWithTag("keyring_sheet").assertIsDisplayed()
         composeRule.onNodeWithText("Generate").performClick()
         composeRule.onNodeWithTag("keygen_userid_input").performTextInput("ZeroJS Signer <zerojs@onion>")
