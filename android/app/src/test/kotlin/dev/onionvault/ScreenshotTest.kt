@@ -37,7 +37,7 @@ import dev.onionvault.ui.OvCrashScreen
 import dev.onionvault.ui.PgpFieldState
 import dev.onionvault.ui.PgpOverlayState
 import dev.onionvault.ui.PgpPlaintextState
-import dev.onionvault.ui.START_PAGE_DDG_ONION_URL
+import dev.onionvault.ui.DUCKDUCKGO_ONION_URL
 import dev.onionvault.ui.TabItemState
 import dev.onionvault.ui.TorBootstrapState
 import dev.onionvault.ui.TrapPreferences
@@ -187,7 +187,7 @@ class ScreenshotTest {
         compose.onNodeWithTag("nav_forward").assertIsNotEnabled()
 
         compose.onNodeWithTag("start_ddg_onion_card").performClick()
-        assertEquals(START_PAGE_DDG_ONION_URL, navigatedUrl)
+        assertEquals(DUCKDUCKGO_ONION_URL, navigatedUrl)
     }
 
     @Test
@@ -244,7 +244,7 @@ class ScreenshotTest {
         var resetCount = 0
         var uiState by mutableStateOf(
             BrowserUiState(
-                url = START_PAGE_DDG_ONION_URL,
+                url = DUCKDUCKGO_ONION_URL,
                 title = "DuckDuckGo",
                 hiddenServiceOnly = true,
                 tor = TorBootstrapState(
@@ -293,7 +293,7 @@ class ScreenshotTest {
                 state = BrowserUiState(
                     tabs = listOf(
                         TabItemState(id = "tab-1", title = "Trap Start", url = "about:blank", isActive = true),
-                        TabItemState(id = "tab-2", title = "DuckDuckGo", url = START_PAGE_DDG_ONION_URL, isActive = false, isOnion = true),
+                        TabItemState(id = "tab-2", title = "DuckDuckGo", url = DUCKDUCKGO_ONION_URL, isActive = false, isOnion = true),
                     ),
                     activeTabId = "tab-1",
                 ),
@@ -449,11 +449,11 @@ class ScreenshotTest {
         compose.setContent {
             BrowserScreen(
                 state = BrowserUiState(
-                    url = START_PAGE_DDG_ONION_URL,
+                    url = DUCKDUCKGO_ONION_URL,
                     title = "DuckDuckGo",
                     viewingSnapshot = true,
                     backPreview = BackPreviewState(
-                        url = START_PAGE_DDG_ONION_URL,
+                        url = DUCKDUCKGO_ONION_URL,
                         title = "DuckDuckGo",
                     ),
                 ),
