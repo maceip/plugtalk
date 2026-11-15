@@ -337,7 +337,7 @@ private fun BrowserScreenContent(
                     .weight(1f)
                     .background(colors.surface2),
             ) {
-                if (progress > 0f || state.backPreview != null) {
+                if (progress > 0f && state.backPreview != null) {
                     BackPreviewLayer(state = state, progress = progress)
                 }
 
@@ -351,6 +351,10 @@ private fun BrowserScreenContent(
                         },
                 ) {
                     surface()
+
+                    if (state.viewingSnapshot && state.backPreview != null && progress == 0f) {
+                        BackPreviewLayer(state = state, progress = 1f)
+                    }
 
                     if (state.isStartPage && progress == 0f) {
                         StartPage(
@@ -1133,20 +1137,11 @@ private fun PgpFieldOverlay(
                     }
 
                     "pgp_public_key" -> {
-                        val isInsertSelf = field.label == "Insert My PubKey" && field.armored.isNullOrBlank()
-                        if (isInsertSelf) {
-                            OvPgpPill(
-                                text = "Insert My PubKey",
-                                kind = PgpPillKind.InsertPubKey,
-                                onClick = { onInsertMyPubKey(field) },
-                            )
-                        } else {
-                            OvPgpPill(
-                                text = "Import Key",
-                                kind = PgpPillKind.ImportKey,
-                                onClick = { onFieldAction(field) },
-                            )
-                        }
+                        OvPgpPill(
+                            text = "Import Key",
+                            kind = PgpPillKind.ImportKey,
+                            onClick = { onFieldAction(field) },
+                        )
                     }
                 }
             }
