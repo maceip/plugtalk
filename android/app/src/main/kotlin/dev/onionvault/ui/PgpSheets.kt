@@ -327,7 +327,7 @@ fun EncryptPickerSheet(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 370.dp)
+                    .heightIn(max = 350.dp)
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {

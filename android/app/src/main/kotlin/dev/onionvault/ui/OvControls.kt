@@ -78,9 +78,7 @@ fun OvNavCircleButton(
     val borderColor = if (enabled) colors.border else colors.border.copy(alpha = 0.45f)
 
     Box(
-        modifier = modifier
-            .size(size)
-            .then(if (testTag != null) Modifier.testTag(testTag) else Modifier),
+        modifier = modifier.size(size),
         contentAlignment = Alignment.Center,
     ) {
         Box(
@@ -94,7 +92,8 @@ fun OvNavCircleButton(
                     role = Role.Button,
                     onClick = onClick,
                 )
-                .semantics { this.contentDescription = contentDescription },
+                .semantics { this.contentDescription = contentDescription }
+                .then(if (testTag != null) Modifier.testTag(testTag) else Modifier),
             contentAlignment = Alignment.Center,
         ) {
             TrapIcon(

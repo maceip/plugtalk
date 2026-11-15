@@ -303,9 +303,9 @@ fun SettingsSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(max = 390.dp)
+                .heightIn(max = 460.dp)
                 .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(9.dp),
         ) {
             SettingSectionLabel("Theme Family")
             OvSegmentedRow(
