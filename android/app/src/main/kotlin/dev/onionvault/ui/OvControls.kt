@@ -720,15 +720,19 @@ fun OvBottomSheet(
     val sheetShape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
 
     Box(
-        modifier = modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.56f))
-            .clickable(onClick = onDismiss)
-            .statusBarsPadding(),
+        modifier = modifier.fillMaxSize(),
         contentAlignment = Alignment.BottomCenter,
     ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.56f))
+                .clickable(onClick = onDismiss),
+        )
+
         Column(
             modifier = Modifier
+                .statusBarsPadding()
                 .fillMaxWidth()
                 .clip(sheetShape)
                 .background(colors.surface)
