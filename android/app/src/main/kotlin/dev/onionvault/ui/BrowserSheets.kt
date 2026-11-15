@@ -650,7 +650,7 @@ fun SettingsSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f, fill = false)
-                .heightIn(max = 460.dp)
+                .heightIn(max = 560.dp)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(9.dp),
         ) {
@@ -712,32 +712,32 @@ fun SettingsSheet(
                 onSelect = onSelectDefaultZoom,
                 modifier = Modifier.testTag("settings_default_zoom"),
             )
-        }
 
-        Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(4.dp))
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            OvSecondaryButton(
-                text = "Licences",
-                glyph = TrapGlyph.Legal,
-                onClick = {
-                    onDismiss()
-                    onOpenLegalNotices()
-                },
-                modifier = Modifier.weight(1f),
-            )
-            OvSecondaryButton(
-                text = "Clear Session",
-                glyph = TrapGlyph.Delete,
-                accent = colors.danger,
-                onClick = { confirmClearSession = true },
-                modifier = Modifier
-                    .weight(1f)
-                    .testTag("settings_clear_session"),
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                OvSecondaryButton(
+                    text = "Licences",
+                    glyph = TrapGlyph.Legal,
+                    onClick = {
+                        onDismiss()
+                        onOpenLegalNotices()
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+                OvSecondaryButton(
+                    text = "Clear Session",
+                    glyph = TrapGlyph.Delete,
+                    accent = colors.danger,
+                    onClick = { confirmClearSession = true },
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("settings_clear_session"),
+                )
+            }
         }
     }
 

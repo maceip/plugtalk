@@ -40,6 +40,8 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -731,7 +733,18 @@ fun OvBottomSheet(
                 .clip(sheetShape)
                 .background(colors.surface)
                 .border(1.dp, colors.border, sheetShape)
-                .clickable(enabled = false, onClick = {})
+                .pointerInput(Unit) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Final)
+                            event.changes.forEach { change ->
+                                if (!change.isConsumed) {
+                                    change.consume()
+                                }
+                            }
+                        }
+                    }
+                }
                 .navigationBarsPadding()
                 .padding(horizontal = 16.dp, vertical = 12.dp),
         ) {
