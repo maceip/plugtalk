@@ -253,13 +253,20 @@ class BrowserChromeInstrumentedTest {
             )
             assertEquals("Plaintext secret drop", readControlInnerEditorById(initialDom, "msg").trim())
 
-            // 3. Tap "Insert My PubKey" on #pub (first pill) -> verify Blink #inner-editor read-back.
+            // 3. Tap "Insert My PubKey" on #pub (first pill) -> verify status banner & Blink #inner-editor read-back.
             composeRule.onAllNodesWithText("Insert My PubKey")[0].performClick()
             composeRule.waitUntil(timeoutMillis = 15_000L) {
-                readControlInnerEditorById(queryPiercedDomJson(activity, browser), "pub")
-                    .contains("BEGIN PGP PUBLIC KEY BLOCK")
+                composeRule.onAllNodesWithText("Inserted public key and verified DOM field")
+                    .fetchSemanticsNodes()
+                    .isNotEmpty()
             }
-            val pubFieldValue = readControlInnerEditorById(queryPiercedDomJson(activity, browser), "pub")
+            val pubFieldValue = awaitControlInnerEditorContains(
+                activity = activity,
+                browser = browser,
+                elementId = "pub",
+                expectedSubstring = "BEGIN PGP PUBLIC KEY BLOCK",
+                timeoutMs = 10_000L,
+            )
             assertTrue(pubFieldValue.contains("-----BEGIN PGP PUBLIC KEY BLOCK-----"))
             assertTrue(pubFieldValue.contains("-----END PGP PUBLIC KEY BLOCK-----"))
             assertFalse(
@@ -308,6 +315,25 @@ class BrowserChromeInstrumentedTest {
                 prefs.defaultKeyFingerprint = ""
             }
         }
+    }
+
+    private fun awaitControlInnerEditorContains(
+        activity: MainActivity,
+        browser: com.cefrium.CefriumBrowser,
+        elementId: String,
+        expectedSubstring: String,
+        timeoutMs: Long,
+    ): String {
+        val deadline = android.os.SystemClock.uptimeMillis() + timeoutMs
+        var lastValue = ""
+        while (android.os.SystemClock.uptimeMillis() < deadline) {
+            lastValue = readControlInnerEditorById(queryPiercedDomJson(activity, browser), elementId)
+            if (lastValue.contains(expectedSubstring)) {
+                return lastValue
+            }
+            android.os.SystemClock.sleep(150L)
+        }
+        return lastValue
     }
 
     private fun queryPiercedDomJson(
