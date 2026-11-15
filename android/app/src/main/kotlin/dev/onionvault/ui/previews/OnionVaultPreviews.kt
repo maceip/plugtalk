@@ -2,238 +2,240 @@ package dev.onionvault.ui.previews
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.onionvault.R
+import dev.onionvault.ui.BackPreviewState
 import dev.onionvault.ui.BrowserScreen
-import dev.onionvault.ui.OvCrashScreen
 import dev.onionvault.ui.BrowserUiState
-import dev.onionvault.ui.CircuitHop
-import dev.onionvault.ui.CircuitState
+import dev.onionvault.ui.EncryptRequestState
 import dev.onionvault.ui.KeyInfo
 import dev.onionvault.ui.LegalDocument
 import dev.onionvault.ui.NormalizedBounds
+import dev.onionvault.ui.OvCrashScreen
 import dev.onionvault.ui.PgpFieldState
 import dev.onionvault.ui.PgpOverlayState
 import dev.onionvault.ui.PgpPlaintextState
+import dev.onionvault.ui.TabItemState
 import dev.onionvault.ui.TorBootstrapState
+import dev.onionvault.ui.TrapTheme
+import dev.onionvault.ui.TrapThemeFamily
+import dev.onionvault.ui.TrapThemeMode
 
-/**
- * The previews of Trap.
- *
- * Every preview renders the screen from a pure state, without a browser and
- * without the native library: the same code paths are used by the
- * application, by the previews of Android Studio and by the screenshot tests
- * of the continuous integration.
- *
- * ## The catalogue of the previews
- *
- * | # | preview | what it shows |
- * |---|---|---|
- * | 1 | `TorBootstrapPreview` | the bootstrap at 65 %, the circuit with the time of every hop, the token of the isolation |
- * | 2 | `PgpActionChipsPreview` | a form without JavaScript with the three chips on it |
- * | 3 | `PredictiveBackPreview` | the gesture of the back at 65 % of its length |
- * | 4 | `PgpDecryptionModalPreview` | the key manager and the sheet with the decrypted message |
- * | 5 | `LegalNoticesPreview` | the licences that travel with the application |
- * | 6 | `BrowserChromePreview` | the chrome on the start page |
- * | 7 | `TorTaxiPreview` | the chrome on a page that was loaded over Tor |
- * | 8 | `BrowserMenuPreview` | the menu of the browser |
- * | 9 | `CrashScreenPreview` | the screen of a crash |
- *
- * **The ninth preview is not in `ScreenshotTest.kt`.**  The crash screen is
- * the one screen that must never be wrong, and it is the only one without
- * a screenshot test.
- */
-private object Previews {
-    /** The color of the background of the hidden service page. */
-    val Page = Color(0xFF15181F)
-
-    /** The color of the text of the hidden service page. */
-    val Text = Color(0xFFF2EEE6)
-
-    /** The color of the field of the hidden service page. */
-    val Field = Color(0xFF1E222C)
-}
-
-/**
- * A mock of the hidden service page.
- *
- * The off-screen rendered page is injected into the screen, so the preview
- * shows a stand-in of a no-JavaScript form of a hidden service.
- */
 @Composable
-private fun MockHiddenServicePage() {
+private fun PreviewHiddenServiceSurface() {
+    val colors = TrapTheme.colors
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Previews.Page)
-            .padding(16.dp),
+            .background(colors.surface2)
+            .padding(18.dp),
     ) {
         Text(
             text = "SecureDrop",
-            color = Previews.Text,
-            fontSize = 20.sp,
-            fontFamily = FontFamily.Monospace,
-        )
-        Spacer(Modifier.height(12.dp))
-        Text(
-            text = "Send a message to the journalist:",
-            color = Previews.Text,
-            fontSize = 13.sp,
+            color = colors.textPrimary,
+            fontSize = 26.sp,
+            fontWeight = FontWeight.Bold,
         )
         Spacer(Modifier.height(8.dp))
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(90.dp)
-                .border(1.dp, Color(0xFF1E8C9B), RoundedCornerShape(4.dp))
-                .background(Previews.Field)
-                .padding(8.dp),
-        ) {
-            Text(
-                text = "This message will be encrypted with the recipient's key.",
-                color = Color(0xFF8A8175),
-                fontSize = 12.sp,
-            )
-        }
+        Text(
+            text = "Send an encrypted message to the newsroom:",
+            color = colors.textBody,
+            fontSize = 14.sp,
+        )
         Spacer(Modifier.height(12.dp))
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(70.dp)
-                .border(1.dp, Color(0xFF9A6224), RoundedCornerShape(4.dp))
-                .background(Previews.Field)
-                .padding(8.dp),
+                .height(110.dp)
+                .border(1.5.dp, colors.teal, RoundedCornerShape(12.dp))
+                .background(colors.surface)
+                .padding(12.dp),
         ) {
             Text(
-                text = "-----BEGIN PGP MESSAGE-----\n\nhQEMA...\n-----END PGP MESSAGE-----",
-                color = Color(0xFF8A8175),
-                fontSize = 10.sp,
+                text = "This submission will be encrypted natively before entering Blink.",
+                color = colors.textMuted,
+                fontSize = 13.sp,
+            )
+        }
+        Spacer(Modifier.height(28.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(86.dp)
+                .border(1.5.dp, colors.amber, RoundedCornerShape(12.dp))
+                .background(colors.surface)
+                .padding(12.dp),
+        ) {
+            Text(
+                text = "-----BEGIN PGP MESSAGE-----\nhQEMA8x3...\n-----END PGP MESSAGE-----",
+                color = colors.textBody,
+                fontSize = 11.5.sp,
+                fontFamily = FontFamily.Monospace,
+            )
+        }
+        Spacer(Modifier.height(20.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(74.dp)
+                .border(1.dp, colors.border, RoundedCornerShape(12.dp))
+                .background(colors.surface)
+                .padding(12.dp),
+        ) {
+            Text(
+                text = "-----BEGIN PGP PUBLIC KEY BLOCK-----\nmDMEZ...\n-----END PGP PUBLIC KEY BLOCK-----",
+                color = colors.textMuted,
+                fontSize = 11.sp,
                 fontFamily = FontFamily.Monospace,
             )
         }
     }
 }
 
-/**
- * The first preview: the state of the Tor client.
- *
- * The bootstrap is at 65 percent, the circuit of the hidden service is
- * shown with the round trip time of every hop, and the token of the circuit
- * proves that the page is isolated from the other hidden services.
- */
-@Preview(name = "1. Tor Bootstrap & Circuit Isolation HUD", heightDp = 640)
+@Composable
+private fun PreviewDuckDuckGoOnionSurface() {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF18181B))
+            .padding(18.dp),
+    ) {
+        Text(
+            text = "DuckDuckGo Onion Service (HTML / Zero-JS)",
+            color = Color(0xFFF4F4F5),
+            fontSize = 17.sp,
+            fontWeight = FontWeight.Bold,
+        )
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text = "Connected over Arti v3 rendezvous circuit · JavaScript disabled.",
+            color = Color(0xFFA1A1AA),
+            fontSize = 12.5.sp,
+            fontFamily = FontFamily.Monospace,
+        )
+    }
+}
+
+fun chromeState(
+    family: TrapThemeFamily = TrapThemeFamily.SecureDrop,
+    mode: TrapThemeMode = TrapThemeMode.Dark,
+): BrowserUiState = BrowserUiState(
+    url = "about:blank",
+    title = "Trap Start",
+    tor = TorBootstrapState(
+        percent = 100,
+        stage = "ready",
+        ready = true,
+        socksAddr = "127.0.0.1:41952",
+        isolationToken = null,
+        isolatedGroupCount = 0,
+    ),
+    themeFamily = family,
+    themeMode = mode,
+)
+
+fun torTaxiState(): BrowserUiState = BrowserUiState(
+    url = "https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/",
+    title = "DuckDuckGo (.onion)",
+    canGoBack = true,
+    tor = TorBootstrapState(
+        percent = 100,
+        stage = "ready",
+        ready = true,
+        socksAddr = "127.0.0.1:41952",
+        isolationToken = "iso-duckduckgogg42xj",
+        isolatedGroupCount = 1,
+    ),
+)
+
+@Preview(name = "1. Tor Bootstrap & Security Sheet", heightDp = 760)
 @Composable
 fun TorBootstrapPreview() {
     BrowserScreen(
         state = BrowserUiState(
             url = "http://sdshqo3t6ilcq6cyudujqi3l5n6dqsmx6x3rv3moymqm3vhch6ad.onion",
             title = "SecureDrop",
+            isLoading = true,
+            loadProgress = 65,
             tor = TorBootstrapState(
                 percent = 65,
-                stage = "building the circuit",
+                stage = "connecting to guard",
                 ready = false,
-                circuit = CircuitState(
-                    hops = listOf(
-                        CircuitHop("Guard", 412),
-                        CircuitHop("Middle", 287),
-                        CircuitHop("Exit", 1_204),
-                        CircuitHop("Rendezvous", 1_876),
-                    ),
-                ),
-                isolationToken = "iso-3f7c91a2b4e08d6a",
+                socksAddr = "127.0.0.1:41952",
+                isolationToken = "iso-sdshqo3t6ilcq6cy",
+                isolatedGroupCount = 1,
             ),
         ),
-        surface = { MockHiddenServicePage() },
+        showSecurity = true,
+        surface = { PreviewHiddenServiceSurface() },
     )
 }
 
-/**
- * The second preview: the form of a hidden service with the action chips.
- *
- * The chips are anchored on the fields that the render process detected; the
- * document itself is a mock, because the preview must not need a browser.
- */
-@Preview(name = "2. Highlighted No-JS Form with PGP Action Chips", heightDp = 640)
+@Preview(name = "2. Zero-JS Form with PGP Action Chips", heightDp = 760)
 @Composable
 fun PgpActionChipsPreview() {
     BrowserScreen(
         state = BrowserUiState(
             url = "http://sdshqo3t6ilcq6cyudujqi3l5n6dqsmx6x3rv3moymqm3vhch6ad.onion",
             title = "SecureDrop",
+            canGoBack = true,
             tor = TorBootstrapState(
                 percent = 100,
                 stage = "ready",
                 ready = true,
-                circuit = CircuitState(
-                    hops = listOf(
-                        CircuitHop("Guard", 398),
-                        CircuitHop("Middle", 301),
-                        CircuitHop("Exit", 1_098),
-                        CircuitHop("Rendezvous", 1_744),
-                    ),
-                ),
-                isolationToken = "iso-3f7c91a2b4e08d6a",
+                socksAddr = "127.0.0.1:41952",
+                isolationToken = "iso-sdshqo3t6ilcq6cy",
+                isolatedGroupCount = 1,
             ),
             pgp = PgpOverlayState(
                 fields = listOf(
                     PgpFieldState(
-                        nodeId = "ov-00000000000000a1",
-                        kind = "textarea",
+                        nodeId = "cdp-12",
+                        kind = "pgp_textarea",
                         label = "Encrypt Field",
-                        bounds = NormalizedBounds(0.05f, 0.22f, 0.95f, 0.36f),
-                        preview = "This message will be encrypted…",
+                        bounds = NormalizedBounds(0.05f, 0.18f, 0.95f, 0.38f),
+                        preview = "This submission will be encrypted…",
+                        cdpNodeId = 12,
                     ),
                     PgpFieldState(
-                        nodeId = "ov-00000000000000b2",
+                        nodeId = "cdp-19",
                         kind = "pgp_message",
                         label = "Decrypt Block",
-                        bounds = NormalizedBounds(0.05f, 0.44f, 0.95f, 0.56f),
-                        preview = "-----BEGIN PGP MESSAGE-----",
+                        bounds = NormalizedBounds(0.05f, 0.46f, 0.95f, 0.62f),
+                        armored = "-----BEGIN PGP MESSAGE-----\nhQEMA8x3...\n-----END PGP MESSAGE-----",
+                        cdpNodeId = 19,
                     ),
                     PgpFieldState(
-                        nodeId = "ov-00000000000000c3",
+                        nodeId = "cdp-25",
                         kind = "pgp_public_key",
-                        label = "Insert My PubKey",
-                        bounds = NormalizedBounds(0.05f, 0.64f, 0.95f, 0.74f),
-                        preview = "-----BEGIN PGP PUBLIC KEY BLOCK-----",
+                        label = "Import Key",
+                        bounds = NormalizedBounds(0.05f, 0.68f, 0.95f, 0.84f),
+                        armored = "-----BEGIN PGP PUBLIC KEY BLOCK-----\nmDMEZ...\n-----END PGP PUBLIC KEY BLOCK-----",
+                        cdpNodeId = 25,
                     ),
                 ),
             ),
         ),
-        surface = { MockHiddenServicePage() },
+        surface = { PreviewHiddenServiceSurface() },
     )
 }
 
-/**
- * The third preview: the predictive back gesture in the middle of the
- * swipe.
- *
- * The live page is scaled down, the frame of the previous page is visible
- * behind it, and the progress of the gesture is at 65 percent.
- */
-@Preview(name = "3. Predictive Back Mid-Swipe Gesture (Progress = 0.65f)", heightDp = 640)
+@Preview(name = "3. Predictive Back Mid-Swipe & Snapshot Reload", heightDp = 760)
 @Composable
 fun PredictiveBackPreview() {
     BrowserScreen(
@@ -241,38 +243,24 @@ fun PredictiveBackPreview() {
             url = "http://sdshqo3t6ilcq6cyudujqi3l5n6dqsmx6x3rv3moymqm3vhch6ad.onion",
             title = "SecureDrop",
             canGoBack = true,
-            backPreview = dev.onionvault.ui.BackPreviewState(
-                url = "http://2gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wid.onion",
-                title = "The inbox",
-                fields = listOf(
-                    PgpFieldState(
-                        nodeId = "ov-00000000000000d4",
-                        kind = "pgp_message",
-                        label = "Decrypt Block",
-                        bounds = NormalizedBounds(0.05f, 0.30f, 0.95f, 0.42f),
-                    ),
-                ),
+            viewingSnapshot = true,
+            backPreview = BackPreviewState(
+                url = "https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/",
+                title = "DuckDuckGo (.onion)",
             ),
             tor = TorBootstrapState(
                 percent = 100,
                 stage = "ready",
                 ready = true,
-                isolationToken = "iso-3f7c91a2b4e08d6a",
+                isolationToken = "iso-sdshqo3t6ilcq6cy",
             ),
         ),
         previewProgress = 0.65f,
-        surface = { MockHiddenServicePage() },
+        surface = { PreviewHiddenServiceSurface() },
     )
 }
 
-/**
- * The fourth preview: the key manager and the sheet with the decrypted
- * message.
- *
- * The plaintext is shown in the native UI and not in the page; the badge
- * shows that the signature of the sender was verified.
- */
-@Preview(name = "4. Hardware-Backed PGP Key Manager & Decryption Modal", heightDp = 640)
+@Preview(name = "4. Plaintext Decryption Sheet & Verified Signer", heightDp = 760)
 @Composable
 fun PgpDecryptionModalPreview() {
     BrowserScreen(
@@ -283,310 +271,198 @@ fun PgpDecryptionModalPreview() {
                 percent = 100,
                 stage = "ready",
                 ready = true,
-                isolationToken = "iso-3f7c91a2b4e08d6a",
+                isolationToken = "iso-sdshqo3t6ilcq6cy",
             ),
             pgp = PgpOverlayState(
-                fields = listOf(
-                    PgpFieldState(
-                        nodeId = "ov-00000000000000b2",
-                        kind = "pgp_message",
-                        label = "Decrypt Block",
-                        bounds = NormalizedBounds(0.05f, 0.44f, 0.95f, 0.56f),
-                    ),
-                ),
                 plaintext = PgpPlaintextState(
-                    nodeId = "ov-00000000000000b2",
-                    title = "Decrypted message",
-                    body = "The meeting is at 14:00. Bring the documents.\n\n-- Anna",
+                    nodeId = "cdp-19",
+                    title = "Decrypted Message",
+                    body = "We received your submission. Check back in 48 hours using your codename.\n\n-- Newsroom Desk",
                     signatureVerified = true,
-                    signerFingerprint = "6F1A 2C93 9B4E 77D1 0E58 5A62 3F8B 91C4 7D0A 11E2",
+                    signatureStatus = "good",
+                    signerUserId = "Newsroom Desk <desk@securedrop.onion>",
+                    signerFingerprint = "6F1A2C939B4E77D10E585A623F8B91C47D0A11E2",
+                    targetEditable = false,
                 ),
             ),
             keys = listOf(
                 KeyInfo(
                     fingerprint = "6F1A2C939B4E77D10E585A623F8B91C47D0A11E2",
-                    userId = "Anna <anna@protonmail.com>",
+                    userId = "Newsroom Desk <desk@securedrop.onion>",
                     hasSecret = false,
+                    isOwnKey = false,
                 ),
                 KeyInfo(
-                    fingerprint = "A3D9071F5C2E8B40D16F7394C8E5A2B6F04D71C93",
-                    userId = "Trap <7f3c91a2@example.onion>",
+                    fingerprint = "A3D9071F5C2E8B40D16F7394C8E5A2B6F04D71C9",
+                    userId = "Source <source@onion>",
                     hasSecret = true,
+                    isOwnKey = true,
                 ),
             ),
         ),
-        showKeyManager = true,
-        surface = { MockHiddenServicePage() },
+        surface = { PreviewHiddenServiceSurface() },
     )
 }
 
-/**
- * The fifth preview: the licences that travel with the application.
- *
- * The LGPL-3.0 of the engine asks for the recipient of the binary to be able
- * to read the licence of the library; the texts are therefore shown by the
- * application itself.
- */
-@Preview(name = "5. Legal Notices of the Bundled Engine", heightDp = 640)
+@Preview(name = "5. Legal Notices of Bundled Components", heightDp = 760)
 @Composable
 fun LegalNoticesPreview() {
     BrowserScreen(
         state = BrowserUiState(
-            url = "http://sdshqo3t6ilcq6cyudujqi3l5n6dqsmx6x3rv3moymqm3vhch6ad.onion",
-            title = "SecureDrop",
-            tor = TorBootstrapState(
-                percent = 100,
-                stage = "ready",
-                ready = true,
-                isolationToken = "iso-3f7c91a2b4e08d6a",
-            ),
+            url = "about:blank",
+            title = "Trap Start",
+            tor = TorBootstrapState(percent = 100, stage = "ready", ready = true),
             legalDocuments = listOf(
-                LegalDocument(
-                    name = "LGPL-3.0.txt",
-                    title = "GNU Lesser General Public License 3.0",
-                    sizeBytes = 42_098,
-                ),
-                LegalDocument(
-                    name = "GPL-3.0.txt",
-                    title = "GNU General Public License 3.0",
-                    sizeBytes = 34_674,
-                ),
-                LegalDocument(
-                    name = "LGPL-2.1.txt",
-                    title = "GNU Lesser General Public License 2.1",
-                    sizeBytes = 26_001,
-                ),
-                LegalDocument(
-                    name = "CEF-LICENSE.txt",
-                    title = "The notice of the CEF engine",
-                    sizeBytes = 2_273_727,
-                ),
+                LegalDocument("LGPL-2.1.txt", "GNU Lesser General Public License 2.1", 26_001),
+                LegalDocument("GPL-3.0.txt", "GNU General Public License 3.0", 34_674),
+                LegalDocument("LGPL-3.0.txt", "GNU Lesser General Public License 3.0", 42_098),
+                LegalDocument("CEF-LICENSE.txt", "Cefrium / Chromium Engine Notices", 2_273_727),
             ),
         ),
         showLegalNotices = true,
-        surface = { MockHiddenServicePage() },
     )
 }
 
-/**
- * A mock of the start page of the browser.
- *
- * The application starts on `about:blank`; the preview shows the chrome of
- * the browser with the mark of the brand and the address of a hidden service.
- */
-@Composable
-private fun MockStartPage() {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Previews.Page)
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Spacer(Modifier.height(36.dp))
-        Image(
-            painter = painterResource(R.drawable.ov_trap_mark),
-            contentDescription = "Trap",
-            modifier = Modifier.size(96.dp),
-        )
-        Spacer(Modifier.height(16.dp))
-        Text(
-            text = "Trap",
-            color = Previews.Text,
-            fontSize = 22.sp,
-            fontWeight = FontWeight.SemiBold,
-        )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            text = "Every request goes through Tor. JavaScript is switched off.",
-            color = Color(0xFF8A8175),
-            fontSize = 13.sp,
-        )
-    }
-}
-
-/**
- * A mock of the page of tor.taxi.
- *
- * The page is plain HTML without a single line of JavaScript, which is why it
- * is rendered by the browser of the application exactly as it is written.
- */
-@Composable
-private fun MockTorTaxiPage() {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFF000000))
-            .padding(16.dp),
-    ) {
-        Text(
-            text = "tor.taxi - your ride to the darknet",
-            color = Color(0xFFFFD400),
-            fontSize = 18.sp,
-            fontFamily = FontFamily.Monospace,
-        )
-        Spacer(Modifier.height(12.dp))
-        Text(
-            text = "Click here to visit our onion address!",
-            color = Color(0xFFFFFFFF),
-            fontSize = 13.sp,
-            fontFamily = FontFamily.Monospace,
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            text = "Links in red are experiencing prolonged downtime.",
-            color = Color(0xFFFF2222),
-            fontSize = 13.sp,
-            fontFamily = FontFamily.Monospace,
-        )
-        Spacer(Modifier.height(16.dp))
-        Text(
-            text = "Markets",
-            color = Color(0xFFFFD400),
-            fontSize = 15.sp,
-            fontFamily = FontFamily.Monospace,
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            text = "Dark Matter - 2 3 +",
-            color = Color(0xFFFF2222),
-            fontSize = 13.sp,
-            fontFamily = FontFamily.Monospace,
-        )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            text = "DrugHub",
-            color = Color(0xFFFFFFFF),
-            fontSize = 13.sp,
-            fontFamily = FontFamily.Monospace,
-        )
-        Spacer(Modifier.height(16.dp))
-        Text(
-            text = "Forums",
-            color = Color(0xFFFFD400),
-            fontSize = 15.sp,
-            fontFamily = FontFamily.Monospace,
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            text = "Dread",
-            color = Color(0xFFFFFFFF),
-            fontSize = 13.sp,
-            fontFamily = FontFamily.Monospace,
-        )
-    }
-}
-
-/**
- * The state of the chrome of the browser, for the preview and for the tests.
- *
- * The client is ready, so the badge of the transport shows that the tunnel is
- * up.
- */
-fun chromeState(): BrowserUiState = BrowserUiState(
-    url = "about:blank",
-    title = "Trap",
-    tor = TorBootstrapState(
-        percent = 100,
-        stage = "ready",
-        ready = true,
-        isolationToken = "iso-3f7c91a2b4e08d6a",
-    ),
-)
-
-/**
- * The state of the browser after it has loaded tor.taxi over Tor.
- *
- * The title is the one of the page, the transport is ready and the circuit of
- * the page is the one of the hidden service.
- */
-fun torTaxiState(): BrowserUiState = BrowserUiState(
-    url = "https://tor.taxi",
-    title = "tor.taxi - your ride to the darknet",
-    tor = TorBootstrapState(
-        percent = 100,
-        stage = "ready",
-        ready = true,
-        isolationToken = "iso-3f7c91a2b4e08d6a",
-    ),
-)
-
-/**
- * The sixth preview: the chrome of the browser.
- *
- * The chrome of Safari on iOS: the page fills the screen, the buttons float
- * above it and the field of the address lies at the bottom.
- */
-@Preview(name = "6. The Browser Chrome of Trap", heightDp = 640)
+@Preview(name = "6. Trap Start Page (SecureDrop Dark)", heightDp = 760)
 @Composable
 fun BrowserChromePreview() {
     BrowserScreen(
-        state = chromeState(),
-        surface = { MockStartPage() },
+        state = chromeState(TrapThemeFamily.SecureDrop, TrapThemeMode.Dark),
     )
 }
 
-/**
- * The seventh preview: the browser after it has loaded tor.taxi.
- *
- * The field of the address carries the address of the page and the line of
- * the transport shows that the client of Tor is up.
- */
-@Preview(name = "7. tor.taxi Loaded over Tor", heightDp = 640)
+@Preview(name = "7. DuckDuckGo .onion Loaded over Tor", heightDp = 760)
 @Composable
 fun TorTaxiPreview() {
     BrowserScreen(
         state = torTaxiState(),
-        surface = { MockTorTaxiPage() },
+        surface = { PreviewDuckDuckGoOnionSurface() },
     )
 }
 
-/**
- * The eighth preview: the menu of the browser.
- *
- * The sheet is the menu of the design board: the entries that have a real
- * function behind them — the new tab, the tabs, the keyring, the traffic
- * policy, the zoom and the licences.
- */
-@Preview(name = "8. The Menu of Trap", heightDp = 640)
+@Preview(name = "8. Browser Menu Sheet (Neon Graffiti Dark)", heightDp = 760)
 @Composable
 fun BrowserMenuPreview() {
     BrowserScreen(
-        state = chromeState(),
+        state = chromeState(TrapThemeFamily.NeonGraffiti, TrapThemeMode.Dark),
         showMenu = true,
-        surface = { MockStartPage() },
     )
 }
 
-/**
- * The ninth preview: the screen of a crash.
- *
- * The application never dies silently: the trace of the error that stopped
- * it is shown, it can be copied into the clipboard and the browser can be
- * started again.
- */
-@Preview(name = "9. The Screen of a Crash", heightDp = 640)
+@Preview(name = "9. Crash Recovery Screen", heightDp = 760)
 @Composable
 fun CrashScreenPreview() {
-    OvCrashScreen(
-        report = """
-            Trap stopped with an error.
+    TrapTheme(
+        family = TrapThemeFamily.NeonGraffiti,
+        mode = TrapThemeMode.Dark,
+    ) {
+        OvCrashScreen(
+            report = """
+                Trap stopped unexpectedly.
 
-            When:  2025-01-14T18:42:07Z
-            Type:  java.lang.IllegalStateException
-            Why:   the runtime of the engine refused to start
+                Timestamp: 2026-11-14T18:42:07Z
+                Process:   dev.onionvault
+                Reason:    java.lang.IllegalStateException: Engine startup check
 
-            java.lang.IllegalStateException: the runtime of the engine refused to start
-            	at dev.onionvault.CefRuntime.initialize(CefRuntime.kt:64)
-            	at dev.onionvault.MainActivity.startEngine(MainActivity.kt:181)
-            	at dev.onionvault.MainActivity.onCreate(MainActivity.kt:103)
-            	at android.app.Activity.performCreate(Activity.java:8305)
-            	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1417)
-            	at android.app.Activity.performCreate(Activity.java:8305)
-            	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1417)
-            	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1417)
-        """.trimIndent(),
-        onCopy = {},
-        onRetry = {},
+                java.lang.IllegalStateException: Engine startup check
+                    at dev.onionvault.MainActivity.startEngine(MainActivity.kt:142)
+                    at dev.onionvault.MainActivity.onCreate(MainActivity.kt:88)
+            """.trimIndent(),
+            onCopy = {},
+            onRetry = {},
+        )
+    }
+}
+
+@Preview(name = "10. Neon Graffiti Dark Chrome + PGP Keyring", heightDp = 760)
+@Composable
+fun NeonGraffitiKeyringPreview() {
+    BrowserScreen(
+        state = chromeState(TrapThemeFamily.NeonGraffiti, TrapThemeMode.Dark).copy(
+            keys = listOf(
+                KeyInfo(
+                    fingerprint = "A3D9071F5C2E8B40D16F7394C8E5A2B6F04D71C9",
+                    userId = "Source <source@onion>",
+                    hasSecret = true,
+                    isOwnKey = true,
+                ),
+                KeyInfo(
+                    fingerprint = "6F1A2C939B4E77D10E585A623F8B91C47D0A11E2",
+                    userId = "Newsroom Desk <desk@securedrop.onion>",
+                    hasSecret = false,
+                    isOwnKey = false,
+                ),
+            ),
+        ),
+        showKeyManager = true,
+    )
+}
+
+@Preview(name = "11. SecureDrop Light Settings Sheet", heightDp = 760)
+@Composable
+fun SecureDropLightSettingsPreview() {
+    BrowserScreen(
+        state = chromeState(TrapThemeFamily.SecureDrop, TrapThemeMode.Light),
+        showSettings = true,
+    )
+}
+
+@Preview(name = "12. Neon Graffiti Light Multi-Tab Sheet", heightDp = 760)
+@Composable
+fun NeonGraffitiLightTabsPreview() {
+    BrowserScreen(
+        state = chromeState(TrapThemeFamily.NeonGraffiti, TrapThemeMode.Light).copy(
+            tabs = listOf(
+                TabItemState(
+                    id = "tab-1",
+                    title = "DuckDuckGo (.onion)",
+                    url = "https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/",
+                    isActive = true,
+                    isOnion = true,
+                ),
+                TabItemState(
+                    id = "tab-2",
+                    title = "Trap Start",
+                    url = "about:blank",
+                    isActive = false,
+                ),
+            ),
+        ),
+        showTabs = true,
+    )
+}
+
+@Preview(name = "13. Recipient & Signer Picker Sheet", heightDp = 760)
+@Composable
+fun RecipientPickerPreview() {
+    BrowserScreen(
+        state = BrowserUiState(
+            url = "http://sdshqo3t6ilcq6cyudujqi3l5n6dqsmx6x3rv3moymqm3vhch6ad.onion",
+            title = "SecureDrop",
+            tor = TorBootstrapState(percent = 100, stage = "ready", ready = true),
+            keys = listOf(
+                KeyInfo(
+                    fingerprint = "6F1A2C939B4E77D10E585A623F8B91C47D0A11E2",
+                    userId = "Newsroom Desk <desk@securedrop.onion>",
+                    hasSecret = false,
+                    isOwnKey = false,
+                ),
+                KeyInfo(
+                    fingerprint = "A3D9071F5C2E8B40D16F7394C8E5A2B6F04D71C9",
+                    userId = "Source <source@onion>",
+                    hasSecret = true,
+                    isOwnKey = true,
+                ),
+            ),
+            pgp = PgpOverlayState(
+                encryptRequest = EncryptRequestState(
+                    nodeId = "cdp-12",
+                    cdpNodeId = 12,
+                    initialText = "Document archive hash: sha256:9c8f41...",
+                    writeBackToField = true,
+                ),
+            ),
+        ),
+        surface = { PreviewHiddenServiceSurface() },
     )
 }
