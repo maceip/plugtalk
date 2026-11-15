@@ -708,38 +708,73 @@ class MainActivity : FragmentActivity() {
     }
 
     private fun toggleRequireBiometric(required: Boolean) {
-        if (required) {
-            val authStatus = BiometricManager.from(this).canAuthenticate(
-                BiometricManager.Authenticators.BIOMETRIC_STRONG or
-                    BiometricManager.Authenticators.DEVICE_CREDENTIAL,
-            )
-            if (!isJvmUnitTestRuntime() && authStatus != BiometricManager.BIOMETRIC_SUCCESS) {
+        if (!OvNative.isLoaded) {
+            prefs.requireBiometric = required
+            uiState = uiState.copy(requireBiometric = required)
+            return
+        }
+
+        val applyNativeToggle = {
+            lifecycleScope.launch {
+                val (ok, actual) = withContext(Dispatchers.IO) {
+                    val setOk = runCatching { OvNative.nativeSetRequireBiometric(required) }.getOrDefault(false)
+                    val current = runCatching { OvNative.nativeGetRequireBiometric() }.getOrDefault(false)
+                    setOk to current
+                }
+                prefs.requireBiometric = actual
+                uiState = uiState.copy(
+                    requireBiometric = actual,
+                    status = if (!ok && required) {
+                        "Hardware biometric key lock could not be enabled on this device."
+                    } else if (actual) {
+                        "Biometric / device unlock required for secret-key operations."
+                    } else {
+                        "Biometric / device unlock requirement disabled."
+                    },
+                    blocked = false,
+                )
+            }
+        }
+
+        if (!isJvmUnitTestRuntime() && (required || uiState.requireBiometric)) {
+            val authenticators = BiometricManager.Authenticators.BIOMETRIC_STRONG or
+                BiometricManager.Authenticators.DEVICE_CREDENTIAL
+            val authStatus = BiometricManager.from(this).canAuthenticate(authenticators)
+            if (authStatus != BiometricManager.BIOMETRIC_SUCCESS) {
                 showStatus(
                     "Configure a screen lock or biometric credential in Android Settings first.",
                     blocked = false,
                 )
                 return
             }
-        }
 
-        if (OvNative.isLoaded) {
-            val ok = runCatching { OvNative.nativeSetRequireBiometric(required) }.getOrDefault(false)
-            val actual = runCatching { OvNative.nativeGetRequireBiometric() }.getOrDefault(false)
-            prefs.requireBiometric = actual
-            uiState = uiState.copy(
-                requireBiometric = actual,
-                status = if (!ok && required) {
-                    "Hardware biometric key lock could not be enabled on this device."
-                } else if (actual) {
-                    "Biometric / device unlock required for secret-key operations."
-                } else {
-                    "Biometric / device unlock requirement disabled."
+            val prompt = BiometricPrompt(
+                this,
+                ContextCompat.getMainExecutor(this),
+                object : BiometricPrompt.AuthenticationCallback() {
+                    override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                        applyNativeToggle()
+                    }
+
+                    override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                        showStatus(errString.toString(), blocked = false)
+                    }
                 },
-                blocked = false,
             )
+            val promptInfo = BiometricPrompt.PromptInfo.Builder()
+                .setTitle(getString(R.string.authenticate_for_key))
+                .setSubtitle(
+                    if (required) {
+                        "Authenticate to wrap secret keys with biometric protection"
+                    } else {
+                        "Authenticate to unlock secret keys and disable biometric lock"
+                    },
+                )
+                .setAllowedAuthenticators(authenticators)
+                .build()
+            prompt.authenticate(promptInfo)
         } else {
-            prefs.requireBiometric = required
-            uiState = uiState.copy(requireBiometric = required)
+            applyNativeToggle()
         }
     }
 
@@ -843,21 +878,23 @@ class MainActivity : FragmentActivity() {
             setPgpError("Enter a User ID before generating a key.")
             return
         }
-        lifecycleScope.launch {
-            val result = withContext(Dispatchers.IO) {
-                val json = runCatching {
-                    OvNative.nativeGenerateKey(cleanUserId, passphrase)
-                }.getOrDefault("")
-                OvNative.parseGenerateKey(json)
-            }
-            if (result.ok && result.fingerprint.isNotBlank()) {
-                if (prefs.defaultKeyFingerprint.isBlank()) {
-                    prefs.defaultKeyFingerprint = result.fingerprint
+        withSecretKeyAuth(subtitle = "Unlock Keystore to wrap new OpenPGP secret key") {
+            lifecycleScope.launch {
+                val result = withContext(Dispatchers.IO) {
+                    val json = runCatching {
+                        OvNative.nativeGenerateKey(cleanUserId, passphrase)
+                    }.getOrDefault("")
+                    OvNative.parseGenerateKey(json)
                 }
-                refreshKeys()
-                showStatus("Generated OpenPGP key ${result.fingerprint.takeLast(8)}", blocked = false)
-            } else {
-                setPgpError(result.error.ifBlank { "OpenPGP key generation failed." })
+                if (result.ok && result.fingerprint.isNotBlank()) {
+                    if (prefs.defaultKeyFingerprint.isBlank()) {
+                        prefs.defaultKeyFingerprint = result.fingerprint
+                    }
+                    refreshKeys()
+                    showStatus("Generated OpenPGP key ${result.fingerprint.takeLast(8)}", blocked = false)
+                } else {
+                    setPgpError(result.error.ifBlank { "OpenPGP key generation failed." })
+                }
             }
         }
     }
@@ -872,23 +909,33 @@ class MainActivity : FragmentActivity() {
             setPgpError("Paste an ASCII-armored OpenPGP key block first.")
             return
         }
-        lifecycleScope.launch {
-            val result = withContext(Dispatchers.IO) {
-                val json = runCatching {
-                    OvNative.nativeImportKey(trimmed, passphrase)
-                }.getOrDefault("")
-                OvNative.parseImportKey(json)
-            }
-            if (result.ok && result.fingerprint.isNotBlank()) {
-                if (result.hasSecret && prefs.defaultKeyFingerprint.isBlank()) {
-                    prefs.defaultKeyFingerprint = result.fingerprint
+        val executeImport = {
+            lifecycleScope.launch {
+                val result = withContext(Dispatchers.IO) {
+                    val json = runCatching {
+                        OvNative.nativeImportKey(trimmed, passphrase)
+                    }.getOrDefault("")
+                    OvNative.parseImportKey(json)
                 }
-                refreshKeys()
-                val label = result.userId.ifBlank { result.fingerprint.takeLast(8) }
-                showStatus("Imported OpenPGP key ($label)", blocked = false)
-            } else {
-                setPgpError(result.error.ifBlank { "OpenPGP key import failed." })
+                if (result.ok && result.fingerprint.isNotBlank()) {
+                    if (result.hasSecret && prefs.defaultKeyFingerprint.isBlank()) {
+                        prefs.defaultKeyFingerprint = result.fingerprint
+                    }
+                    refreshKeys()
+                    val label = result.userId.ifBlank { result.fingerprint.takeLast(8) }
+                    showStatus("Imported OpenPGP key ($label)", blocked = false)
+                } else {
+                    setPgpError(result.error.ifBlank { "OpenPGP key import failed." })
+                }
             }
+        }
+
+        if (trimmed.contains("PRIVATE KEY", ignoreCase = true)) {
+            withSecretKeyAuth(subtitle = "Unlock Keystore to import OpenPGP secret key") {
+                executeImport()
+            }
+        } else {
+            executeImport()
         }
     }
 
@@ -970,8 +1017,12 @@ class MainActivity : FragmentActivity() {
             }
 
             "pgp_public_key" -> {
-                val keyBlock = field.armored?.takeIf { it.isNotBlank() } ?: field.preview
-                importKey(keyBlock, "")
+                if (field.label.equals("Insert My PubKey", ignoreCase = true)) {
+                    insertOwnPublicKey(field)
+                } else {
+                    val keyBlock = field.armored?.takeIf { it.isNotBlank() } ?: field.preview
+                    importKey(keyBlock, "")
+                }
             }
         }
     }

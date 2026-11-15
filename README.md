@@ -14,7 +14,7 @@
 ```text
 trap/
 ├── Cargo.toml                  Workspace manifest + Android `cdylib` (`libonion_vault.so`)
-├── build.rs                    Copies license texts into Android assets; zero libcef link coupling
+├── build.rs                    Self-contained Cargo build script (zero `libcef.so` link coupling)
 ├── src/lib.rs                  19 `#[no_mangle]` JNI entry points (`Java_dev_onionvault_OvNative_*`)
 ├── crates/
 │   ├── ov-tor/                 Embedded Arti 0.47 Tor client, loopback SOCKS5 proxy, 16-char .onion isolation
@@ -22,7 +22,7 @@ trap/
 │   ├── ov-pgp/                 Sequoia 1.22 OpenPGP engine, SQLite keyring, Android Keystore AES-256-GCM wrapper
 │   └── ov-core/                Unified JNI/JSON coordinator bridging Tor, OpenPGP, and CDP DOM inspection
 ├── design/icons/               Reproducible icon & Neon Graffiti sprite pipelines (`trap_icon.py`, `neon/slice_neon.py`)
-├── licenses/                   Bundled LGPL-3.0, GPL-3.0, and LGPL-2.1 texts copied into `assets/licenses/`
+├── licenses/                   Bundled LGPL-3.0, GPL-3.0, and LGPL-2.1 texts copied into `assets/licenses/` by Gradle (`copyLegalNotices`)
 ├── scripts/
 │   └── emulator-gate.sh        Automated Android emulator launch, Cefrium readiness & crash/ANR runtime gate
 └── android/                    Gradle Android application (`com.cefrium:cefrium-sdk:0.19.0`, Jetpack Compose)
@@ -53,8 +53,8 @@ trap/
 Because JavaScript execution is disabled across the engine, Trap inspects and mutates page forms through Cefrium's in-process Chrome DevTools Protocol bridge (`CefriumBrowser.executeDevToolsMethod` in `CdpDomPgpController.kt` backed by `crates/ov-cef/src/cdp.rs`):
 
 1. **Shadow-Piercing Inspection**: `DOM.getDocument({"depth": -1, "pierce": true})` walks Blink's C++ `InspectorDOMAgent` tree—including Blink's user-agent `#inner-editor` shadow roots inside `<textarea>` and `<input>` controls where typed text lives—without running page scripts.
-2. **Rust Classification & Viewport Anchoring**: `OvNative.nativeClassifyCdpDomJson` classifies editable fields, ASCII-armored `PGP MESSAGE` blocks, and `PGP PUBLIC KEY BLOCK` nodes, while `DOM.getBoxModel` + `Page.getLayoutMetrics` compute normalized viewport coordinates for Compose action pills (`Encrypt Field`, `Insert My PubKey`, `Decrypt Block`, `Import Key`).
-3. **Read-Back Verified Mutation**: When writing encrypted ciphertext or an exported public key into a form control, `CdpDomPgpController` focuses the node (`DOM.focus`), clears existing content via `Input.dispatchKeyEvent` / `DOM.setAttributeValue`, inserts the payload via `Input.insertText`, and reads back the live Blink DOM value (`FieldMutationOutcome.verified`) before reporting success in the UI banner.
+2. **Rust Classification & Viewport Anchoring**: `OvNative.nativeClassifyCdpDom` classifies editable fields, ASCII-armored `PGP MESSAGE` blocks, and `PGP PUBLIC KEY BLOCK` nodes, while `DOM.getBoxModel` + `Page.getLayoutMetrics` compute normalized viewport coordinates for Compose action pills (`Encrypt Field`, `Insert My PubKey`, `Decrypt Block`, `Import Key`) and `DOM.setAttributeValue` applies visual CSS outline highlights.
+3. **Read-Back Verified Mutation**: When writing encrypted ciphertext or an exported public key into a form control, `CdpDomPgpController` focuses the node (`DOM.focus`), clears existing content via `Input.dispatchKeyEvent` (`SelectAll` / selection + `Backspace`), inserts the payload via `Input.insertText`, and reads back the live Blink DOM value (`FieldMutationOutcome.verified`) before reporting success in the UI banner.
 
 ## Browser Chrome & Unified `TrapTheme`
 
@@ -74,7 +74,7 @@ Key chrome surfaces:
 ### Prerequisites
 
 - **Rust 1.82+** with targets `aarch64-linux-android` and `x86_64-linux-android`, plus `cargo-ndk`
-- **JDK 17+** (JDK 21 supported)
+- **JDK 25** (`kotlin { jvmToolchain(25) }`)
 - **Android SDK** (`compileSdk 37`, `targetSdk 35`, `minSdk 29`) & **Android NDK `27.2.12479018`**
 
 ### Commands
@@ -108,7 +108,7 @@ Every item below reflects commands executed and verified against this codebase:
 | **Rust Formatting & Lint** (`ov-core`, `ov-cef`, `ov-pgp`, `ov-tor`) | `cargo fmt --all -- --check` & `cargo clippy --workspace --all-targets -- -D warnings` | **PASS** (`0` warnings) |
 | **Rust Crypto, Tor SOCKS5/Isolation & CDP DOM Suite** | `cargo test --workspace` | **PASS** (`61` passed, `0` failed, `2` live-Tor `#[ignore]`) |
 | **Android Native NDK Build & ELF Audit** (`arm64-v8a`, `x86_64`) | `cargo ndk -t arm64-v8a -t x86_64 --platform 29 build` + `llvm-readobj` / `llvm-nm` | **PASS** (19/19 `Java_dev_onionvault_OvNative_*` symbols exported; zero `libcef.so` `DT_NEEDED`) |
-| **Compose Previews, 13 Visual Captures & Interactive Chrome Tests** | `./android/gradlew --project-dir android :app:testDebugUnitTest` (`OnionVaultPreviewsTest`, `ScreenshotTest`, `CrashGuardTest`, `OvNativeTest`) | **PASS** (`35` passed, `0` failed; 13 PNG screenshots rendered across `SecureDrop` & `NeonGraffiti` Dark/Light) |
+| **Compose Previews, 13 Visual Captures & Interactive Chrome Tests** | `./android/gradlew --project-dir android :app:testDebugUnitTest` (`OnionVaultPreviewsTest`, `ScreenshotTest`, `CrashGuardTest`, `OvNativeTest`) | **PASS** (`36` passed, `0` failed; 13 PNG screenshots rendered across `SecureDrop` & `NeonGraffiti` Dark/Light) |
 | **On-Device Instrumentation E2E (`connectedDebugAndroidTest`)** | `BrowserChromeInstrumentedTest` on `emulator-5554` (Android 15 `arm64-v8a`) | **PASS** (`1` passed, `0` failed in `5.1s`: Settings persistence, Tor Security & Circuit native policy toggle, Multi-Tab sheet, Sequoia + Android Keystore AES-256-GCM keypair generation & armored public-key export, clearnet policy blocking, and v3 `.onion` launch) |
 | **Emulator Runtime Gate & Live `.onion` Circuit Isolation** | `./scripts/emulator-gate.sh app-debug.apk` + live v3 `.onion` navigation on `emulator-5554` | **PASS** (`TrapApplication` initialized Cefrium `0.19.0`, held 12s with zero Java/native crashes or ANRs, bootstrapped embedded `ov_tor` Arti client, and loaded `duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion` over isolated circuit `iso-duckduckgogg42xj` with zero-JS CDP DOM field anchoring) |
 

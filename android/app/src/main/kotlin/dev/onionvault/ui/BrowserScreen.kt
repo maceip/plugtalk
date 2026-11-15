@@ -1103,7 +1103,7 @@ private fun PgpFieldOverlay(
             val bounds = field.bounds
             val anchorX = (viewportW * bounds.left + 8.dp).coerceIn(8.dp, (viewportW - 140.dp).coerceAtLeast(8.dp))
             val fieldHeight = viewportH * (bounds.bottom - bounds.top).coerceAtLeast(0f)
-            val rawAnchorY = if (field.kind in EDITABLE_FIELD_KINDS && fieldHeight < 76.dp) {
+            val rawAnchorY = if (field.isEditableTarget() && fieldHeight < 76.dp) {
                 viewportH * bounds.bottom + 6.dp
             } else {
                 (viewportH * bounds.bottom - 38.dp).coerceAtLeast(viewportH * bounds.top + 6.dp)
@@ -1138,11 +1138,19 @@ private fun PgpFieldOverlay(
                     }
 
                     "pgp_public_key" -> {
-                        OvPgpPill(
-                            text = "Import Key",
-                            kind = PgpPillKind.ImportKey,
-                            onClick = { onFieldAction(field) },
-                        )
+                        if (field.isEditablePubKeyTarget()) {
+                            OvPgpPill(
+                                text = "Insert My PubKey",
+                                kind = PgpPillKind.InsertPubKey,
+                                onClick = { onInsertMyPubKey(field) },
+                            )
+                        } else {
+                            OvPgpPill(
+                                text = "Import Key",
+                                kind = PgpPillKind.ImportKey,
+                                onClick = { onFieldAction(field) },
+                            )
+                        }
                     }
                 }
             }
@@ -1151,6 +1159,12 @@ private fun PgpFieldOverlay(
 }
 
 private val EDITABLE_FIELD_KINDS = setOf("pgp_textarea", "textarea", "text_input", "editable")
+
+private fun PgpFieldState.isEditablePubKeyTarget(): Boolean =
+    kind == "pgp_public_key" && label.equals("Insert My PubKey", ignoreCase = true)
+
+private fun PgpFieldState.isEditableTarget(): Boolean =
+    kind in EDITABLE_FIELD_KINDS || isEditablePubKeyTarget()
 
 private fun formatDisplayHost(url: String): String = try {
     URI(url).host?.takeIf { it.isNotBlank() } ?: url

@@ -16,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.test.assertDoesNotExist
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
@@ -492,6 +493,64 @@ class ScreenshotTest {
 
         compose.onNodeWithTag("crash_retry").performClick()
         assertTrue(retried)
+    }
+
+    @Test
+    fun editable_pubkey_field_renders_insert_my_pubkey_and_routes_correctly() {
+        var insertedFieldId = ""
+        var importedFieldId = ""
+
+        var state by mutableStateOf(
+            BrowserUiState(
+                url = "http://sdshqo3t6ilcq6cyudujqi3l5n6dqsmx6x3rv3moymqm3vhch6ad.onion/register",
+                title = "Register Public Key",
+                tor = TorBootstrapState(percent = 100, stage = "ready", ready = true),
+                pgp = PgpOverlayState(
+                    fields = listOf(
+                        PgpFieldState(
+                            nodeId = "cdp-pub-edit",
+                            kind = "pgp_public_key",
+                            label = "Insert My PubKey",
+                            bounds = NormalizedBounds(0.06f, 0.25f, 0.94f, 0.30f),
+                            cdpNodeId = 21,
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        compose.setContent {
+            BrowserScreen(
+                state = state,
+                onFieldAction = { field -> importedFieldId = field.nodeId },
+                onInsertMyPubKey = { field -> insertedFieldId = field.nodeId },
+            )
+        }
+
+        // Editable pubkey upload field must render "Insert My PubKey" and never "Import Key".
+        compose.onNodeWithText("Insert My PubKey").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Import Key").assertDoesNotExist()
+        assertEquals("cdp-pub-edit", insertedFieldId)
+        assertEquals("", importedFieldId)
+
+        // Read-only armored pubkey block renders "Import Key" and routes to onFieldAction.
+        state = state.copy(
+            pgp = PgpOverlayState(
+                fields = listOf(
+                    PgpFieldState(
+                        nodeId = "cdp-pub-block",
+                        kind = "pgp_public_key",
+                        label = "Import Key",
+                        bounds = NormalizedBounds(0.06f, 0.40f, 0.94f, 0.65f),
+                        armored = "-----BEGIN PGP PUBLIC KEY BLOCK-----\n...\n-----END PGP PUBLIC KEY BLOCK-----",
+                        cdpNodeId = 22,
+                    ),
+                ),
+            ),
+        )
+        compose.onNodeWithText("Import Key").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Insert My PubKey").assertDoesNotExist()
+        assertEquals("cdp-pub-block", importedFieldId)
     }
 
     private fun fetchedPage(): ImageBitmap? {
