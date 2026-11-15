@@ -298,39 +298,39 @@ fun EncryptPickerSheet(
         onDismiss = onDismiss,
         modifier = Modifier.testTag("encrypt_picker_sheet"),
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 480.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            if (encryptCapable.isEmpty()) {
-                val shape = RoundedCornerShape(12.dp)
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(shape)
-                        .background(colors.surface2)
-                        .border(1.dp, colors.border, shape)
-                        .padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Text(
-                        text = "No PGP keys in keyring yet. Import the hidden service's public key or generate a keypair first.",
-                        color = colors.textMuted,
-                        fontSize = 13.sp,
-                    )
-                    OvPrimaryButton(
-                        text = "Open PGP Keyring",
-                        glyph = TrapGlyph.Key,
-                        onClick = {
-                            onDismiss()
-                            onOpenKeyring()
-                        },
-                    )
-                }
-            } else {
+        if (encryptCapable.isEmpty()) {
+            val shape = RoundedCornerShape(12.dp)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(shape)
+                    .background(colors.surface2)
+                    .border(1.dp, colors.border, shape)
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    text = "No PGP keys in keyring yet. Import the hidden service's public key or generate a keypair first.",
+                    color = colors.textMuted,
+                    fontSize = 13.sp,
+                )
+                OvPrimaryButton(
+                    text = "Open PGP Keyring",
+                    glyph = TrapGlyph.Key,
+                    onClick = {
+                        onDismiss()
+                        onOpenKeyring()
+                    },
+                )
+            }
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 370.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
                 Text(
                     text = "Message Plaintext",
                     color = colors.textPrimary,
@@ -342,7 +342,7 @@ fun EncryptPickerSheet(
                     onValueChange = { messageText = it },
                     placeholder = "Type message to encrypt…",
                     singleLine = false,
-                    minHeight = 90.dp,
+                    minHeight = 82.dp,
                     monospace = true,
                     testTag = "encrypt_plaintext_input",
                 )
@@ -411,27 +411,27 @@ fun EncryptPickerSheet(
                         fontWeight = FontWeight.Medium,
                     )
                 }
+            }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-                ) {
-                    OvSecondaryButton(text = "Cancel", onClick = onDismiss)
-                    OvPrimaryButton(
-                        text = if (request.writeBackToField) "Encrypt & Fill Field" else "Encrypt & Copy",
-                        glyph = TrapGlyph.Encrypt,
-                        enabled = messageText.isNotBlank() && selectedRecipient.isNotEmpty(),
-                        onClick = {
-                            onConfirmEncrypt(
-                                messageText,
-                                selectedRecipient,
-                                selectedSigner,
-                                passphrase,
-                            )
-                        },
-                        modifier = Modifier.testTag("encrypt_confirm_button"),
-                    )
-                }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+            ) {
+                OvSecondaryButton(text = "Cancel", onClick = onDismiss)
+                OvPrimaryButton(
+                    text = if (request.writeBackToField) "Encrypt & Fill Field" else "Encrypt & Copy",
+                    glyph = TrapGlyph.Encrypt,
+                    enabled = messageText.isNotBlank() && selectedRecipient.isNotEmpty(),
+                    onClick = {
+                        onConfirmEncrypt(
+                            messageText,
+                            selectedRecipient,
+                            selectedSigner,
+                            passphrase,
+                        )
+                    },
+                    modifier = Modifier.testTag("encrypt_confirm_button"),
+                )
             }
         }
     }
@@ -857,7 +857,7 @@ private fun KeyringItemCard(
                 glyph = TrapGlyph.Copy,
                 onClick = onCopyPubKey,
             )
-            if (!isDefault) {
+            if (key.hasSecret && !isDefault) {
                 OvSecondaryButton(
                     text = "Set Default",
                     accent = colors.amber,

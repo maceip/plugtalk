@@ -303,9 +303,9 @@ fun SettingsSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(max = 490.dp)
+                .heightIn(max = 390.dp)
                 .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             SettingSectionLabel("Theme Family")
             OvSegmentedRow(
@@ -358,30 +358,30 @@ fun SettingsSheet(
                 onSelect = onSelectDefaultZoom,
                 modifier = Modifier.testTag("settings_default_zoom"),
             )
+        }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                OvSecondaryButton(
-                    text = "Licences",
-                    glyph = TrapGlyph.Legal,
-                    onClick = {
-                        onDismiss()
-                        onOpenLegalNotices()
-                    },
-                    modifier = Modifier.weight(1f),
-                )
-                OvSecondaryButton(
-                    text = "Clear Session",
-                    glyph = TrapGlyph.Delete,
-                    accent = colors.danger,
-                    onClick = { confirmClearSession = true },
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("settings_clear_session"),
-                )
-            }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            OvSecondaryButton(
+                text = "Licences",
+                glyph = TrapGlyph.Legal,
+                onClick = {
+                    onDismiss()
+                    onOpenLegalNotices()
+                },
+                modifier = Modifier.weight(1f),
+            )
+            OvSecondaryButton(
+                text = "Clear Session",
+                glyph = TrapGlyph.Delete,
+                accent = colors.danger,
+                onClick = { confirmClearSession = true },
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("settings_clear_session"),
+            )
         }
     }
 

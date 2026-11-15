@@ -19,6 +19,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -181,8 +182,8 @@ class ScreenshotTest {
             )
         }
 
-        // `about:blank` must keep the input text empty rather than polluting the text field.
-        compose.onNodeWithTag("address_input").assertTextEquals("")
+        // `about:blank` must keep EditableText empty and show the honest .onion placeholder.
+        compose.onNodeWithTag("address_input").assertTextEquals("Enter .onion address", "")
         compose.onNodeWithTag("nav_back").assertIsNotEnabled()
         compose.onNodeWithTag("nav_forward").assertIsNotEnabled()
 
@@ -273,7 +274,9 @@ class ScreenshotTest {
 
         compose.onNodeWithTag("top_tor_pill").performClick()
         compose.onNodeWithTag("security_circuit_sheet").assertIsDisplayed()
-        compose.onNodeWithText("iso-duckduckgogg42xj").assertIsDisplayed()
+        compose.onNode(
+            hasText("iso-duckduckgogg42xj") and hasAnyAncestor(hasTestTag("security_circuit_sheet")),
+        ).assertIsDisplayed()
 
         compose.onNodeWithTag("security_hidden_service_switch").performClick()
         assertFalse(hiddenOnly)
@@ -306,10 +309,11 @@ class ScreenshotTest {
         compose.onNodeWithTag("nav_tabs").performClick()
         compose.onNodeWithTag("tabs_sheet").assertIsDisplayed()
 
+        // Closing a background tab keeps the TabsSheet open so multiple tabs can be closed.
         compose.onNodeWithTag("tab_close_tab-2").performClick()
         assertEquals("tab-2", closedId)
 
-        compose.onNodeWithTag("nav_tabs").performClick()
+        // Selecting a tab invokes onSelectTab and dismisses TabsSheet.
         compose.onNodeWithTag("tab_row_tab-2").performClick()
         assertEquals("tab-2", selectedId)
 

@@ -40,10 +40,10 @@ class BrowserChromeInstrumentedTest {
         val activity = composeRule.activity
         val prefs = TrapPreferences(activity)
 
-        // 1. StartPage renders on about:blank with empty address bar text
+        // 1. StartPage renders on about:blank with empty EditableText + honest .onion placeholder
         composeRule.onNodeWithTag("browser_screen").assertIsDisplayed()
         composeRule.onNodeWithTag("start_page").assertIsDisplayed()
-        composeRule.onNodeWithTag("address_input").assertTextEquals("")
+        composeRule.onNodeWithTag("address_input").assertTextEquals("Enter .onion address", "")
 
         // 2. Settings Sheet persists Theme Family, Mode, and Default Zoom
         composeRule.onNodeWithTag("start_open_settings").performScrollTo().performClick()
