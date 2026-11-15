@@ -1,44 +1,41 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Trap manifest.
+    Trap Android Manifest.
 
-    The engine of the browser brings its own manifest, which declares the
-    child processes of Chromium (the renderer, the GPU and the utility
-    process).  Android does not allow a plain fork()/exec() of a helper
-    binary: each subprocess has to be started through the ActivityManager,
-    so that the platform gives it a process with the right SELinux label.
-    The engine therefore declares one service per subprocess itself, and
-    the manifest of Trap does not have to repeat them.
+    Chromium's isolated renderer, GPU, and network child-process services are
+    contributed by the Cefrium SDK AAR manifest merger (`:sandboxed_process0..39`
+    and `:privileged_process0..2`). `TrapApplication` checks `getProcessName()`
+    and skips Arti Tor / Rust / browser initialization inside child processes.
 
-    The catalogue of the surfaces of the system:
-
-      * `android:enableOnBackInvokedCallback="true"` — the predictive back
-        gesture is handed to the application instead of the system, so that
-        `PredictiveBackHandler` can show the frame of the previous page
-        while the finger is on the screen.
-      * `android:launchMode="singleTask"` — the browser is one task; a
-        second launch comes to the task that is already running.
-      * `android:configChanges` — the orientation, the size, the keyboard
-        and the night mode are handled by the activity itself, so that the
-        off-screen rendering is not thrown away when the phone is turned.
-      * `android:windowSoftInputMode="adjustResize"` — the chrome floats
-        above the page, so the keyboard has to shrink the window and not
-        cover the field of the address.
-
-    **The chrome draws no insets of its own.**  There is no
-    `WindowInsets` anywhere in the application: the row of the buttons and
-    the field of the address are the last two things of a plain `Column`,
-    so they sit under the navigation bar of the system unless the system
-    adds the padding for them.
+    Window & lifecycle configuration:
+      * `android:enableOnBackInvokedCallback="true"` hands system back gestures
+        to `PredictiveBackHandler` so live visual page snapshots render smoothly.
+      * `android:launchMode="singleTask"` keeps Trap in a single browser task.
+      * `android:configChanges` preserves active `CefriumBrowser` surfaces and
+        Tor circuits across rotation, split-screen resize, and theme switches.
+      * `android:windowSoftInputMode="adjustResize"` works with Compose edge-to-edge
+        `WindowInsets` (`statusBars`, `navigationBars`, `ime`) so bottom chrome
+        and sheets never collide with system bars or the soft keyboard.
 -->
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- The Tor transport needs the network; nothing else does. -->
+    <!-- Required for Arti Tor circuits and Chromium NetworkChangeNotifier. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- The master wrapping key can demand a biometric confirmation. -->
+    <!-- Optional hardware-backed biometric unlock for the local OpenPGP keyring. -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+
+    <!-- Strip unnecessary phone-state, legacy storage, C2DM push, AICore, and
+         system-only CredentialManager permissions merged from transitive AARs. -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" tools:node="remove" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" tools:node="remove" />
+    <uses-permission android:name="com.google.android.c2dm.permission.RECEIVE" tools:node="remove" />
+    <uses-permission android:name="com.google.android.apps.aicore.service.BIND_SERVICE" tools:node="remove" />
+    <uses-permission android:name="android.permission.CREDENTIAL_MANAGER_SET_ORIGIN" tools:node="remove" />
+    <uses-permission android:name="android.permission.CREDENTIAL_MANAGER_QUERY_CANDIDATE_CREDENTIALS" tools:node="remove" />
 
     <application
         android:name=".TrapApplication"
@@ -53,6 +50,17 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Trap"
         android:usesCleartextTraffic="false">
+
+        <!-- Ensure transitive Firebase / Play components never auto-initialize. -->
+        <meta-data
+            android:name="firebase_messaging_auto_init_enabled"
+            android:value="false" />
+        <meta-data
+            android:name="firebase_analytics_collection_deactivated"
+            android:value="true" />
+        <meta-data
+            android:name="google_analytics_adid_collection_enabled"
+            android:value="false" />
 
         <activity
             android:name=".MainActivity"

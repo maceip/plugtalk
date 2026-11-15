@@ -1,27 +1,27 @@
 #!/usr/bin/env bash
 #
-# The gate: the application has to start on the emulator and stay up.
-#
-# A unit test that passes while the application crashes on launch is worse
-# than no test, because it buys false confidence.  This script is the answer
-# to that: it installs the APK, starts it, and reads the log of the system
-# for the two things that matter — that the application did not die, and that
-# the browser became ready.
-#
-# The script fails when the application dies, when it hangs, or when it is
-# killed by the kernel.  It never passes because the test suite passed.
+# Emulator runtime gate: installs the APK on a booted Android device/AVD,
+# launches `dev.onionvault/.MainActivity`, verifies that Cefrium initializes
+# ("the engine is ready"), and verifies that the browser process stays alive
+# with zero Java exceptions, ANRs, native fatal signals, or crash reports.
 
 set -euo pipefail
 
-APK="${1:?the APK to test is missing}"
+APK="${1:?APK path argument is required (e.g. scripts/emulator-gate.sh app-debug.apk)}"
 PACKAGE="dev.onionvault"
 ACTIVITY="dev.onionvault/.MainActivity"
-WAIT_SECONDS="${WAIT_SECONDS:-120}"
-LOG="/tmp/trap-gate.log"
+WAIT_SECONDS="${WAIT_SECONDS:-90}"
+STABILITY_SECONDS="${STABILITY_SECONDS:-12}"
+LOG="${TMPDIR:-/tmp}/trap-gate.log"
 
-echo "== waiting for the emulator =="
+if [[ ! -f "$APK" ]]; then
+    echo "::error::APK file does not exist: $APK"
+    exit 1
+fi
+
+echo "== waiting for emulator/device =="
 adb wait-for-device
-for _ in $(seq 1 60); do
+for _ in $(seq 1 90); do
     if [[ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == "1" ]]; then
         break
     fi
@@ -31,57 +31,77 @@ done
 echo "== installing $(basename "$APK") =="
 adb install -r -t "$APK" >/dev/null
 
-echo "== clearing the log =="
+echo "== clearing logcat & stale crash reports =="
+adb shell "run-as ${PACKAGE} rm -f files/crash-java.txt files/crash-native.txt" 2>/dev/null || true
 adb logcat -c
 
-echo "== starting the application =="
+echo "== launching ${ACTIVITY} =="
 adb shell am start -W -n "$ACTIVITY" || {
-    echo "::error::the application did not start"
+    echo "::error::MainActivity failed to launch"
     exit 1
 }
 
-echo "== waiting ${WAIT_SECONDS}s =="
-sleep "$WAIT_SECONDS"
+echo "== waiting up to ${WAIT_SECONDS}s for Cefrium engine readiness =="
+engine_ready=0
+elapsed=0
+while (( elapsed < WAIT_SECONDS )); do
+    adb logcat -d > "$LOG" 2>/dev/null || true
+    if grep -q "the engine is ready" "$LOG"; then
+        engine_ready=1
+        break
+    fi
+    if grep -qE "FATAL EXCEPTION|ANR in ${PACKAGE}|Fatal signal (11|6|4|8)" "$LOG"; then
+        break
+    fi
+    sleep 2
+    elapsed=$(( elapsed + 2 ))
+done
+
+if (( engine_ready == 1 && STABILITY_SECONDS > 0 )); then
+    echo "== engine ready after ${elapsed}s; holding ${STABILITY_SECONDS}s to verify stability =="
+    sleep "$STABILITY_SECONDS"
+fi
 
 adb logcat -d > "$LOG" 2>/dev/null || true
 
-echo "== the verdict =="
+echo "== evaluating runtime gate =="
 failed=0
 
 if grep -qE "FATAL EXCEPTION|ANR in ${PACKAGE}" "$LOG"; then
-    echo "::error::the application died"
-    grep -E -A 30 "FATAL EXCEPTION" "$LOG" | head -60 || true
+    echo "::error::Java exception or ANR detected"
+    grep -E -A 30 "FATAL EXCEPTION|ANR in ${PACKAGE}" "$LOG" | head -60 || true
     failed=1
 fi
 
-# A native crash of the engine is a signal, not an exception: the kernel
-# writes a tombstone and the process is gone.
 if grep -qE "Fatal signal (11|6|4|8)|\*\*\* \*\*\* \*\*\*" "$LOG"; then
-    echo "::error::the engine crashed"
+    echo "::error::native fatal signal detected"
     grep -E -A 30 "Fatal signal" "$LOG" | head -60 || true
     failed=1
 fi
 
-# The crash guard of the application writes a report when the engine dies.
 if adb shell "run-as ${PACKAGE} ls files" 2>/dev/null | grep -q "crash"; then
-    echo "::error::the crash guard of the application caught a crash"
-    adb shell "run-as ${PACKAGE} cat files/crash-native.txt" 2>/dev/null | head -40 || true
+    echo "::error::CrashReporter recorded an uncaught error"
+    adb shell "run-as ${PACKAGE} cat files/crash-java.txt" 2>/dev/null | head -40 || true
     failed=1
 fi
 
-# The browser has to become ready.
-if ! grep -q "the engine is ready" "$LOG"; then
-    echo "::error::the engine never became ready"
+if (( engine_ready == 0 )); then
+    echo "::error::Cefrium never logged 'the engine is ready'"
     failed=1
 fi
 
-# The screenshot of the running application.
+app_pid="$(adb shell pidof "${PACKAGE}" 2>/dev/null | tr -d '\r' || true)"
+if [[ -z "$app_pid" ]]; then
+    echo "::error::${PACKAGE} process is no longer running"
+    failed=1
+fi
+
 adb exec-out screencap -p > "emulator-$(date +%s).png" 2>/dev/null || true
 
 if [[ "$failed" != "0" ]]; then
-    echo "::error::the application did not survive the gate"
+    echo "::error::application failed the emulator gate"
     tail -80 "$LOG" || true
     exit 1
 fi
 
-echo "the application started and stayed up"
+echo "PASS: ${PACKAGE} (pid ${app_pid}) initialized Cefrium and remained healthy"
