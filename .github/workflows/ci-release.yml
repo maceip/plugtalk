@@ -1,27 +1,36 @@
-# Trap — continuous integration, emulator verification gate, and release pipeline.
+# Trap — continuous integration, APK/ELF/DEX packaging audit, emulator runtime gate,
+# CycloneDX 1.5 + SPDX 2.3 SBOM generation, GitHub Artifact Attestations, and tagged release.
 #
-# Every push and manual workflow dispatch runs:
-#   1. `rust-tests`    — icon drift check, rustfmt, clippy, workspace tests, and coverage
-#   2. `android-build` — multi-ABI `cargo-ndk` build (`arm64-v8a` + `x86_64`), JVM/Robolectric
-#                        unit & Compose tests, debug APK assembly, and APK binary audit
+# Every branch push (excluding `[skip ci]` commits and `v*`/`build-*` tags) and manual dispatch runs:
+#   1. `rust-tests`    — monotonic version dry-run, deterministic icon drift check, rustfmt,
+#                        clippy, workspace unit/integration tests, and llvm-cov coverage
+#   2. `android-build` — monotonic `VERSION` bump, multi-ABI `cargo-ndk` build (`arm64-v8a` + `x86_64`),
+#                        JVM/Robolectric Compose & unit tests, debug APK assembly, strict
+#                        `scripts/audit-apk.sh` packaging/DEX/ELF gate, and real Cargo + Gradle +
+#                        binary CycloneDX 1.5 & SPDX 2.3 SBOM generation (`scripts/generate-sbom.py`)
 #   3. `emulator-gate` — boots an Android 15 (API 35) x86_64 emulator, installs `app-debug.apk`,
-#                        and verifies Cefrium + Arti Tor launch cleanly and stay alive
-#   4. `release`       — publishes a tagged GitHub Release with `app-debug.apk`, license texts,
-#                        and SHA-256 checksums
+#                        and asserts Cefrium readiness, `ov_tor` loopback SOCKS5 bind, 12s live-PID
+#                        stability, zero Java/native crashes/ANRs, and zero JNI/DEX linkage errors
+#   4. `release`       — attests `app-debug.apk` provenance (`actions/attest-build-provenance`) and
+#                        SPDX 2.3 SBOM (`actions/attest-sbom`), commits `[skip ci]` version bump,
+#                        pushes annotated `v<version>` tag, and publishes the latest GitHub Release
 
 name: CI & Release
 
 on:
-  - push
-  - workflow_dispatch
+  push:
+    tags-ignore:
+      - "v*"
+      - "build-*"
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   actions: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -30,6 +39,7 @@ env:
 jobs:
   rust-tests:
     name: Rust checks, tests and coverage
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -37,7 +47,9 @@ jobs:
       actions: read
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Install system build dependencies
         run: |
@@ -54,17 +66,29 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal
           rustup component add rustfmt clippy llvm-tools-preview
-          cargo install cargo-llvm-cov --locked
 
       - name: Cache Cargo dependencies and build artifacts
         uses: actions/cache@v5
         with:
           path: |
+            ~/.cargo/bin/cargo-llvm-cov
             ~/.cargo/registry
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Ensure cargo-llvm-cov is installed
+        run: |
+          if ! command -v cargo-llvm-cov >/dev/null 2>&1; then
+            cargo install cargo-llvm-cov --locked
+          fi
+
+      - name: Verify monotonic version manifest and shell scripts
+        run: |
+          python3 scripts/bump-version.py --current
+          python3 scripts/bump-version.py --dry-run
+          bash -n scripts/audit-apk.sh scripts/emulator-gate.sh
 
       - name: Check deterministic icon assets
         run: |
@@ -89,23 +113,40 @@ jobs:
           cargo llvm-cov --workspace --summary-only
 
       - name: Upload coverage report
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: rust-coverage
           path: lcov.info
           if-no-files-found: error
 
   android-build:
-    name: Android multi-ABI build, unit tests, and APK audit
+    name: Android multi-ABI build, unit tests, APK audit, and SBOM
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
     runs-on: ubuntu-latest
     timeout-minutes: 60
     needs: rust-tests
     permissions:
       contents: read
       actions: read
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      version_code: ${{ steps.bump.outputs.version_code }}
+      tag: ${{ steps.bump.outputs.tag }}
     steps:
-      - name: Check out the repository
-        uses: actions/checkout@v5
+      - name: Free unused runner toolchains for multi-ABI Android build headroom
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
+          df -h /
+
+      - name: Check out the repository with full tag history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Bump monotonic release version before compiling APK and SBOM
+        id: bump
+        run: |
+          python3 scripts/bump-version.py --apply --github-output "$GITHUB_OUTPUT"
 
       - name: Set up JDK 25
         uses: actions/setup-java@v5
@@ -134,6 +175,8 @@ jobs:
           yes | sdkmanager --licenses > /dev/null
           set -o pipefail
           sdkmanager "platform-tools" "platforms;android-37.0" "build-tools;37.0.0" "ndk;27.2.12479018"
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          echo "${sdk_root}/build-tools/37.0.0" >> "$GITHUB_PATH"
 
       - name: Configure Android NDK toolchain environment
         run: |
@@ -157,17 +200,23 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal
           rustup target add aarch64-linux-android x86_64-linux-android
-          cargo install cargo-ndk --locked
 
       - name: Cache Cargo Android build artifacts
         uses: actions/cache@v5
         with:
           path: |
+            ~/.cargo/bin/cargo-ndk
             ~/.cargo/registry
             ~/.cargo/git
             .cargo-target
           key: ${{ runner.os }}-android-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-android-cargo-
+
+      - name: Ensure cargo-ndk is installed
+        run: |
+          if ! command -v cargo-ndk >/dev/null 2>&1; then
+            cargo install cargo-ndk --locked
+          fi
 
       - name: Cross-compile libonion_vault.so for arm64-v8a and x86_64
         env:
@@ -186,41 +235,45 @@ jobs:
           ONIONVAULT_SKIP_CARGO: "1"
         run: ./android/gradlew --project-dir android :app:assembleDebug
 
-      - name: Audit packaged APK contents and shared-object linkage
+      - name: Audit packaged APK contents, DEX descriptors, and ELF linkage
         run: |
           set -euo pipefail
           APK="android/app/build/outputs/apk/debug/app-debug.apk"
-          entries="$(unzip -Z1 "$APK")"
-          for required in \
-            "lib/arm64-v8a/libcef.so" \
-            "lib/x86_64/libcef.so" \
-            "lib/arm64-v8a/libonion_vault.so" \
-            "lib/x86_64/libonion_vault.so" \
-            "assets/licenses/GPL-3.0.txt" \
-            "assets/licenses/LGPL-2.1.txt" \
-            "assets/licenses/LGPL-3.0.txt"; do
-            echo "$entries" | grep -Fxq "$required" || {
-              echo "::error::Missing required APK entry: $required"
-              exit 1
-            }
-          done
-
-          unzip -p "$APK" lib/arm64-v8a/libonion_vault.so > /tmp/libonion_vault.so
-          if readelf -d /tmp/libonion_vault.so | grep -q "Shared library: \[libcef.so\]"; then
-            echo "::error::libonion_vault.so must not link directly against libcef.so"
+          ./scripts/audit-apk.sh "$APK"
+          badging="$(aapt2 dump badging "$APK" | grep -m 1 '^package:')"
+          echo "$badging" | grep -Fq "versionName='${{ steps.bump.outputs.version }}'" || {
+            echo "::error::APK versionName does not match bumped version ${{ steps.bump.outputs.version }}: $badging"
             exit 1
-          fi
-          echo "APK audit passed: Cefrium runtime, multi-ABI libonion_vault.so, and licenses verified."
+          }
+          echo "$badging" | grep -Fq "versionCode='${{ steps.bump.outputs.version_code }}'" || {
+            echo "::error::APK versionCode does not match bumped versionCode ${{ steps.bump.outputs.version_code }}: $badging"
+            exit 1
+          }
+
+      - name: Generate CycloneDX 1.5 and SPDX 2.3 SBOMs
+        run: |
+          python3 scripts/generate-sbom.py \
+            android/app/build/outputs/apk/debug/app-debug.apk \
+            --output-dir android/app/build/outputs/sbom
 
       - name: Upload debug APK
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: trap-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
+      - name: Upload CycloneDX 1.5 and SPDX 2.3 SBOMs
+        uses: actions/upload-artifact@v7
+        with:
+          name: trap-sbom
+          path: |
+            android/app/build/outputs/sbom/app-debug.sbom.cdx.json
+            android/app/build/outputs/sbom/app-debug.sbom.spdx.json
+          if-no-files-found: error
+
       - name: Upload license documents
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: trap-legal-notices
           path: licenses/*.txt
@@ -228,7 +281,7 @@ jobs:
 
       - name: Upload Android unit test reports
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: android-unit-test-reports
           path: android/app/build/reports/tests
@@ -236,6 +289,7 @@ jobs:
 
   emulator-gate:
     name: Launch and verify APK on Android emulator
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
     runs-on: ubuntu-latest
     timeout-minutes: 45
     needs: android-build
@@ -243,8 +297,13 @@ jobs:
       contents: read
       actions: read
     steps:
+      - name: Free unused runner toolchains for Android 15 AVD image headroom
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
+          df -h /
+
       - name: Check out the repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Download debug APK
         uses: actions/download-artifact@v8
@@ -257,6 +316,7 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules > /dev/null
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+          sudo chmod 666 /dev/kvm || true
 
       - name: Boot emulator and run runtime gate
         uses: reactivecircus/android-emulator-runner@v2
@@ -264,51 +324,162 @@ jobs:
           api-level: 35
           target: google_apis
           arch: x86_64
+          ram-size: 4096M
+          heap-size: 512M
+          disk-size: 6G
           disable-animations: true
-          script: ./scripts/emulator-gate.sh apk/app-debug.apk
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          script: ./scripts/emulator-gate.sh apk/app-debug.apk dist/emulator-launch.png
 
       - name: Upload emulator runtime screenshot
-        if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
-          name: emulator-screenshot
-          path: emulator-*.png
-          if-no-files-found: ignore
+          name: emulator-launch-screenshot
+          path: dist/emulator-launch.png
+          if-no-files-found: error
 
   release:
-    name: Publish tagged GitHub release
+    name: Attest artifacts and publish tagged GitHub release
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: emulator-gate
+    needs:
+      - rust-tests
+      - android-build
+      - emulator-gate
     permissions:
       contents: write
+      id-token: write
+      attestations: write
       actions: read
     steps:
+      - name: Check out the repository with full history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
       - name: Download debug APK artifact
         uses: actions/download-artifact@v8
         with:
           name: trap-debug-apk
           path: dist
 
+      - name: Download SBOM artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: trap-sbom
+          path: dist
+
+      - name: Download emulator runtime screenshot
+        uses: actions/download-artifact@v8
+        with:
+          name: emulator-launch-screenshot
+          path: dist
+
       - name: Download license documents
         uses: actions/download-artifact@v8
         with:
           name: trap-legal-notices
-          path: dist/licenses
+          path: dist
 
-      - name: Compute SHA-256 checksums
-        run: (cd dist && sha256sum app-debug.apk licenses/* > SHA256SUMS.txt)
+      - name: Verify release asset layout and compute SHA256SUMS.txt
+        run: |
+          set -euo pipefail
+          for f in \
+            app-debug.apk \
+            app-debug.sbom.cdx.json \
+            app-debug.sbom.spdx.json \
+            emulator-launch.png \
+            GPL-3.0.txt \
+            LGPL-2.1.txt \
+            LGPL-3.0.txt; do
+            test -s "dist/${f}" || {
+              echo "::error::Missing or empty release asset dist/${f}"
+              exit 1
+            }
+          done
+          (
+            cd dist
+            sha256sum \
+              app-debug.apk \
+              app-debug.sbom.cdx.json \
+              app-debug.sbom.spdx.json \
+              emulator-launch.png \
+              GPL-3.0.txt \
+              LGPL-2.1.txt \
+              LGPL-3.0.txt > SHA256SUMS.txt
+            cat SHA256SUMS.txt
+          )
 
-      - name: Publish GitHub release
+      - name: Attest APK build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/app-debug.apk
+
+      - name: Attest APK SPDX 2.3 SBOM
+        uses: actions/attest-sbom@v4
+        with:
+          subject-path: dist/app-debug.apk
+          sbom-path: dist/app-debug.sbom.spdx.json
+
+      - name: Commit bumped version, push tag, and publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.android-build.outputs.version }}
+          RELEASE_VERSION_CODE: ${{ needs.android-build.outputs.version_code }}
+          RELEASE_TAG: ${{ needs.android-build.outputs.tag }}
         run: |
-          tag="build-${{ github.run_number }}-${{ github.sha }}"
-          git tag -a "$tag" -m "Trap debug build ${{ github.run_number }} (${{ github.sha }})"
-          git push origin "$tag"
-          gh release create "$tag" \
+          set -euo pipefail
+          python3 scripts/bump-version.py --apply \
+            --set-version "${RELEASE_VERSION}" \
+            --set-version-code "${RELEASE_VERSION_CODE}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add VERSION Cargo.toml Cargo.lock android/app/build.gradle.kts
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(release): bump version to ${RELEASE_TAG} [skip ci]"
+          fi
+
+          if [[ "${GITHUB_REF_TYPE:-}" == "branch" && -n "${GITHUB_REF_NAME:-}" ]]; then
+            if ! git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}"; then
+              echo "::warning::Branch ${GITHUB_REF_NAME} advanced concurrently; tagging release commit without force-pushing."
+            fi
+          fi
+
+          git tag -a "${RELEASE_TAG}" -m "Trap ${RELEASE_TAG} (versionCode ${RELEASE_VERSION_CODE})"
+          git push origin "refs/tags/${RELEASE_TAG}"
+
+          cat <<EOF > /tmp/release-notes.md
+          ## Trap ${RELEASE_TAG} (\`versionCode ${RELEASE_VERSION_CODE}\`)
+
+          Automated multi-ABI (\`arm64-v8a\` + \`x86_64\`) Android debug build verified end-to-end by:
+          - Rust workspace formatting, Clippy, unit/integration suite, and coverage
+          - Android JVM / Robolectric Compose UI, screenshot, and JNI parity tests
+          - Strict APK DEX/ELF/asset packaging audit (\`scripts/audit-apk.sh\`)
+          - Live Android 15 emulator launch, Cefrium 0.19.0 readiness, and \`ov_tor\` SOCKS5 runtime gate (\`scripts/emulator-gate.sh\`)
+          - Sigstore-backed GitHub Build Provenance & SPDX 2.3 SBOM Attestations
+
+          ### Verify Downloaded APK & SBOM Attestation
+
+          \`\`\`sh
+          sha256sum -c SHA256SUMS.txt --ignore-missing
+          gh attestation verify app-debug.apk --repo ${GITHUB_REPOSITORY}
+          gh attestation verify app-debug.apk --repo ${GITHUB_REPOSITORY} --predicate-type https://spdx.dev/Document/v2.3
+          \`\`\`
+          EOF
+
+          gh release create "${RELEASE_TAG}" \
             dist/app-debug.apk \
-            dist/licenses/* \
+            dist/app-debug.sbom.cdx.json \
+            dist/app-debug.sbom.spdx.json \
+            dist/emulator-launch.png \
+            dist/GPL-3.0.txt \
+            dist/LGPL-2.1.txt \
+            dist/LGPL-3.0.txt \
             dist/SHA256SUMS.txt \
-            --title "Trap debug build ${{ github.run_number }} (${{ github.sha }})" \
-            --notes "Trap Android browser powered by Cefrium 0.19.0 (LGPL-3.0-or-later), Arti Tor, and Sequoia OpenPGP. Verified via automated Android emulator runtime gate."
+            --latest \
+            --title "Trap ${RELEASE_TAG}" \
+            --notes-file /tmp/release-notes.md
