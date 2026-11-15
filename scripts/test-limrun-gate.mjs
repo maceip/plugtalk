@@ -387,6 +387,15 @@ async function startMockLimrunServer(toolsDir, mode) {
               '11-15 03:00:01.100  8123  8123 F libc    : Fatal signal 6 (SIGABRT), code -1 in tid 8123 (dev.onionvault)',
               '11-15 03:00:01.150  8129  8129 F DEBUG   : *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***',
             ].join('\n');
+          } else if (mode === 'mte_sigtrap_child_process') {
+            // Reproduces exact v0.1.27 ARMv9 MTE renderer crash (#65): main browser PID 9001 stays alive
+            // while :sandboxed_process0 hits SetHeapTaggingLevel failure + Fatal signal 5 (SIGTRAP).
+            out = [
+              '11-15 03:00:01.010  9001  9001 I Trap    : the engine is ready',
+              '11-15 03:00:01.250  9001  9024 I ov_tor  : SOCKS5 listener bound to 127.0.0.1:41955',
+              '11-15 03:00:01.600  9140  9140 E libc    : SetHeapTaggingLevel: set_tcf_on_all_threads failed',
+              '11-15 03:00:01.602  9140  9140 F libc    : Fatal signal 5 (SIGTRAP), code 1 (TRAP_BRKPT) in tid 9140 (sandboxed_process0)',
+            ].join('\n');
           } else {
             const lines = [
               '11-15 03:00:01.010  9001  9001 I Trap    : the engine is ready',
@@ -565,8 +574,45 @@ async function runTests() {
     }
   }
 
+  console.log('== Test 4: v0.1.27 ARMv9 MTE child-process SIGTRAP (Fatal signal 5) fails closed ==');
+  {
+    const mock = await startMockLimrunServer(toolsDir, 'mte_sigtrap_child_process');
+    const outDir = path.join(workDir, 'out-mte-sigtrap');
+    try {
+      const res = await runGateAsync([apkPath, outDir], {
+        ...process.env,
+        LIM_API_KEY: 'lim_test_key_mte',
+        LIMRUN_BASE_URL: mock.baseURL,
+        LIMRUN_TOOLS_DIR: toolsDir,
+        BOOT_WAIT_SECONDS: '6',
+        ONION_WAIT_SECONDS: '4',
+        STABILITY_SECONDS: '0',
+        POLL_INTERVAL_MS: '200',
+      });
+      assert.notEqual(
+        res.status,
+        0,
+        'Gate must fail closed on child-process Fatal signal 5 (SIGTRAP) / MTE fault even if browser PID stays alive',
+      );
+      assert.deepEqual(mock.state.deletedInstances, mock.state.createdInstances);
+      const summary = JSON.parse(fs.readFileSync(path.join(outDir, 'limrun-summary.json'), 'utf8'));
+      assert.equal(summary.passed, false);
+      assert.ok(
+        summary.failures.some((f) => /Native fatal signal/.test(f)),
+        `Expected Fatal signal 5 detection in failures: ${JSON.stringify(summary.failures)}`,
+      );
+      assert.ok(
+        summary.failures.some((f) => /ARMv9 MTE \/ PartitionAlloc/.test(f)),
+        `Expected MTE SetHeapTaggingLevel detection in failures: ${JSON.stringify(summary.failures)}`,
+      );
+      console.log('  PASS: Child-process Fatal signal 5 (SIGTRAP) + MTE fault caught and instance deleted');
+    } finally {
+      await mock.close();
+    }
+  }
+
   fs.rmSync(workDir, { recursive: true, force: true });
-  console.log('ALL 3 LIMRUN GATE E2E TESTS PASSED');
+  console.log('ALL 4 LIMRUN GATE E2E TESTS PASSED');
 }
 
 runTests().catch((err) => {

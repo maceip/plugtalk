@@ -159,8 +159,21 @@ function detectFatalLogIssues(logText) {
   if (new RegExp(`ANR in ${PACKAGE.replace('.', '\\.')}`).test(logText)) {
     issues.push(`Application Not Responding (ANR in ${PACKAGE}) detected in logcat`);
   }
-  if (/Fatal signal (?:11|6|4|7|8)\b|\*\*\* \*\*\* \*\*\*/.test(logText)) {
+  // Catch ALL fatal signals across browser, :sandboxed_process* renderer, and
+  // :privileged_process* GPU processes — including Fatal signal 5 (SIGTRAP)
+  // emitted by Chromium IMMEDIATE_CRASH()/CHECK() (e.g. ARMv9 MTE brk #0) and
+  // Fatal signal 31 (SIGSYS) from seccomp.
+  if (/Fatal signal \d+\b|\*\*\* \*\*\* \*\*\*/.test(logText)) {
     issues.push('Native fatal signal / tombstone header detected in logcat');
+  }
+  if (
+    /SetHeapTaggingLevel:\s*set_tcf_on_all_threads failed|PartitionAlloc:\s*Failed to enable memory tagging/.test(
+      logText,
+    )
+  ) {
+    issues.push(
+      'ARMv9 MTE / PartitionAlloc memory-tagging fault detected in logcat (missing android:memtagMode="off" or PartitionAllocMemoryTagging disable)',
+    );
   }
   if (/UnsatisfiedLinkError|ClassNotFoundException|NoSuchMethodError/.test(logText)) {
     issues.push('JNI/DEX linkage error (UnsatisfiedLinkError / ClassNotFoundException / NoSuchMethodError) detected');
