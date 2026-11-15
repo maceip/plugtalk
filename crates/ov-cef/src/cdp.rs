@@ -349,6 +349,9 @@ fn classify_cdp_element(
             }
         }
         if !disabled && !readonly {
+            if is_pubkey_upload_field(node, &live_value) {
+                return Some(("pgp_public_key", "Insert My PubKey", live_value, true));
+            }
             return Some(("pgp_textarea", "Encrypt Field", live_value, true));
         }
         return None;
@@ -370,6 +373,9 @@ fn classify_cdp_element(
             }
         }
         if !disabled && !readonly {
+            if is_pubkey_upload_field(node, &live_value) {
+                return Some(("pgp_public_key", "Insert My PubKey", live_value, true));
+            }
             return Some(("pgp_textarea", "Encrypt Field", live_value, true));
         }
         return None;
@@ -523,6 +529,26 @@ fn is_hidden_element(node: &CdpNode) -> bool {
             .to_ascii_lowercase();
         if compact.contains("display:none") || compact.contains("visibility:hidden") {
             return true;
+        }
+    }
+    false
+}
+
+fn is_pubkey_upload_field(node: &CdpNode, live_value: &str) -> bool {
+    if extract_armored_block(live_value, FieldKind::PgpPublicKey).is_some() {
+        return true;
+    }
+    for attr_name in ["name", "id", "placeholder", "aria-label"] {
+        if let Some(raw) = node.attr(attr_name) {
+            let lower = raw.to_ascii_lowercase();
+            if lower.contains("pubkey")
+                || lower.contains("public_key")
+                || lower.contains("public-key")
+                || lower.contains("public key")
+                || ((lower.contains("pgp") || lower.contains("gpg")) && lower.contains("key"))
+            {
+                return true;
+            }
         }
     }
     false
@@ -720,5 +746,29 @@ mod tests {
         assert_eq!(plain.kind, "plain");
         assert_eq!(plain.action_label, "");
         assert_eq!(plain.armored, "");
+    }
+
+    #[test]
+    fn editable_pubkey_registration_textarea_emits_insert_my_pubkey() {
+        let cdp_json = r##"{
+          "root": {
+            "nodeId": 1,
+            "backendNodeId": 1,
+            "nodeType": 9,
+            "nodeName": "#document",
+            "children": [{
+              "nodeId": 7,
+              "backendNodeId": 77,
+              "nodeType": 1,
+              "nodeName": "TEXTAREA",
+              "localName": "textarea",
+              "attributes": ["name", "pgp_public_key", "placeholder", "Paste your PGP public key"]
+            }]
+          }
+        }"##;
+        let nodes = classify_cdp_dom_json(cdp_json).expect("valid CDP JSON");
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].kind, "pgp_public_key");
+        assert_eq!(nodes[0].action_label, "Insert My PubKey");
     }
 }

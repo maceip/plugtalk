@@ -38,9 +38,6 @@ ov-tor = { path = "crates/ov-tor" }
 
 # Android
 jni = "0.21"
-ndk = { version = "0.9", features = ["nativewindow", "api-level-29"] }
-ndk-sys = "0.6"
-libc = "0.2"
 
 # Tor
 arti-client = { version = "0.47", default-features = false, features = [

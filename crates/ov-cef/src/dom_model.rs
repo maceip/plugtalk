@@ -202,9 +202,9 @@ pub fn classify(node: &HtmlNode, inside_match: bool) -> Vec<FieldKind> {
     let tag_upper = node.tag.to_ascii_uppercase();
     let probe = if tag_upper == "INPUT" {
         node.attribute("value")
-    } else if tag_upper == "TEXTAREA" {
-        node.text_content()
-    } else if is_pgp_container(&tag_upper) && !any_descendant_element_has_pgp_block(node) {
+    } else if tag_upper == "TEXTAREA"
+        || (is_pgp_container(&tag_upper) && !any_descendant_element_has_pgp_block(node))
+    {
         node.text_content()
     } else {
         String::new()

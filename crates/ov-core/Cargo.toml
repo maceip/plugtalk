@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "JNI entry point, Android event bridge and NDK surface renderer for Trap"
+description = "JNI entry points, Tor transport coordinator, CDP DOM classifier bridge, and OpenPGP engine for Trap"
 
 [dependencies]
 ov-cef = { workspace = true }
@@ -21,6 +21,3 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "ti
 [target.'cfg(target_os = "android")'.dependencies]
 android_logger = "0.15"
 jni = { workspace = true }
-ndk = { workspace = true }
-ndk-sys = { workspace = true }
-libc = { workspace = true }
