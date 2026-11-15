@@ -8,12 +8,18 @@
 #                        JVM/Robolectric Compose & unit tests, debug APK assembly, strict
 #                        `scripts/audit-apk.sh` packaging/DEX/ELF gate, and real Cargo + Gradle +
 #                        binary CycloneDX 1.5 & SPDX 2.3 SBOM generation (`scripts/generate-sbom.py`)
-#   3. `emulator-gate` — boots an Android 15 (API 35) x86_64 emulator, installs `app-debug.apk`,
-#                        and asserts Cefrium readiness, `ov_tor` loopback SOCKS5 bind, 12s live-PID
-#                        stability, zero Java/native crashes/ANRs, and zero JNI/DEX linkage errors
-#   4. `release`       — attests `app-debug.apk` provenance (`actions/attest-build-provenance`) and
-#                        SPDX 2.3 SBOM (`actions/attest-sbom`), commits `[skip ci]` version bump,
-#                        pushes annotated `v<version>` tag, and publishes the latest GitHub Release
+#   3. `emulator-gate`      — boots an Android 15 (API 35) x86_64 emulator, installs `app-debug.apk`,
+#                             and asserts Cefrium readiness, `ov_tor` loopback SOCKS5 bind, 12s live-PID
+#                             stability, zero Java/native crashes/ANRs, and zero JNI/DEX linkage errors
+#   4. `limrun-device-gate` — provisions an isolated cloud Android 15 phone instance on Limrun
+#                             (`@limrun/api` + `lim` CLI), delta-syncs & installs `app-debug.apk`,
+#                             launches `dev.onionvault/.MainActivity` under ActivityManager crash/ANR
+#                             watch, verifies Cefrium + Arti Tor bootstrap + live `.onion` navigation
+#                             (`iso-duckduckgogg42xj`), captures screenshots/logcat/UI tree, and
+#                             tears down the cloud instance cleanly (failing closed on missing secret)
+#   5. `release`            — attests `app-debug.apk` provenance (`actions/attest-build-provenance`) and
+#                             SPDX 2.3 SBOM (`actions/attest-sbom`), commits `[skip ci]` version bump,
+#                             pushes annotated `v<version>` tag, and publishes the latest GitHub Release
 
 name: CI & Release
 
@@ -91,7 +97,9 @@ jobs:
         run: |
           python3 scripts/bump-version.py --current
           python3 scripts/bump-version.py --dry-run
-          bash -n scripts/audit-apk.sh scripts/emulator-gate.sh
+          bash -n scripts/audit-apk.sh scripts/emulator-gate.sh scripts/limrun-gate.sh
+          node --check scripts/limrun-gate.mjs
+          node --check scripts/test-limrun-gate.mjs
 
       - name: Check deterministic icon assets
         run: |
@@ -341,6 +349,115 @@ jobs:
           path: dist/emulator-launch.png
           if-no-files-found: error
 
+  limrun-device-gate:
+    name: Launch and verify APK on Limrun cloud Android instance
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    needs: android-build
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Cache Limrun CLI and SDK
+        uses: actions/cache@v5
+        with:
+          path: /tmp/trap-limrun-tools
+          key: ${{ runner.os }}-limrun-tools-api-0.73.2-cli-0.57.3
+
+      - name: Install pinned Limrun CLI and SDK and run local protocol self-test
+        env:
+          LIMRUN_TOOLS_DIR: /tmp/trap-limrun-tools
+        run: |
+          set -euo pipefail
+          mkdir -p "$LIMRUN_TOOLS_DIR"
+          if [[ ! -f "$LIMRUN_TOOLS_DIR/node_modules/@limrun/api/package.json" || ! -x "$LIMRUN_TOOLS_DIR/node_modules/.bin/lim" ]]; then
+            (
+              cd "$LIMRUN_TOOLS_DIR"
+              printf '{"name":"trap-limrun-tools","private":true}\n' > package.json
+              npm install --no-audit --no-fund --save-exact \
+                "@limrun/api@0.73.2" \
+                "lim@0.57.3"
+            )
+          fi
+          "$LIMRUN_TOOLS_DIR/node_modules/.bin/lim" --version
+          node scripts/test-limrun-gate.mjs
+
+      - name: Download debug APK
+        uses: actions/download-artifact@v8
+        with:
+          name: trap-debug-apk
+          path: apk
+
+      - name: Provision Limrun cloud Android 15 phone and run full runtime & .onion UI gate
+        env:
+          LIM_API_KEY: ${{ secrets.LIM_API_KEY }}
+          LIMRUN_API_KEY: ${{ secrets.LIMRUN_API_KEY }}
+          LIMRUN_TOOLS_DIR: /tmp/trap-limrun-tools
+          LIMRUN_OS_VERSION: "15"
+          LIMRUN_MODEL: "phone"
+        run: ./scripts/limrun-gate.sh apk/app-debug.apk dist/limrun
+
+      - name: Upload Limrun forensic logs, UI hierarchy, and summary
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: limrun-device-forensics
+          path: dist/limrun/*
+          if-no-files-found: ignore
+
+      - name: Upload verified Limrun cloud device screenshots
+        uses: actions/upload-artifact@v7
+        with:
+          name: limrun-device-screenshots
+          path: |
+            dist/limrun/limrun-launch.png
+            dist/limrun/limrun-onion.png
+            dist/limrun/limrun-summary.json
+          if-no-files-found: error
+
+      - name: Sweep any residual Limrun Android instances for this workflow run
+        if: always()
+        env:
+          LIM_API_KEY: ${{ secrets.LIM_API_KEY }}
+          LIMRUN_API_KEY: ${{ secrets.LIMRUN_API_KEY }}
+          LIMRUN_TOOLS_DIR: /tmp/trap-limrun-tools
+        run: |
+          set -euo pipefail
+          API_KEY="${LIM_API_KEY:-${LIMRUN_API_KEY:-}}"
+          LIM_BIN="${LIMRUN_TOOLS_DIR}/node_modules/.bin/lim"
+          if [[ -z "${API_KEY//[[:space:]]/}" || ! -x "$LIM_BIN" ]]; then
+            exit 0
+          fi
+          export LIM_API_KEY="$API_KEY"
+          RUN_TAG="$(printf '%s-%s' "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT:-1}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_.-]/-/g')"
+          ITEMS_JSON="$("$LIM_BIN" android list --all --label-selector "ci_run=${RUN_TAG}" --json 2>/dev/null || echo '[]')"
+          printf '%s' "$ITEMS_JSON" | python3 -c '
+          import json, sys
+          try:
+              items = json.load(sys.stdin)
+          except Exception:
+              items = []
+          for item in items if isinstance(items, list) else []:
+              state = (item.get("status") or {}).get("state", "")
+              inst_id = (item.get("metadata") or {}).get("id", "")
+              if inst_id and state not in ("terminated", "terminating"):
+                  print(inst_id)
+          ' | while read -r inst_id; do
+            if [[ -n "$inst_id" ]]; then
+              echo "Deleting residual Limrun Android instance ${inst_id}..."
+              "$LIM_BIN" android delete "$inst_id" || true
+            fi
+          done
+
   release:
     name: Attest artifacts and publish tagged GitHub release
     if: "!contains(github.event.head_commit.message, '[skip ci]')"
@@ -350,6 +467,7 @@ jobs:
       - rust-tests
       - android-build
       - emulator-gate
+      - limrun-device-gate
     permissions:
       contents: write
       id-token: write
@@ -380,6 +498,12 @@ jobs:
           name: emulator-launch-screenshot
           path: dist
 
+      - name: Download Limrun cloud Android screenshots and summary
+        uses: actions/download-artifact@v8
+        with:
+          name: limrun-device-screenshots
+          path: dist
+
       - name: Download license documents
         uses: actions/download-artifact@v8
         with:
@@ -394,6 +518,9 @@ jobs:
             app-debug.sbom.cdx.json \
             app-debug.sbom.spdx.json \
             emulator-launch.png \
+            limrun-launch.png \
+            limrun-onion.png \
+            limrun-summary.json \
             GPL-3.0.txt \
             LGPL-2.1.txt \
             LGPL-3.0.txt; do
@@ -409,6 +536,9 @@ jobs:
               app-debug.sbom.cdx.json \
               app-debug.sbom.spdx.json \
               emulator-launch.png \
+              limrun-launch.png \
+              limrun-onion.png \
+              limrun-summary.json \
               GPL-3.0.txt \
               LGPL-2.1.txt \
               LGPL-3.0.txt > SHA256SUMS.txt
@@ -463,6 +593,7 @@ jobs:
           - Android JVM / Robolectric Compose UI, screenshot, and JNI parity tests
           - Strict APK DEX/ELF/asset packaging audit (\`scripts/audit-apk.sh\`)
           - Live Android 15 emulator launch, Cefrium 0.19.0 readiness, and \`ov_tor\` SOCKS5 runtime gate (\`scripts/emulator-gate.sh\`)
+          - Live Limrun cloud Android 15 phone launch, Arti Tor bootstrap, and isolated \`.onion\` UI smoke gate (\`scripts/limrun-gate.sh\`)
           - Sigstore-backed GitHub Build Provenance & SPDX 2.3 SBOM Attestations
 
           ### Verify Downloaded APK & SBOM Attestation
@@ -479,6 +610,9 @@ jobs:
             dist/app-debug.sbom.cdx.json \
             dist/app-debug.sbom.spdx.json \
             dist/emulator-launch.png \
+            dist/limrun-launch.png \
+            dist/limrun-onion.png \
+            dist/limrun-summary.json \
             dist/GPL-3.0.txt \
             dist/LGPL-2.1.txt \
             dist/LGPL-3.0.txt \
