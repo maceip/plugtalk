@@ -818,7 +818,7 @@ pub mod jni_api {
         out
     }
 
-    fn into_jstring(mut env: JNIEnv, text: &str) -> jstring {
+    fn into_jstring(env: JNIEnv, text: &str) -> jstring {
         let cleaned = if text.contains('\0') {
             std::borrow::Cow::Owned(text.replace('\0', ""))
         } else {

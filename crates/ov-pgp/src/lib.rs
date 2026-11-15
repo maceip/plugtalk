@@ -24,7 +24,7 @@ pub use store::{
     KeyringStore, StoredCertificate, SETTING_REQUIRE_BIOMETRIC, SETTING_SELECTED_SIGNING_KEY,
 };
 
-use std::{path::Path, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use sequoia_openpgp::Fingerprint;
@@ -83,6 +83,8 @@ pub fn master_key_provider(
 /// Open or create a persistent software master key provider stored at `key_file`
 /// on non-Android platforms so secret keys survive restarts across sessions.
 #[cfg(not(target_os = "android"))]
-pub fn persistent_software_master_key(key_file: &Path) -> Result<Arc<dyn MasterKeyProvider>> {
+pub fn persistent_software_master_key(
+    key_file: &std::path::Path,
+) -> Result<Arc<dyn MasterKeyProvider>> {
     Ok(Arc::new(SoftwareMasterKey::open_or_create(key_file)?))
 }
