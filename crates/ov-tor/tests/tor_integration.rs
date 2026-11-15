@@ -60,8 +60,8 @@ const USERPASS_VERSION: u8 = 0x01;
 
 /// The v3 address of the Tor Project onion service.
 const TOR_PROJECT_ONION: &str = "2gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wid.onion";
-/// The v3 address of the DuckDuckGo onion service.
-const DUCKDUCKGO_ONION: &str = "duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagsw3ad.onion";
+/// The v3 address of the DuckDuckGo onion service (56 base32 chars).
+const DUCKDUCKGO_ONION: &str = "duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion";
 
 /// The compose page of the Trap browser.
 ///
@@ -839,5 +839,73 @@ async fn the_client_tunnels_to_a_real_onion_service() -> anyhow::Result<()> {
     );
 
     service.shutdown();
+    Ok(())
+}
+
+/// Resetting isolation evicts active circuit groups so "New Identity" allocates
+/// fresh isolated TorClient instances, and `isolation_token_for_url` returns
+/// `"iso-<16char_apex>"` exclusively for valid v3 `.onion` URLs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn isolation_tokens_and_reset_rotate_circuits_and_block_rfc7686_leaks() -> anyhow::Result<()>
+{
+    let dir = TempDir::new("reset-and-tokens");
+    let (server, registry) =
+        start_front_end(&dir.path().join("state"), &dir.path().join("cache"), false).await?;
+
+    assert_eq!(
+        registry.isolation_token_for_url(&format!("http://{TOR_PROJECT_ONION}/index.html")),
+        "iso-2gzyxa5ihm7nsggf"
+    );
+    assert_eq!(registry.isolation_token_for_url("about:blank"), "");
+    assert_eq!(
+        registry.isolation_token_for_url("https://example.com/path"),
+        ""
+    );
+
+    let tor_key = apex_domain(TOR_PROJECT_ONION).unwrap();
+    let ddg_key = apex_domain(DUCKDUCKGO_ONION).unwrap();
+    let initial_tor = registry.client_for(&tor_key).await;
+    let initial_ddg = registry.client_for(&ddg_key).await;
+    assert_eq!(registry.group_count().await, 2);
+
+    // Resetting a single .onion URL evicts only that circuit group:
+    let single_evicted = registry.reset_isolation(&format!("http://{TOR_PROJECT_ONION}/"));
+    assert_eq!(single_evicted, 1);
+    assert_eq!(registry.group_count().await, 1);
+
+    let rotated_tor = registry.client_for(&tor_key).await;
+    assert!(
+        !Arc::ptr_eq(&initial_tor, &rotated_tor),
+        "reset_isolation must rotate to a brand-new isolated TorClient"
+    );
+    let unchanged_ddg = registry.client_for(&ddg_key).await;
+    assert!(
+        Arc::ptr_eq(&initial_ddg, &unchanged_ddg),
+        "untargeted hidden service circuit must remain intact"
+    );
+
+    // Resetting with "" ("New Identity") evicts all active groups:
+    let all_evicted = registry.reset_isolation("");
+    assert_eq!(all_evicted, 2);
+    assert_eq!(registry.group_count().await, 0);
+
+    // Verify SOCKS5 policy blocks loopback/LAN and malformed .onion even when allow_clearnet = true:
+    let loopback_req = parse_request(&connect_request_ipv4(Ipv4Addr::LOCALHOST, 8080)).unwrap();
+    assert_eq!(
+        decide(&loopback_req, true),
+        Socks5Decision::Reject(REP_NOT_ALLOWED)
+    );
+    let malformed_onion = parse_request(&connect_request_domain("badshort.onion", 80)).unwrap();
+    assert_eq!(
+        decide(&malformed_onion, false),
+        Socks5Decision::Reject(REP_NOT_ALLOWED)
+    );
+    assert_eq!(
+        decide(&malformed_onion, true),
+        Socks5Decision::Reject(REP_HOST_UNREACHABLE),
+        "RFC 7686: malformed .onion must never proceed to clearnet DNS"
+    );
+
+    server.shutdown();
     Ok(())
 }

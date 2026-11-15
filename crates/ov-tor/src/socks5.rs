@@ -4,17 +4,9 @@
 //! Chromium's network stack is pointed at this listener with
 //! `--proxy-server=socks5://127.0.0.1:<port>`; every browser connection is
 //! therefore tunnelled through Arti and never leaves the device in the clear.
-//!
-//! The server also acts as the isolation point: a SOCKS5 username/password
-//! pair (RFC 1929) or the destination's `.onion` apex domain selects the
-//! circuit that the connection is placed on.
-//!
-//! The wire format and the traffic policy are implemented in the pure
-//! helpers [`parse_request`], [`isolation_key`], [`decide`] and
-//! [`reply_frame`]; they can be exercised without a running Tor client.
 
 use std::{
-    net::SocketAddr,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -30,7 +22,7 @@ use tokio::{
     sync::watch,
 };
 
-use crate::isolation::{apex_domain, IsolationRegistry};
+use crate::isolation::{apex_domain, is_valid_v3_onion_host, IsolationRegistry};
 
 /// SOCKS5 protocol version.
 pub const VERSION: u8 = 0x05;
@@ -93,10 +85,15 @@ pub struct Socks5Request {
 }
 
 impl Socks5Request {
-    /// `true` when the destination is a Tor hidden service address.
+    /// `true` when the destination is a syntactically valid Tor v3 `.onion` host.
     pub fn is_onion(&self) -> bool {
-        self.host.to_ascii_lowercase().ends_with(".onion")
-            || self.host.to_ascii_lowercase().ends_with(".onion.")
+        is_valid_v3_onion_host(&self.host)
+    }
+
+    /// `true` when the destination ends in `.onion` or `.onion.` (valid or malformed).
+    pub fn has_onion_tld(&self) -> bool {
+        let lower = self.host.trim().trim_end_matches('.').to_ascii_lowercase();
+        lower == "onion" || lower.ends_with(".onion")
     }
 }
 
@@ -109,12 +106,7 @@ pub enum Socks5Decision {
     Reject(u8),
 }
 
-/// Parse a SOCKS5 request message.
-///
-/// The message is the one described by RFC 1928, section 3: the version, the
-/// command, a reserved byte, the address type, the address and the port.
-/// The function is pure, so that the wire format can be tested without a
-/// running Tor client.
+/// Parse a SOCKS5 request message (RFC 1928, section 4).
 pub fn parse_request(bytes: &[u8]) -> Result<Socks5Request, Socks5Error> {
     if bytes.len() < 4 {
         return Err(Socks5Error::Truncated);
@@ -132,7 +124,7 @@ pub fn parse_request(bytes: &[u8]) -> Result<Socks5Request, Socks5Error> {
                 return Err(Socks5Error::Truncated);
             }
             let octets = [bytes[4], bytes[5], bytes[6], bytes[7]];
-            (std::net::Ipv4Addr::from(octets).to_string(), 8)
+            (Ipv4Addr::from(octets).to_string(), 8)
         }
         ATYP_IPV6 => {
             if bytes.len() < 20 {
@@ -140,15 +132,13 @@ pub fn parse_request(bytes: &[u8]) -> Result<Socks5Request, Socks5Error> {
             }
             let mut octets = [0u8; 16];
             octets.copy_from_slice(&bytes[4..20]);
-            (std::net::Ipv6Addr::from(octets).to_string(), 20)
+            (Ipv6Addr::from(octets).to_string(), 20)
         }
         ATYP_DOMAIN => {
             if bytes.len() < 5 {
                 return Err(Socks5Error::Truncated);
             }
             let len = bytes[4];
-            // The length of a domain name is a single byte, so it can never
-            // be longer than 255 characters; only the empty name is invalid.
             if len == 0 {
                 return Err(Socks5Error::InvalidDomainLength(len));
             }
@@ -174,10 +164,6 @@ pub fn parse_request(bytes: &[u8]) -> Result<Socks5Request, Socks5Error> {
 }
 
 /// The isolation key of a request.
-///
-/// The SOCKS5 user name (RFC 1929) wins when the client supplied one;
-/// otherwise the apex domain of the hidden service is used.  Two different
-/// hidden services therefore never share a circuit.
 pub fn isolation_key(host: &str, username: &str) -> String {
     if username.is_empty() {
         apex_domain(host).unwrap_or_default()
@@ -188,12 +174,29 @@ pub fn isolation_key(host: &str, username: &str) -> String {
 
 /// Apply the traffic policy to a decoded request.
 ///
-/// In hidden service only mode every destination that is not a hidden
-/// service address is refused: the browser must not be able to leak traffic
-/// outside of the tunnel.
+/// - Only `CONNECT` on non-zero ports is permitted.
+/// - Loopback, link-local, unspecified, and RFC 1918 private destinations are
+///   refused unconditionally even when `allow_clearnet` is `true`.
+/// - Malformed `.onion` names are refused unconditionally (RFC 7686) so they
+///   can never leak to Tor exit DNS.
+/// - In hidden-service-only mode (`!allow_clearnet`), every non-`.onion`
+///   destination is refused with `REP_NOT_ALLOWED`.
 pub fn decide(request: &Socks5Request, allow_clearnet: bool) -> Socks5Decision {
     if request.command != CMD_CONNECT {
         return Socks5Decision::Reject(REP_COMMAND_NOT_SUPPORTED);
+    }
+    if request.port == 0 {
+        return Socks5Decision::Reject(REP_NOT_ALLOWED);
+    }
+    if is_forbidden_local_host(&request.host) {
+        return Socks5Decision::Reject(REP_NOT_ALLOWED);
+    }
+    if request.has_onion_tld() && !request.is_onion() {
+        return if allow_clearnet {
+            Socks5Decision::Reject(REP_HOST_UNREACHABLE)
+        } else {
+            Socks5Decision::Reject(REP_NOT_ALLOWED)
+        };
     }
     if !request.is_onion() && !allow_clearnet {
         return Socks5Decision::Reject(REP_NOT_ALLOWED);
@@ -201,10 +204,53 @@ pub fn decide(request: &Socks5Request, allow_clearnet: bool) -> Socks5Decision {
     Socks5Decision::Proceed
 }
 
+fn is_forbidden_local_host(host: &str) -> bool {
+    let trimmed = host
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .trim_end_matches('.');
+    if trimmed.is_empty() {
+        return true;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    if lower == "localhost" || lower.ends_with(".localhost") || lower.ends_with(".local") {
+        return true;
+    }
+
+    if let Ok(ip) = trimmed.parse::<IpAddr>() {
+        return match ip {
+            IpAddr::V4(v4) => is_forbidden_ipv4(v4),
+            IpAddr::V6(v6) => {
+                if let Some(mapped) = v6.to_ipv4_mapped() {
+                    return is_forbidden_ipv4(mapped);
+                }
+                v6.is_loopback()
+                    || v6.is_unspecified()
+                    || v6.is_multicast()
+                    || (v6.segments()[0] & 0xfe00) == 0xfc00
+                    || (v6.segments()[0] & 0xffc0) == 0xfe80
+            }
+        };
+    }
+
+    false
+}
+
+fn is_forbidden_ipv4(v4: Ipv4Addr) -> bool {
+    let octets = v4.octets();
+    let is_cgnat = octets[0] == 100 && (octets[1] & 0b1100_0000) == 64;
+    v4.is_loopback()
+        || v4.is_private()
+        || v4.is_link_local()
+        || v4.is_broadcast()
+        || v4.is_unspecified()
+        || v4.is_multicast()
+        || is_cgnat
+}
+
 /// Build the reply message for `code`.
-///
-/// The bound address is always reported as 0.0.0.0:0, which is what every
-/// SOCKS5 client expects from a CONNECT reply.
 pub fn reply_frame(code: u8) -> Vec<u8> {
     let mut reply = vec![VERSION, code, 0x00, ATYP_IPV4];
     reply.extend_from_slice(&[0, 0, 0, 0]);
@@ -217,18 +263,11 @@ pub struct Socks5Server {
     local_addr: SocketAddr,
     shutdown: watch::Sender<bool>,
     accept_task: tokio::task::JoinHandle<()>,
-    /// The traffic policy: `true` lets the listener carry clearnet traffic.
-    ///
-    /// The flag is shared with the accept loop, so that the user can change
-    /// the policy of the browser without restarting the Tor client.
     allow_clearnet: Arc<AtomicBool>,
 }
 
 impl Socks5Server {
     /// Bind the listener and start accepting connections.
-    ///
-    /// The socket is bound to `bind`; passing port `0` makes the kernel pick
-    /// an ephemeral port, which is then reported by [`Socks5Server::local_addr`].
     pub async fn start(
         bind: SocketAddr,
         isolation: Arc<IsolationRegistry>,
@@ -291,13 +330,14 @@ impl Socks5Server {
         self.local_addr
     }
 
-    /// Change the traffic policy of the listener.
-    ///
-    /// In hidden service only mode the listener refuses every clearnet
-    /// destination; the flag is read when a connection is handled, so the
-    /// change takes effect for the next request.
+    /// Current clearnet policy (`false` means hidden-service-only mode).
+    pub fn allow_clearnet(&self) -> bool {
+        self.allow_clearnet.load(Ordering::Acquire)
+    }
+
+    /// Change the traffic policy of the listener immediately.
     pub fn set_allow_clearnet(&self, allow: bool) {
-        self.allow_clearnet.store(allow, Ordering::Relaxed);
+        self.allow_clearnet.store(allow, Ordering::Release);
     }
 
     /// Stop accepting new connections.
@@ -310,6 +350,7 @@ impl Socks5Server {
 impl Drop for Socks5Server {
     fn drop(&mut self) {
         let _ = self.shutdown.send(true);
+        self.accept_task.abort();
     }
 }
 
@@ -330,17 +371,16 @@ async fn handle_connection(
         Ok(Some(request)) => request,
         Ok(None) => return Ok(()),
         Err(err) => {
-            // The client sent something that is not a SOCKS5 request.
             log::debug!("malformed SOCKS5 request: {err:#}");
             write_reply(&mut stream, REP_ADDRESS_TYPE_NOT_SUPPORTED).await?;
             return Ok(());
         }
     };
 
-    match decide(&request, allow_clearnet.load(Ordering::Relaxed)) {
+    match decide(&request, allow_clearnet.load(Ordering::Acquire)) {
         Socks5Decision::Reject(REP_NOT_ALLOWED) => {
             log::warn!(
-                "refusing clearnet connection to {}:{} in hidden service only mode",
+                "refusing connection to {}:{} under Tor leak policy",
                 request.host,
                 request.port
             );
@@ -348,28 +388,26 @@ async fn handle_connection(
             return Ok(());
         }
         Socks5Decision::Reject(code) => {
-            log::debug!("refusing the SOCKS5 request with reply code {code}");
+            log::debug!("refusing SOCKS5 request to {}:{} with reply code {code}", request.host, request.port);
             write_reply(&mut stream, code).await?;
             return Ok(());
         }
         Socks5Decision::Proceed => {}
     }
 
-    // The isolation key is the SOCKS5 user name when the client supplied one,
-    // otherwise the apex domain of the hidden service.  Two different hidden
-    // services therefore never share a circuit.
     let key = isolation_key(&request.host, &username);
+    let (client, maybe_token) = isolation.client_and_token_for(&key);
 
-    let client = isolation.client_for(&key).await;
+    let mut prefs = StreamPrefs::new();
+    if let Some(token) = maybe_token {
+        prefs.set_isolation(token);
+    }
 
-    let prefs = StreamPrefs::default();
     let target = (request.host.as_str(), request.port);
     let tor_stream = tokio::select! {
         biased;
         changed = shutdown.changed() => {
-            if changed.is_err() || *shutdown.borrow() {
-                return Ok(());
-            }
+            let _ = changed;
             return Ok(());
         }
         result = tokio::time::timeout(connect_timeout, client.connect_with_prefs(target, &prefs)) => {
@@ -397,7 +435,6 @@ async fn handle_connection(
 
 /// Copy bytes in both directions until either side closes.
 async fn relay(mut client: TcpStream, mut tor: DataStream) -> anyhow::Result<()> {
-    // Two buffers: the select! below borrows both of them at the same time.
     let mut to_tor = vec![0u8; 32 * 1024];
     let mut to_client = vec![0u8; 32 * 1024];
     loop {
@@ -423,8 +460,7 @@ async fn relay(mut client: TcpStream, mut tor: DataStream) -> anyhow::Result<()>
     Ok(())
 }
 
-/// Perform the method negotiation and, when the client asks for it, the
-/// RFC 1929 user/password exchange.  Returns the user name.
+/// Perform RFC 1928 method negotiation and optional RFC 1929 user/password exchange.
 async fn negotiate_auth(stream: &mut TcpStream) -> anyhow::Result<String> {
     let mut header = [0u8; 2];
     stream.read_exact(&mut header).await?;
@@ -453,9 +489,7 @@ async fn negotiate_auth(stream: &mut TcpStream) -> anyhow::Result<String> {
     }
 }
 
-/// RFC 1929 user/password sub-negotiation.  The user name doubles as the
-/// isolation key, the password is not used for authentication (the listener
-/// only exists inside the application sandbox).
+/// RFC 1929 user/password sub-negotiation.
 async fn read_userpass(stream: &mut TcpStream) -> anyhow::Result<String> {
     let mut header = [0u8; 2];
     stream.read_exact(&mut header).await?;
@@ -471,17 +505,13 @@ async fn read_userpass(stream: &mut TcpStream) -> anyhow::Result<String> {
     let mut password = vec![0u8; pass_len[0] as usize];
     stream.read_exact(&mut password).await?;
 
-    // Status 0 == success.
     stream.write_all(&[USERPASS_VERSION, 0x00]).await?;
     stream.flush().await?;
 
     Ok(String::from_utf8_lossy(&username).into_owned())
 }
 
-/// Read the SOCKS5 request message.
-///
-/// The message is collected in a frame buffer and handed to
-/// [`parse_request`], so that the wire format is implemented exactly once.
+/// Read a single SOCKS5 request frame.
 async fn read_request(stream: &mut TcpStream) -> anyhow::Result<Option<Socks5Request>> {
     let mut header = [0u8; 4];
     if stream.read_exact(&mut header).await.is_err() {
@@ -521,7 +551,6 @@ async fn read_request(stream: &mut TcpStream) -> anyhow::Result<Option<Socks5Req
     Ok(Some(request))
 }
 
-/// Write a SOCKS5 reply.
 async fn write_reply(stream: &mut TcpStream, code: u8) -> anyhow::Result<()> {
     stream.write_all(&reply_frame(code)).await?;
     stream.flush().await?;

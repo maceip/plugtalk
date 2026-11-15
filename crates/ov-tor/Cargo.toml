@@ -26,6 +26,7 @@ tor-rtcompat = { workspace = true }
 # part of the dependencies of this crate and is installed before the first
 # client is built (see `install_crypto_provider`).
 rustls = { workspace = true }
+serde = { workspace = true }
 
 [dev-dependencies]
 # The onion service of the end to end test is published with the Arti onion

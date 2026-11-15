@@ -2874,6 +2874,7 @@ dependencies = [
  "log",
  "rustls",
  "safelog",
+ "serde",
  "thiserror 2.0.21",
  "tokio",
  "tor-cell",
