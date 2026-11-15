@@ -52,8 +52,13 @@ a time, and launch on the emulator after each one.
   - **GeckoView:** the engine Tor Browser for Android uses. A big switch, and
     it has the same JavaScript-only DOM access.
 
-  **Decision:** stay on Cefrium, consumed exactly as its quickstart says
-  (Gradle dependency, `Application` setup, `CefriumBrowser`).
+  **Decision (bootstrap -> source-owned migration):** use Cefrium (`0.19.0`) only
+  as the verified bootstrap to get Trap booting and gated on real devices today—never
+  the broken `cef-rs` / `crates/cefpack` desktop C-API wrapper (`0653953`)—and then
+  replace pre-built `com.cefrium:cefrium-sdk` packages with a first-party, source-built
+  Chromium `//content/public/android` AAR compiled via `siso` REv2 on Limrun's remote
+  build plane (Step 8; full specification in
+  [`docs/BROWSER-RUNTIME-BUILD-PLAN.md`](docs/BROWSER-RUNTIME-BUILD-PLAN.md)).
 
 ---
 
@@ -171,6 +176,14 @@ Also fix from the OpenPGP audit:
 - Monero wallet: out of scope for v1. Remove the artwork-only entry points or
   label them "coming later".
 
+### Step 8: Source-built browser runtime — replace pre-built Cefrium packages (7–11 days)
+Full forensic audit and engineering specification: [`docs/BROWSER-RUNTIME-BUILD-PLAN.md`](docs/BROWSER-RUNTIME-BUILD-PLAN.md).
+- **Why pre-built `com.cefrium:cefrium-sdk:0.19.0` must go:** `cefrium-sdk-0.19.0.aar` ships 450+ MB of third-party pre-compiled native binaries (`libcef.so`, Chromium `156.0.8078.80`, 242 unused `cef_*` C-API symbols) plus a 120.2 MB Java-25 `classes.jar` (`31,398` classes including `9,424` `org.chromium.chrome.*` classes and `50` Play Services / Firebase / Clearcut / MLKit dependencies). Now that `libonion_vault.so` has `0` `libcef.so` `DT_NEEDED` symbols, Trap does not need the desktop CEF C-API middleman at all.
+- **Phase 0 (1 day):** Extract Kotlin `BrowserEngine` / `BrowserSession` interface seam (`CefriumEngineAdapter` first, zero behavior change).
+- **Phase 1 (1–2 days):** Verify Chromium `siso` REv2 remote execution & cache against Limrun's Linux `x86_64` build plane (`reapi_address = "buildplane.us-east1.limrun.net:4443"`, `reapi_instance = "org_01m7ger979f4b98sesd3w802kv"`, `SISO_CREDENTIAL_HELPER` -> `lim-bazel-credentials`, `OSFamily = "linux"`, `limrun-toolchains = "jdk-17-21-25-clang18-v2"`).
+- **Phase 2 (4–6 days):** Build zero-patch `trap-chromium-content.aar` (`libtrap_chromium_content.so`, `arm64-v8a` + `x86_64`, 16KB ELF `PT_LOAD` alignment, ARMv9 MTE-safe `PartitionAlloc`, `enable_webrtc = false`, `proprietary_codecs = false`) directly atop pinned upstream `chromium/src` (`//content/public/android` + `ContentViewRenderView` + `ProxyConfigClient` Mojo SOCKS5h pipe + `WebPreferences::javascript_enabled = false` + `DevToolsAgentHostClient` JSON bridge).
+- **Phase 3 (2–3 days):** Publish reproducible `trap-chromium-content.aar` with CycloneDX/SPDX SBOM + Sigstore SLSA v1 provenance, remove `maven.cefrium.com` and `com.cefrium:*` completely, enforce zero `Lcom/cefrium/` & `Lcom/google/android/gms/` DEX classes in `scripts/audit-apk.sh`, and pass `QEMU virt,mte=on`, `pixel16k`, and `limrun-device-gate`.
+
 ---
 
 ## 4. Definition of "nearly ready"
@@ -184,6 +197,7 @@ All of these are green on the gate, on a recorded emulator run **and** one real 
 - [ ] Crash screen with copyable trace after a forced crash
 - [ ] Both themes, light + dark, on every surface listed in step 6
 - [ ] Release APK/AAB signed, sized per ABI, README Status table matches reality
+- [ ] Browser runtime built from pinned Chromium source (`trap-chromium-content.aar` via `siso` REv2 on Limrun; zero pre-built `com.cefrium:*` packages — Step 8 / [`docs/BROWSER-RUNTIME-BUILD-PLAN.md`](docs/BROWSER-RUNTIME-BUILD-PLAN.md))
 
 Rough total: **2–3 weeks of focused work**, front-loaded so that a working,
 honestly described alpha exists today and every later step only adds verified features.
