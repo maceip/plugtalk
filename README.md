@@ -9,10 +9,36 @@
 
 **Trap** is an Android hidden-service browser (`dev.onionvault`, `minSdk 29`, `targetSdk 35`) that routes traffic exclusively through an embedded **Arti** Tor client, runs Chromium (**Cefrium `0.19.0`**) with **JavaScript completely disabled**, and performs **OpenPGP** key management, encryption, signing, and decryption natively in Rust (**Sequoia OpenPGP `1.22`** + **Android Keystore AES-256-GCM**) with zero content scripts and zero WebAssembly.
 
+## Downloads & Attestations
+
+Every push to `main` that passes Rust tests, multi-ABI (`arm64-v8a` + `x86_64`) Android packaging/DEX/ELF audits, and the live Android 15 emulator runtime gate publishes an attested [Latest GitHub Release](https://github.com/maceip/trap/releases/latest):
+
+| Artifact | Direct Download | Description |
+|---|---|---|
+| **Android Debug APK** | [`app-debug.apk`](https://github.com/maceip/trap/releases/latest/download/app-debug.apk) | Universal debug APK (`arm64-v8a` + `x86_64`) bundling Cefrium `0.19.0` + `libonion_vault.so` |
+| **CycloneDX 1.5 SBOM** | [`app-debug.sbom.cdx.json`](https://github.com/maceip/trap/releases/latest/download/app-debug.sbom.cdx.json) | Complete Cargo + Maven/Android (`debugRuntimeClasspath`) + native `.so` SHA-256 inventory |
+| **SPDX 2.3 SBOM** | [`app-debug.sbom.spdx.json`](https://github.com/maceip/trap/releases/latest/download/app-debug.sbom.spdx.json) | Sigstore-attested SPDX 2.3 JSON inventory for `app-debug.apk` |
+| **SHA-256 Checksums** | [`SHA256SUMS.txt`](https://github.com/maceip/trap/releases/latest/download/SHA256SUMS.txt) | SHA-256 digests of the APK, SBOMs, emulator screenshot, and bundled license files |
+| **Emulator Gate Capture** | [`emulator-launch.png`](https://github.com/maceip/trap/releases/latest/download/emulator-launch.png) | Live Android 15 runtime screenshot captured during `scripts/emulator-gate.sh` |
+| **Bundled License Texts** | [`LGPL-3.0.txt`](https://github.com/maceip/trap/releases/latest/download/LGPL-3.0.txt) · [`GPL-3.0.txt`](https://github.com/maceip/trap/releases/latest/download/GPL-3.0.txt) · [`LGPL-2.1.txt`](https://github.com/maceip/trap/releases/latest/download/LGPL-2.1.txt) | Verbatim third-party license texts also embedded offline inside `assets/licenses/` |
+
+Verify the downloaded APK checksum, SLSA build provenance attestation, and SPDX 2.3 SBOM attestation with the [GitHub CLI](https://cli.github.com/):
+
+```sh
+curl -fLO https://github.com/maceip/trap/releases/latest/download/app-debug.apk
+curl -fLO https://github.com/maceip/trap/releases/latest/download/SHA256SUMS.txt
+sha256sum -c SHA256SUMS.txt --ignore-missing
+
+# Verify Sigstore build provenance & SPDX 2.3 SBOM attestations
+gh attestation verify app-debug.apk --repo maceip/trap
+gh attestation verify app-debug.apk --repo maceip/trap --predicate-type https://spdx.dev/Document/v2.3
+```
+
 ## Repository Layout
 
 ```text
 trap/
+├── VERSION                     Monotonic release version manifest (`MAJOR.MINOR.PATCH`)
 ├── Cargo.toml                  Workspace manifest + Android `cdylib` (`libonion_vault.so`)
 ├── build.rs                    Self-contained Cargo build script (zero `libcef.so` link coupling)
 ├── src/lib.rs                  19 `#[no_mangle]` JNI entry points (`Java_dev_onionvault_OvNative_*`)
@@ -24,7 +50,10 @@ trap/
 ├── design/icons/               Reproducible icon & Neon Graffiti sprite pipelines (`trap_icon.py`, `neon/slice_neon.py`)
 ├── licenses/                   Bundled LGPL-3.0, GPL-3.0, and LGPL-2.1 texts copied into `assets/licenses/` by Gradle (`copyLegalNotices`)
 ├── scripts/
-│   └── emulator-gate.sh        Automated Android emulator launch, Cefrium readiness & crash/ANR runtime gate
+│   ├── bump-version.py         Monotonic `VERSION`, `Cargo.toml`, `Cargo.lock`, and Gradle `versionCode` bumper
+│   ├── audit-apk.sh            Pre-release APK multi-ABI ELF, DEX class-table, `.pak`, and `aapt2` packaging gate
+│   ├── generate-sbom.py        Real Cargo + Gradle + APK binary CycloneDX 1.5 & SPDX 2.3 SBOM generator
+│   └── emulator-gate.sh        Automated Android emulator launch, Cefrium + `ov_tor` SOCKS5 & crash/linkage gate
 └── android/                    Gradle Android application (`com.cefrium:cefrium-sdk:0.19.0`, Jetpack Compose)
     └── app/src/main/kotlin/dev/onionvault/
         ├── TrapApplication.kt          Process-isolated Cefrium initialization & fail-closed incognito profile

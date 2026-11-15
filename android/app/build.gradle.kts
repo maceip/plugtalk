@@ -12,6 +12,38 @@ plugins {
     id("com.cefrium")
 }
 
+val trapVersionFile = rootProject.file("../VERSION")
+val trapDefaultVersionName = trapVersionFile
+    .takeIf { it.isFile }
+    ?.readText()
+    ?.trim()
+    ?.takeIf { it.isNotEmpty() }
+    ?: "0.1.26"
+val trapVersionCodeFloor = 26
+val trapResolvedVersionName = providers.gradleProperty("trap.versionName")
+    .orNull
+    ?.trim()
+    ?.takeIf { it.isNotEmpty() }
+    ?: trapDefaultVersionName
+val trapResolvedVersionCode = providers.gradleProperty("trap.versionCode")
+    .orNull
+    ?.trim()
+    ?.toIntOrNull()
+    ?: trapResolvedVersionName.split(".")
+        .takeIf { parts -> parts.size == 3 && parts.all { it.isNotEmpty() && it.all(Char::isDigit) } }
+        ?.let { (maj, min, pat) ->
+            val major = maj.toInt()
+            val minor = min.toInt()
+            val patch = pat.toInt()
+            val encoded = if (major > 0 || minor > 1) {
+                major * 100_000 + minor * 1_000 + patch
+            } else {
+                patch
+            }
+            maxOf(trapVersionCodeFloor, encoded)
+        }
+        ?: trapVersionCodeFloor
+
 android {
     namespace = "dev.onionvault"
     compileSdk = 37
@@ -21,8 +53,8 @@ android {
         applicationId = "dev.onionvault"
         minSdk = 29
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = trapResolvedVersionCode
+        versionName = trapResolvedVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
