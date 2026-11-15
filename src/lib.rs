@@ -1,6 +1,6 @@
 //! Trap: shared Rust library (`libonion_vault.so`) exporting the `OvNative` JNI ABI.
 //!
-//! All 19 `Java_dev_onionvault_OvNative_*` entry points live here and delegate
+//! All 24 `Java_dev_onionvault_OvNative_*` entry points live here and delegate
 //! to [`ov_core::jni_api`].  Zero `libcef.so` symbols are linked.
 
 pub use ov_core;
@@ -11,7 +11,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[cfg(target_os = "android")]
 mod jni_entry_points {
     use jni::objects::JObject;
-    use jni::sys::{jboolean, jint, jstring};
+    use jni::sys::{jboolean, jint, jlong, jstring};
     use jni::JNIEnv;
 
     #[no_mangle]
@@ -224,6 +224,55 @@ mod jni_entry_points {
     pub extern "system" fn Java_dev_onionvault_OvNative_nativeShutdown(env: JNIEnv, this: JObject) {
         ov_core::jni_api::Java_dev_onionvault_OvNative_nativeShutdown(env, this)
     }
+
+    #[no_mangle]
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeAllowClearnet(
+        env: JNIEnv,
+        this: JObject,
+        pattern: jstring,
+        ttl_seconds: jlong,
+    ) -> jstring {
+        ov_core::jni_api::Java_dev_onionvault_OvNative_nativeAllowClearnet(
+            env,
+            this,
+            pattern,
+            ttl_seconds,
+        )
+    }
+
+    #[no_mangle]
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeDenyClearnet(
+        env: JNIEnv,
+        this: JObject,
+        host: jstring,
+    ) -> jboolean {
+        ov_core::jni_api::Java_dev_onionvault_OvNative_nativeDenyClearnet(env, this, host)
+    }
+
+    #[no_mangle]
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeListClearnetRulesJson(
+        env: JNIEnv,
+        this: JObject,
+    ) -> jstring {
+        ov_core::jni_api::Java_dev_onionvault_OvNative_nativeListClearnetRulesJson(env, this)
+    }
+
+    #[no_mangle]
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeRevokeClearnetRule(
+        env: JNIEnv,
+        this: JObject,
+        pattern: jstring,
+    ) -> jstring {
+        ov_core::jni_api::Java_dev_onionvault_OvNative_nativeRevokeClearnetRule(env, this, pattern)
+    }
+
+    #[no_mangle]
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeClearClearnetRules(
+        env: JNIEnv,
+        this: JObject,
+    ) -> jboolean {
+        ov_core::jni_api::Java_dev_onionvault_OvNative_nativeClearClearnetRules(env, this)
+    }
 }
 
 #[cfg(test)]
@@ -234,16 +283,19 @@ mod tests {
     }
 
     #[test]
-    fn jni_symbol_table_matches_exact_19_exports_in_both_files() {
+    fn jni_symbol_table_matches_exact_24_exports_in_both_files() {
         let root_src = include_str!("lib.rs");
         let core_src = include_str!("../crates/ov-core/src/lib.rs");
 
         let expected = [
+            "Java_dev_onionvault_OvNative_nativeAllowClearnet",
             "Java_dev_onionvault_OvNative_nativeCheckUrlPolicy",
             "Java_dev_onionvault_OvNative_nativeClassifyCdpDom",
             "Java_dev_onionvault_OvNative_nativeClassifyText",
+            "Java_dev_onionvault_OvNative_nativeClearClearnetRules",
             "Java_dev_onionvault_OvNative_nativeDecrypt",
             "Java_dev_onionvault_OvNative_nativeDeleteKey",
+            "Java_dev_onionvault_OvNative_nativeDenyClearnet",
             "Java_dev_onionvault_OvNative_nativeEncrypt",
             "Java_dev_onionvault_OvNative_nativeExportPublicKey",
             "Java_dev_onionvault_OvNative_nativeGenerateKey",
@@ -251,8 +303,10 @@ mod tests {
             "Java_dev_onionvault_OvNative_nativeImportKey",
             "Java_dev_onionvault_OvNative_nativeInit",
             "Java_dev_onionvault_OvNative_nativeLastInitError",
+            "Java_dev_onionvault_OvNative_nativeListClearnetRulesJson",
             "Java_dev_onionvault_OvNative_nativeListKeysJson",
             "Java_dev_onionvault_OvNative_nativeResetTorIsolation",
+            "Java_dev_onionvault_OvNative_nativeRevokeClearnetRule",
             "Java_dev_onionvault_OvNative_nativeSetHiddenServiceOnly",
             "Java_dev_onionvault_OvNative_nativeSetRequireBiometric",
             "Java_dev_onionvault_OvNative_nativeShutdown",

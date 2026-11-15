@@ -39,7 +39,8 @@ use ov_tor::{
         ATYP_DOMAIN, ATYP_IPV4, CMD_CONNECT, REP_HOST_UNREACHABLE, REP_NOT_ALLOWED, REP_SUCCESS,
         VERSION,
     },
-    IsolationRegistry, Socks5Server, TorConfig, TorService,
+    ClearnetAllowlist, IsolationRegistry, Socks5Server, TorConfig, TorService,
+    CLEARNET_ALLOWLIST_FILENAME, DEFAULT_CLEARNET_TTL_SECS, DEFAULT_CONSENT_WAIT_TIMEOUT,
 };
 use safelog::DisplayRedacted;
 use tokio::{
@@ -905,6 +906,255 @@ async fn isolation_tokens_and_reset_rotate_circuits_and_block_rfc7686_leaks() ->
         Socks5Decision::Reject(REP_HOST_UNREACHABLE),
         "RFC 7686: malformed .onion must never proceed to clearnet DNS"
     );
+
+    server.shutdown();
+    Ok(())
+}
+
+/// Helper that starts a hermetic unbootstrapped SOCKS5 server wired to a caller-supplied
+/// [`ClearnetAllowlist`] and consent wait timeout.
+async fn start_front_end_with_clearnet(
+    state_dir: &Path,
+    cache_dir: &Path,
+    allow_clearnet: bool,
+    clearnet: Arc<ClearnetAllowlist>,
+    consent_timeout: Duration,
+) -> anyhow::Result<(Arc<Socks5Server>, Arc<IsolationRegistry>)> {
+    install_crypto_provider();
+    private_dir(state_dir);
+    private_dir(cache_dir);
+
+    let config = TorConfig {
+        state_dir: state_dir.to_path_buf(),
+        cache_dir: cache_dir.to_path_buf(),
+        allow_clearnet,
+        connect_timeout: Duration::from_secs(30),
+        ..TorConfig::default()
+    };
+    config.validate()?;
+
+    let tor_config = config.build_tor_config()?;
+    let runtime = PreferredRuntime::current().context("cannot obtain the Tor runtime")?;
+    let client = TorClient::with_runtime(runtime)
+        .config(tor_config)
+        .bootstrap_behavior(BootstrapBehavior::Manual)
+        .create_unbootstrapped_async()
+        .await
+        .context("cannot create the Arti client")?;
+
+    let registry = Arc::new(IsolationRegistry::new(client, true));
+    let server = Socks5Server::start_with_clearnet(
+        config.socks_bind,
+        registry.clone(),
+        config.allow_clearnet,
+        clearnet,
+        config.connect_timeout,
+        consent_timeout,
+    )
+    .await?;
+    Ok((server, registry))
+}
+
+#[test]
+fn default_tor_config_enables_clearnet_gated_by_allowlist() {
+    let cfg = TorConfig::default();
+    assert!(
+        cfg.allow_clearnet,
+        "TorConfig::default() must allow clearnet gated by ClearnetAllowlist"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn chromium_background_endpoints_are_silently_refused_without_prompt_spam(
+) -> anyhow::Result<()> {
+    let dir = TempDir::new("chromium-silent-refusal");
+    let clearnet = Arc::new(ClearnetAllowlist::in_memory());
+    let (server, _registry) = start_front_end_with_clearnet(
+        &dir.path().join("state"),
+        &dir.path().join("cache"),
+        true,
+        clearnet.clone(),
+        DEFAULT_CONSENT_WAIT_TIMEOUT,
+    )
+    .await?;
+    let addr = server.local_addr();
+
+    for bg_host in [
+        "content-autofill.googleapis.com",
+        "www.gstatic.com",
+        "edgedl.me.gvt1.com",
+        "ocsp.pki.goog",
+        "chrome.cloudflare-dns.com",
+    ] {
+        let started = Instant::now();
+        let mut client = Socks5Client::connect(addr).await;
+        client.greet(&[METHOD_NONE]).await;
+        let reply = client.request(&connect_request_domain(bg_host, 443)).await;
+        assert_eq!(
+            reply[1], REP_NOT_ALLOWED,
+            "Chromium background endpoint {bg_host} must be silently refused"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "Chromium background endpoint {bg_host} must fail fast without waiting"
+        );
+        assert_eq!(clearnet.oldest_pending_host(), None);
+        assert!(clearnet.pending_hosts().is_empty());
+    }
+
+    server.shutdown();
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn socks5_holds_clearnet_streams_until_allowed_or_denied_and_persists_3_day_glob(
+) -> anyhow::Result<()> {
+    let dir = TempDir::new("clearnet-consent-wakeup");
+    let allowlist_file = dir.path().join(CLEARNET_ALLOWLIST_FILENAME);
+    let clearnet = Arc::new(ClearnetAllowlist::load_or_new(&allowlist_file));
+    let (server, _registry) = start_front_end_with_clearnet(
+        &dir.path().join("state"),
+        &dir.path().join("cache"),
+        true,
+        clearnet.clone(),
+        DEFAULT_CONSENT_WAIT_TIMEOUT,
+    )
+    .await?;
+    let addr = server.local_addr();
+
+    // 1. `.onion` v3 passes immediately without touching clearnet consent queue:
+    {
+        let mut onion_client = Socks5Client::connect(addr).await;
+        onion_client.greet(&[METHOD_NONE]).await;
+        let reply = onion_client
+            .request(&connect_request_domain(TOR_PROJECT_ONION, 80))
+            .await;
+        assert_eq!(reply[1], REP_HOST_UNREACHABLE);
+        assert_eq!(clearnet.oldest_pending_host(), None);
+    }
+
+    // 2. Concurrent `tor.taxi` and `www.tor.taxi` clearnet connections hold until `*.tor.taxi` is allowed:
+    let root_task = tokio::spawn(async move {
+        let mut c = Socks5Client::connect(addr).await;
+        c.greet(&[METHOD_NONE]).await;
+        c.request(&connect_request_domain("tor.taxi", 443)).await
+    });
+
+    // Wait until `tor.taxi` is registered as oldest pending host:
+    let poll_deadline = Instant::now() + Duration::from_secs(3);
+    while clearnet.oldest_pending_host().as_deref() != Some("tor.taxi") {
+        assert!(
+            Instant::now() < poll_deadline,
+            "tor.taxi was not queued in pending_hosts"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        !root_task.is_finished(),
+        "SOCKS5 connection to tor.taxi must remain held until consent is granted"
+    );
+
+    let sub_task = tokio::spawn(async move {
+        let mut c = Socks5Client::connect(addr).await;
+        c.greet(&[METHOD_NONE]).await;
+        c.request(&connect_request_domain("www.tor.taxi", 443))
+            .await
+    });
+    while clearnet.pending_hosts().len() < 2 {
+        assert!(Instant::now() < poll_deadline);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(clearnet.oldest_pending_host().as_deref(), Some("tor.taxi"));
+
+    // One click ("Allow for 3 days" on `*.tor.taxi`) wakes BOTH streams immediately!
+    let active_rules = clearnet.allow("*.tor.taxi", DEFAULT_CLEARNET_TTL_SECS as i64);
+    assert_eq!(active_rules.len(), 1);
+    assert_eq!(active_rules[0].pattern, "*.tor.taxi");
+    assert!(!active_rules[0].session_only);
+
+    let root_reply = tokio::time::timeout(Duration::from_secs(3), root_task)
+        .await
+        .expect("root_task did not wake after allow")?;
+    let sub_reply = tokio::time::timeout(Duration::from_secs(3), sub_task)
+        .await
+        .expect("sub_task did not wake after allow")?;
+
+    // Both streams passed the clearnet gate and dialed Arti Tor (`REP_HOST_UNREACHABLE` offline):
+    assert_eq!(root_reply[1], REP_HOST_UNREACHABLE);
+    assert_eq!(sub_reply[1], REP_HOST_UNREACHABLE);
+    assert_eq!(clearnet.oldest_pending_host(), None);
+
+    // Verify atomic persistence of `clearnet_allowlist.json` across reload:
+    let reloaded = ClearnetAllowlist::load_or_new(&allowlist_file);
+    assert!(reloaded.is_allowed("tor.taxi", ov_tor::clearnet::now_epoch_ms()));
+    assert!(reloaded.is_allowed("sub.tor.taxi", ov_tor::clearnet::now_epoch_ms()));
+
+    // 3. Denying a held host wakes the stream with `REP_NOT_ALLOWED` and suppresses repeat prompts:
+    let deny_task = tokio::spawn(async move {
+        let mut c = Socks5Client::connect(addr).await;
+        c.greet(&[METHOD_NONE]).await;
+        c.request(&connect_request_domain("tracker.example", 443))
+            .await
+    });
+    let deny_poll_deadline = Instant::now() + Duration::from_secs(3);
+    while clearnet.oldest_pending_host().as_deref() != Some("tracker.example") {
+        assert!(Instant::now() < deny_poll_deadline);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    assert!(clearnet.deny("tracker.example"));
+    let deny_reply = tokio::time::timeout(Duration::from_secs(3), deny_task)
+        .await
+        .expect("deny_task did not wake after deny")?;
+    assert_eq!(deny_reply[1], REP_NOT_ALLOWED);
+    assert_eq!(clearnet.oldest_pending_host(), None);
+
+    // Subsequent background connection to `tracker.example` fails immediately without re-queuing:
+    let repeat_started = Instant::now();
+    let mut repeat_client = Socks5Client::connect(addr).await;
+    repeat_client.greet(&[METHOD_NONE]).await;
+    let repeat_reply = repeat_client
+        .request(&connect_request_domain("tracker.example", 443))
+        .await;
+    assert_eq!(repeat_reply[1], REP_NOT_ALLOWED);
+    assert!(repeat_started.elapsed() < Duration::from_secs(1));
+    assert_eq!(clearnet.oldest_pending_host(), None);
+
+    // Explicit `allow` later clears `tracker.example` from `session_denied`:
+    clearnet.allow("*.tracker.example", 0);
+    let mut allowed_after_deny = Socks5Client::connect(addr).await;
+    allowed_after_deny.greet(&[METHOD_NONE]).await;
+    let after_allow_reply = allowed_after_deny
+        .request(&connect_request_domain("tracker.example", 443))
+        .await;
+    assert_eq!(after_allow_reply[1], REP_HOST_UNREACHABLE);
+
+    server.shutdown();
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unanswered_clearnet_consent_times_out_cleanly_and_clears_pending_host(
+) -> anyhow::Result<()> {
+    let dir = TempDir::new("clearnet-consent-timeout");
+    let clearnet = Arc::new(ClearnetAllowlist::in_memory());
+    let (server, _registry) = start_front_end_with_clearnet(
+        &dir.path().join("state"),
+        &dir.path().join("cache"),
+        true,
+        clearnet.clone(),
+        Duration::from_millis(150),
+    )
+    .await?;
+    let addr = server.local_addr();
+
+    let mut client = Socks5Client::connect(addr).await;
+    client.greet(&[METHOD_NONE]).await;
+    let reply = client
+        .request(&connect_request_domain("unanswered.example", 443))
+        .await;
+    assert_eq!(reply[1], REP_NOT_ALLOWED);
+    assert_eq!(clearnet.oldest_pending_host(), None);
 
     server.shutdown();
     Ok(())
