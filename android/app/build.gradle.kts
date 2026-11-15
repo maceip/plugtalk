@@ -18,8 +18,8 @@ val trapDefaultVersionName = trapVersionFile
     ?.readText()
     ?.trim()
     ?.takeIf { it.isNotEmpty() }
-    ?: "0.1.26"
-val trapVersionCodeFloor = 26
+    ?: "0.1.27"
+val trapVersionCodeFloor = 27
 val trapResolvedVersionName = providers.gradleProperty("trap.versionName")
     .orNull
     ?.trim()
