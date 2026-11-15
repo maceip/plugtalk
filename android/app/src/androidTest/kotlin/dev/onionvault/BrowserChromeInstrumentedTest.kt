@@ -210,8 +210,8 @@ class BrowserChromeInstrumentedTest {
                   <meta charset="utf-8" />
                   <meta name="viewport" content="width=device-width, initial-scale=1" />
                   <style>
-                    body { margin: 16px; background: #14100C; color: #E8DDD0; font-family: sans-serif; }
-                    textarea { display: block; width: 92%; margin-bottom: 28px; font-size: 14px; }
+                    body { margin: 64px 16px 24px 16px; background: #14100C; color: #E8DDD0; font-family: sans-serif; }
+                    textarea { display: block; width: 92%; min-height: 112px; margin-bottom: 44px; font-size: 14px; }
                   </style>
                   <script>
                     document.documentElement.setAttribute('data-js-ran', '1');
@@ -267,7 +267,12 @@ class BrowserChromeInstrumentedTest {
                 expectedSubstring = "BEGIN PGP PUBLIC KEY BLOCK",
                 timeoutMs = 10_000L,
             )
-            assertTrue(pubFieldValue.contains("-----BEGIN PGP PUBLIC KEY BLOCK-----"))
+            val debugDomAfterPub = queryPiercedDomJson(activity, browser)
+            val debugMsgAfterPub = readControlInnerEditorById(debugDomAfterPub, "msg")
+            assertTrue(
+                "Expected PGP public key in #pub, got pub=[${pubFieldValue.take(90)}] msg=[${debugMsgAfterPub.take(90)}] domLen=${debugDomAfterPub.length}",
+                pubFieldValue.contains("-----BEGIN PGP PUBLIC KEY BLOCK-----"),
+            )
             assertTrue(pubFieldValue.contains("-----END PGP PUBLIC KEY BLOCK-----"))
             assertFalse(
                 "Blink placeholder pseudo-element must not pollute #inner-editor value",
