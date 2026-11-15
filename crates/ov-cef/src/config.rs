@@ -296,10 +296,7 @@ fn is_non_public_ip(host: &str) -> bool {
                 || (v6.segments()[0] & 0xfe00) == 0xfc00
                 || (v6.segments()[0] & 0xffc0) == 0xfe80
                 || v6.to_ipv4_mapped().is_some_and(|v4| {
-                    v4.is_loopback()
-                        || v4.is_private()
-                        || v4.is_link_local()
-                        || v4.is_unspecified()
+                    v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
                 })
         }
     }
@@ -324,8 +321,7 @@ pub fn is_svg_url(url: &str) -> bool {
 mod tests {
     use super::*;
 
-    const DDG_V3: &str =
-        "https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/";
+    const DDG_V3: &str = "https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/";
 
     #[test]
     fn preserves_about_blank_and_normalizes_bare_v3_onion() {

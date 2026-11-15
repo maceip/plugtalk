@@ -32,7 +32,10 @@ impl BrowserBridge for OvBridge {
         let result = match self.state.keyring.decrypt_armored(&request.armored) {
             Ok(res) => res,
             Err(err) => {
-                log::warn!("cannot decrypt PGP request for {}: {err:#}", request.node_id);
+                log::warn!(
+                    "cannot decrypt PGP request for {}: {err:#}",
+                    request.node_id
+                );
                 return None;
             }
         };
@@ -74,15 +77,11 @@ impl BrowserBridge for OvBridge {
                 }
                 self.state
                     .keyring
-                    .encrypt_with_options(&value.value, &fingerprints, None, None, true)
+                    .encrypt_with_options(&value.value, &fingerprints, None, None, false)
                     .ok()
                     .map(|out| out.ciphertext)
             }
-            FieldAction::InsertPublicKey => self
-                .state
-                .keyring
-                .export_public_key_by_query("")
-                .ok(),
+            FieldAction::InsertPublicKey => self.state.keyring.export_public_key_by_query("").ok(),
         }
     }
 

@@ -116,7 +116,9 @@ impl HtmlNode {
 
     /// Value of an attribute (empty string when absent).
     pub fn attribute(&self, name: &str) -> String {
-        self.attribute_opt(name).map(str::to_string).unwrap_or_default()
+        self.attribute_opt(name)
+            .map(str::to_string)
+            .unwrap_or_default()
     }
 
     /// Borrowed value of an attribute (`None` when absent).
@@ -426,11 +428,7 @@ pub fn css_escape_ident(ident: &str) -> String {
             out.push_str(&format!("\\{:x} ", ch as u32));
         } else if idx == 0 && ch == '-' && chars.len() == 1 {
             out.push_str("\\-");
-        } else if ch >= '\u{0080}'
-            || ch.is_ascii_alphanumeric()
-            || ch == '-'
-            || ch == '_'
-        {
+        } else if ch >= '\u{0080}' || ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
             out.push(ch);
         } else {
             out.push('\\');
@@ -889,8 +887,8 @@ pub fn parse_html(html: &str) -> HtmlNode {
                     }
                 }
                 if let Some(close_idx) = close_pos {
-                    let after_close = find_char(&chars, close_idx, '>')
-                        .map_or(chars.len(), |pos| pos + 1);
+                    let after_close =
+                        find_char(&chars, close_idx, '>').map_or(chars.len(), |pos| pos + 1);
                     let closed = stack.pop().unwrap();
                     push_node(&mut root, &mut stack, closed);
                     index = after_close;
@@ -1013,7 +1011,9 @@ fn should_keep_text(decoded: &str, stack: &[HtmlNode]) -> bool {
     }
     // Preserve whitespace/newlines inside `<pre>` and `<code>` blocks where
     // blank lines between armor headers and body are significant.
-    stack.iter().any(|n| matches!(n.tag.as_str(), "pre" | "code"))
+    stack
+        .iter()
+        .any(|n| matches!(n.tag.as_str(), "pre" | "code"))
 }
 
 fn is_raw_text_element(tag: &str) -> bool {
@@ -1341,12 +1341,18 @@ mDMEY1234567890==
         assert_eq!(key_box.kind, FieldKind::PgpPublicKey);
         assert_eq!(key_box.kinds, vec![FieldKind::PgpPublicKey]);
         assert_eq!(key_box.css_selector, r"#\31 pub-key");
-        assert_eq!(query_selector(&root, &key_box.css_selector).unwrap().tag, "textarea");
+        assert_eq!(
+            query_selector(&root, &key_box.css_selector).unwrap().tag,
+            "textarea"
+        );
 
         let input = &fields[1];
         assert_eq!(input.kind, FieldKind::TextInput);
         assert_eq!(input.value, "Alice <a@onion>");
-        assert_eq!(query_selector(&root, &input.css_selector).unwrap().tag, "input");
+        assert_eq!(
+            query_selector(&root, &input.css_selector).unwrap().tag,
+            "input"
+        );
     }
 
     #[test]

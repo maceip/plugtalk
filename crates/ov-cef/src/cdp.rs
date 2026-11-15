@@ -14,7 +14,9 @@ use std::collections::HashMap;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{
-    dom_model::{detect_pgp_block_kind, extract_armored_block, is_ignored_subtree, is_pgp_container},
+    dom_model::{
+        detect_pgp_block_kind, extract_armored_block, is_ignored_subtree, is_pgp_container,
+    },
     ipc::FieldKind,
 };
 
@@ -256,8 +258,7 @@ pub fn parse_cdp_root(cdp_dom_json: &str) -> Result<CdpNode, String> {
             return Ok(inner);
         }
     }
-    serde_json::from_str::<CdpNode>(trimmed)
-        .map_err(|err| format!("invalid CDP DOM JSON: {err}"))
+    serde_json::from_str::<CdpNode>(trimmed).map_err(|err| format!("invalid CDP DOM JSON: {err}"))
 }
 
 fn walk_cdp<F>(

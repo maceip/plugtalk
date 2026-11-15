@@ -101,11 +101,7 @@ mod jni_entry_points {
         this: JObject,
         cdp_dom_json: jstring,
     ) -> jstring {
-        ov_core::jni_api::Java_dev_onionvault_OvNative_nativeClassifyCdpDom(
-            env,
-            this,
-            cdp_dom_json,
-        )
+        ov_core::jni_api::Java_dev_onionvault_OvNative_nativeClassifyCdpDom(env, this, cdp_dom_json)
     }
 
     #[no_mangle]
@@ -133,10 +129,7 @@ mod jni_entry_points {
         passphrase: jstring,
     ) -> jstring {
         ov_core::jni_api::Java_dev_onionvault_OvNative_nativeGenerateKey(
-            env,
-            this,
-            user_id,
-            passphrase,
+            env, this, user_id, passphrase,
         )
     }
 
@@ -148,10 +141,7 @@ mod jni_entry_points {
         passphrase: jstring,
     ) -> jstring {
         ov_core::jni_api::Java_dev_onionvault_OvNative_nativeImportKey(
-            env,
-            this,
-            armored,
-            passphrase,
+            env, this, armored, passphrase,
         )
     }
 
@@ -231,10 +221,7 @@ mod jni_entry_points {
     }
 
     #[no_mangle]
-    pub extern "system" fn Java_dev_onionvault_OvNative_nativeShutdown(
-        env: JNIEnv,
-        this: JObject,
-    ) {
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeShutdown(env: JNIEnv, this: JObject) {
         ov_core::jni_api::Java_dev_onionvault_OvNative_nativeShutdown(env, this)
     }
 }

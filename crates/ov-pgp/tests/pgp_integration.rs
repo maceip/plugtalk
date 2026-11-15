@@ -467,8 +467,14 @@ fn subkey_signatures_resolve_primary_fingerprint_and_userid_and_all_statuses() -
     let verified_clear = receiver_ring.decrypt_armored(&cleartext)?;
     assert_eq!(verified_clear.signature_status(), SignatureStatus::Good);
     assert_eq!(verified_clear.signer_fingerprint_hex(), carol_fp.to_hex());
-    assert_eq!(verified_clear.signer_user_id(), "Carol <carol@onion.invalid>");
-    assert_eq!(verified_clear.plaintext.trim(), "Authentic canary statement");
+    assert_eq!(
+        verified_clear.signer_user_id(),
+        "Carol <carol@onion.invalid>"
+    );
+    assert_eq!(
+        verified_clear.plaintext.trim(),
+        "Authentic canary statement"
+    );
 
     let tampered_clear = cleartext.replace("Authentic canary", "Forged canary");
     let bad_clear = receiver_ring.decrypt_armored(&tampered_clear)?;
@@ -541,12 +547,10 @@ fn passphrase_protected_generate_import_sign_and_decrypt() -> anyhow::Result<()>
     assert_eq!(signed_dec.signer_fingerprint_hex(), fp.to_hex());
 
     // Importing an external S2K-encrypted TSK validates passphrase if supplied:
-    let (ext_cert, _) = CertBuilder::general_purpose(
-        CipherSuite::default(),
-        Some("External <ext@onion.invalid>"),
-    )
-    .set_password(Some("s2k-pass".into()))
-    .generate()?;
+    let (ext_cert, _) =
+        CertBuilder::general_purpose(CipherSuite::default(), Some("External <ext@onion.invalid>"))
+            .set_password(Some("s2k-pass".into()))
+            .generate()?;
     let ext_armored = armored_secret_key(&ext_cert)?;
 
     let wrong_import = keyring
@@ -599,9 +603,12 @@ fn master_key_rotation_summaries_hints_and_deletion() -> anyhow::Result<()> {
         keyring.fingerprint_hint_of_armored(&contact_pub).as_deref(),
         Some(contact_fp.to_hex().as_str())
     );
-    let ct_for_owner = keyring.encrypt_armored("hint check", std::slice::from_ref(&own_fp), None)?;
+    let ct_for_owner =
+        keyring.encrypt_armored("hint check", std::slice::from_ref(&own_fp), None)?;
     assert_eq!(
-        keyring.fingerprint_hint_of_armored(&ct_for_owner).as_deref(),
+        keyring
+            .fingerprint_hint_of_armored(&ct_for_owner)
+            .as_deref(),
         Some(own_fp.to_hex().as_str())
     );
 
@@ -621,7 +628,10 @@ fn master_key_rotation_summaries_hints_and_deletion() -> anyhow::Result<()> {
         master_b.unwrap(&raw_wrapped).is_ok(),
         "new master key must unwrap rotated secret"
     );
-    assert_eq!(keyring.decrypt_armored(&ct_for_owner)?.plaintext, "hint check");
+    assert_eq!(
+        keyring.decrypt_armored(&ct_for_owner)?.plaintext,
+        "hint check"
+    );
 
     // Delete owner key and verify removal:
     assert!(keyring.delete_certificate(&own_fp)?);

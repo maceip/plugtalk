@@ -388,7 +388,11 @@ async fn handle_connection(
             return Ok(());
         }
         Socks5Decision::Reject(code) => {
-            log::debug!("refusing SOCKS5 request to {}:{} with reply code {code}", request.host, request.port);
+            log::debug!(
+                "refusing SOCKS5 request to {}:{} with reply code {code}",
+                request.host,
+                request.port
+            );
             write_reply(&mut stream, code).await?;
             return Ok(());
         }

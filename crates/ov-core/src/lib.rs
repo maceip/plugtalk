@@ -22,9 +22,9 @@ use anyhow::{anyhow, Context, Result};
 use ov_cef::{OvConfig, PixelFormat};
 #[cfg(target_os = "android")]
 use ov_pgp::keystore::{BIOMETRIC_ALIAS, DEFAULT_ALIAS};
-use ov_pgp::{needs_passphrase, Keyring, KeyringStore};
 #[cfg(target_os = "android")]
 use ov_pgp::SETTING_REQUIRE_BIOMETRIC;
+use ov_pgp::{needs_passphrase, Keyring, KeyringStore};
 use ov_tor::TorStatusSnapshot;
 use sequoia_openpgp::{armor, parse::Parse, Cert, KeyHandle, Packet, PacketPile};
 
@@ -117,10 +117,7 @@ impl Engine {
             cache_dir.to_path_buf()
         };
         std::fs::create_dir_all(&effective_cache_base).with_context(|| {
-            format!(
-                "cannot create cacheDir {}",
-                effective_cache_base.display()
-            )
+            format!("cannot create cacheDir {}", effective_cache_base.display())
         })?;
 
         let arti_state_dir = data_dir.join("arti_state");
@@ -312,9 +309,7 @@ pub fn last_init_error() -> String {
 
 /// 3. Active SOCKS5 proxy URL (`"socks5://127.0.0.1:<port>"`), or `""` before init.
 pub fn socks_proxy() -> String {
-    engine()
-        .map(|s| s.tor.proxy_url())
-        .unwrap_or_default()
+    engine().map(|s| s.tor.proxy_url()).unwrap_or_default()
 }
 
 /// 4. Live Tor status & isolation snapshot JSON (`nativeTorStatusJson`).
@@ -574,15 +569,17 @@ pub fn encrypt_json(
         } else {
             Some(ov_pgp::parse_fingerprint(signer_fingerprint_or_empty)?)
         };
-        let auto_sign = explicit_signer.is_none();
         let pw = (!passphrase.is_empty()).then_some(passphrase.as_bytes());
 
+        // Never auto-sign when `signer_fingerprint_or_empty` is empty: the user
+        // explicitly selected Unsigned, so secret keys / Android Keystore must
+        // not be unwrapped or attached.
         state.keyring.encrypt_with_options(
             plaintext,
             &recipients,
             explicit_signer.as_ref(),
             pw,
-            auto_sign,
+            false,
         )
     };
 
@@ -742,7 +739,8 @@ fn standalone_fingerprint_hint(armored: &str) -> Option<String> {
     if let Ok(cert) = Cert::from_bytes(trimmed.as_bytes()) {
         return Some(cert.fingerprint().to_hex());
     }
-    let mut reader = armor::Reader::from_bytes(trimmed.as_bytes(), armor::ReaderMode::Tolerant(None));
+    let mut reader =
+        armor::Reader::from_bytes(trimmed.as_bytes(), armor::ReaderMode::Tolerant(None));
     let mut binary = Vec::new();
     if reader.read_to_end(&mut binary).is_err() {
         return None;
@@ -782,10 +780,10 @@ fn standalone_fingerprint_hint(armored: &str) -> Option<String> {
 #[allow(non_snake_case)]
 pub mod jni_api {
     use super::*;
-    use std::path::PathBuf;
     use jni::objects::{JObject, JString};
     use jni::sys::{jboolean, jint, jstring};
     use jni::JNIEnv;
+    use std::path::PathBuf;
 
     fn init_android_logger_once() {
         use std::sync::Once;
@@ -850,7 +848,11 @@ pub mod jni_api {
 
         let data_path = PathBuf::from(read_jstring(&mut env, data_dir));
         let cache_path = PathBuf::from(read_jstring(&mut env, cache_dir));
-        u8::from(init_engine(&data_path, &cache_path, hidden_service_only != 0))
+        u8::from(init_engine(
+            &data_path,
+            &cache_path,
+            hidden_service_only != 0,
+        ))
     }
 
     pub extern "system" fn Java_dev_onionvault_OvNative_nativeLastInitError(
@@ -1089,9 +1091,11 @@ mod tests {
         assert_eq!(alice_fp.len(), 40);
         assert!(alice_pub.starts_with("-----BEGIN PGP PUBLIC KEY BLOCK-----"));
 
-        let bob_gen: serde_json::Value =
-            serde_json::from_str(&generate_key_json("Bob <bob@onion.invalid>", "bob-secret-pw"))
-                .unwrap();
+        let bob_gen: serde_json::Value = serde_json::from_str(&generate_key_json(
+            "Bob <bob@onion.invalid>",
+            "bob-secret-pw",
+        ))
+        .unwrap();
         assert_eq!(bob_gen["ok"], true);
         let bob_fp = bob_gen["fingerprint"].as_str().unwrap().to_string();
 
@@ -1102,6 +1106,21 @@ mod tests {
         assert_eq!(arr[0]["canSign"], true);
         assert_eq!(arr[0]["canEncrypt"], true);
         assert_eq!(arr[0]["isOwnKey"], true);
+
+        // Unsigned encryption (`signer_fingerprint_or_empty = ""`) must strictly
+        // produce an unsigned ciphertext without touching unlocked `alice_fp`:
+        let enc_unsigned: serde_json::Value =
+            serde_json::from_str(&encrypt_json("Anonymous drop", &bob_fp, "", "")).unwrap();
+        assert_eq!(enc_unsigned["ok"], true);
+        assert_eq!(enc_unsigned["signed"], false);
+        let ct_unsigned = enc_unsigned["ciphertext"].as_str().unwrap().to_string();
+        let dec_unsigned: serde_json::Value =
+            serde_json::from_str(&decrypt_json(&ct_unsigned, "bob-secret-pw")).unwrap();
+        assert_eq!(dec_unsigned["ok"], true);
+        assert_eq!(dec_unsigned["plaintext"], "Anonymous drop");
+        assert_eq!(dec_unsigned["signatureStatus"], "unsigned");
+        assert_eq!(dec_unsigned["signerFingerprint"], "");
+        assert_eq!(dec_unsigned["signerUserId"], "");
 
         // Encrypt from Alice -> Bob (signed) and decrypt with passphrase negotiation:
         let enc: serde_json::Value =

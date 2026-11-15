@@ -129,8 +129,7 @@ fn write_private_file(path: &Path, bytes: &[u8]) -> Result<()> {
     }
     #[cfg(not(unix))]
     {
-        std::fs::write(path, bytes)
-            .with_context(|| format!("cannot write {}", path.display()))?;
+        std::fs::write(path, bytes).with_context(|| format!("cannot write {}", path.display()))?;
         Ok(())
     }
 }

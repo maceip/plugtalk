@@ -417,8 +417,7 @@ impl Keyring {
             bail!("User ID must not be empty");
         }
 
-        let mut builder =
-            CertBuilder::general_purpose(CipherSuite::default(), Some(trimmed_uid));
+        let mut builder = CertBuilder::general_purpose(CipherSuite::default(), Some(trimmed_uid));
         if let Some(pw) = non_empty_passphrase(passphrase) {
             builder = builder.set_password(Some(Password::from(pw)));
         }
@@ -866,10 +865,7 @@ impl Keyring {
             let Ok(cert) = parse_cert(entry.armored.as_bytes()) else {
                 continue;
             };
-            if cert
-                .keys()
-                .any(|ka| ka.key().key_handle().aliases(handle))
-            {
+            if cert.keys().any(|ka| ka.key().key_handle().aliases(handle)) {
                 return Some(cert.fingerprint());
             }
         }
@@ -1010,7 +1006,10 @@ impl KeyringHelper<'_> {
         Ok(out)
     }
 
-    fn resolve_cert_for_issuers(&self, handles: &[KeyHandle]) -> Option<(Fingerprint, Vec<String>)> {
+    fn resolve_cert_for_issuers(
+        &self,
+        handles: &[KeyHandle],
+    ) -> Option<(Fingerprint, Vec<String>)> {
         let stored = self.store.certificates().ok()?;
         for entry in stored {
             let Ok(cert) = parse_cert(entry.armored.as_bytes()) else {
@@ -1090,9 +1089,7 @@ impl VerificationHelper for KeyringHelper<'_> {
                             UnboundKey { sig, cert, .. } => {
                                 (sig, SignatureStatus::Bad, Some(*cert))
                             }
-                            BadKey { sig, ka, .. } => {
-                                (sig, SignatureStatus::Bad, Some(ka.cert()))
-                            }
+                            BadKey { sig, ka, .. } => (sig, SignatureStatus::Bad, Some(ka.cert())),
                             BadSignature { sig, ka, .. } => {
                                 (sig, SignatureStatus::Bad, Some(ka.cert()))
                             }
@@ -1185,7 +1182,9 @@ impl DecryptionHelper for KeyringHelper<'_> {
                     let mut keypair = match unlocked.into_keypair() {
                         Ok(kp) => kp,
                         Err(err) => {
-                            log::warn!("cannot build decryption keypair for {fingerprint}: {err:#}");
+                            log::warn!(
+                                "cannot build decryption keypair for {fingerprint}: {err:#}"
+                            );
                             continue;
                         }
                     };

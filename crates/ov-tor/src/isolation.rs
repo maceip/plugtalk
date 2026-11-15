@@ -224,7 +224,11 @@ pub fn extract_host(url_or_host: &str) -> Option<String> {
     }
 
     let after_scheme = if let Some((scheme, rest)) = trimmed.split_once("://") {
-        if scheme.is_empty() || !scheme.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'-' || b == b'.') {
+        if scheme.is_empty()
+            || !scheme
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'-' || b == b'.')
+        {
             return None;
         }
         rest
