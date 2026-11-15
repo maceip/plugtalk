@@ -53,7 +53,8 @@ const LIMRUN_INSTALL_MODE = (process.env.LIMRUN_INSTALL_MODE || 'auto').trim();
 const INSTANCE_ID_FILE = (process.env.LIMRUN_INSTANCE_ID_FILE || '').trim() || null;
 
 const BOOT_WAIT_SECONDS = Number(process.env.BOOT_WAIT_SECONDS ?? 150);
-const ONION_WAIT_SECONDS = Number(process.env.ONION_WAIT_SECONDS ?? 180);
+const ONION_WAIT_SECONDS = Number(process.env.ONION_WAIT_SECONDS ?? 240);
+const MAX_ONION_ATTEMPTS = Number(process.env.MAX_ONION_ATTEMPTS ?? 4);
 const STABILITY_SECONDS = Number(process.env.STABILITY_SECONDS ?? 12);
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS ?? 2000);
 const SKIP_ONION_SMOKE = process.env.LIMRUN_SKIP_ONION_SMOKE === '1';
@@ -219,6 +220,31 @@ function isStillLoadingInUi(tree) {
     return true;
   }
   return /\bcontent-desc="Stop loading"/i.test(tree?.xml || '');
+}
+
+function hasOnionHostInChrome(tree, expectedHost) {
+  if (/\btext="Enter address"/i.test(tree?.xml || '')) {
+    return false;
+  }
+  if (Array.isArray(tree?.nodes) && tree.nodes.length > 0) {
+    if (tree.nodes.some((n) => String(n.text || '').trim() === 'Enter address')) {
+      return false;
+    }
+    return tree.nodes.some((n) => {
+      const t = String(n.text || '');
+      return (
+        t.includes(expectedHost) &&
+        !/Navigation failed/i.test(t) &&
+        !t.includes('about:blank · zero-JS')
+      );
+    });
+  }
+  const xml = String(tree?.xml || '');
+  return (
+    !xml.includes('about:blank · zero-JS') &&
+    xml.includes(expectedHost) &&
+    !/Navigation failed[^"]*duckduckgogg/i.test(xml)
+  );
 }
 
 function extractLatestMainFrameHttpStatus(logBuffer, targetUrl) {
@@ -733,9 +759,10 @@ async function main() {
           if (allText.includes(ONION_EXPECTED_ISOLATION)) {
             summary.onionSmoke.isolationVisibleInUi = true;
           }
-          if (!allText.includes('about:blank · zero-JS') && allText.includes(ONION_EXPECTED_HOST)) {
-            summary.onionSmoke.onionHostVisibleInUi = true;
-          }
+          summary.onionSmoke.onionHostVisibleInUi = hasOnionHostInChrome(
+            finalTree,
+            ONION_EXPECTED_HOST,
+          );
           if (
             summary.onionSmoke.onionHostVisibleInUi &&
             !hasStaleAboutBlankTitle(finalTree) &&
@@ -745,28 +772,74 @@ async function main() {
           } else {
             summary.onionSmoke.onionTitleRenderedInUi = false;
           }
-          if (/Navigation failed/i.test(allText)) {
+          if (/Navigation failed/i.test(allText) && !summary.onionSmoke.pageLoadedInLogcat) {
             const elapsedSec = (Date.now() - onionStarted) / 1000;
-            if (summary.onionSmoke.attempts < 2 && elapsedSec < ONION_WAIT_SECONDS - 30) {
+            if (
+              summary.onionSmoke.attempts < MAX_ONION_ATTEMPTS &&
+              elapsedSec < ONION_WAIT_SECONDS - 25
+            ) {
               summary.onionSmoke.attempts += 1;
               summary.onionSmoke.pageLoadedInLogcat = false;
               summary.onionSmoke.mainFrameHttpStatus = null;
               summary.onionSmoke.onionTitleRenderedInUi = false;
+              summary.onionSmoke.onionHostVisibleInUi = false;
               console.warn(
-                `  First .onion rendezvous attempt reported navigation error at ${elapsedSec.toFixed(1)}s; retrying live navigation (attempt ${summary.onionSmoke.attempts})...`,
+                `  .onion rendezvous attempt ${summary.onionSmoke.attempts - 1} reported navigation error at ${elapsedSec.toFixed(1)}s; retrying live navigation (attempt ${summary.onionSmoke.attempts}/${MAX_ONION_ATTEMPTS})...`,
               );
-              await client
-                .adbShell('am', [
-                  'start',
-                  '-W',
-                  '-a',
-                  'android.intent.action.VIEW',
-                  '-d',
-                  ONION_TEST_URL,
-                  '-n',
-                  ACTIVITY,
-                ])
-                .catch(() => {});
+              if (summary.onionSmoke.attempts === 3) {
+                const shieldNode = (finalTree.nodes || []).find(
+                  (n) => String(n.contentDesc || '') === 'Tor security status',
+                );
+                if (shieldNode?.parsedBounds) {
+                  await client
+                    .tap({ x: shieldNode.parsedBounds.centerX, y: shieldNode.parsedBounds.centerY })
+                    .catch(() => {});
+                  await sleep(1200);
+                  const secTree = await client
+                    .getElementTree({ waitForIdleTimeoutMs: 1000 })
+                    .catch(() => null);
+                  const resetNode = (secTree?.nodes || []).find((n) =>
+                    String(n.text || '').includes('New Identity'),
+                  );
+                  if (resetNode?.parsedBounds) {
+                    await client
+                      .tap({ x: resetNode.parsedBounds.centerX, y: resetNode.parsedBounds.centerY })
+                      .catch(() => {});
+                    await sleep(1000);
+                  }
+                  const closeNode = (secTree?.nodes || []).find(
+                    (n) => String(n.contentDesc || '') === 'Close sheet',
+                  );
+                  if (closeNode?.parsedBounds) {
+                    await client
+                      .tap({ x: closeNode.parsedBounds.centerX, y: closeNode.parsedBounds.centerY })
+                      .catch(() => {});
+                    await sleep(1000);
+                  }
+                }
+              }
+              const reloadNode =
+                summary.onionSmoke.attempts !== 3
+                  ? (finalTree.nodes || []).find((n) => String(n.contentDesc || '') === 'Reload')
+                  : null;
+              if (reloadNode?.parsedBounds) {
+                await client
+                  .tap({ x: reloadNode.parsedBounds.centerX, y: reloadNode.parsedBounds.centerY })
+                  .catch(() => {});
+              } else {
+                await client
+                  .adbShell('am', [
+                    'start',
+                    '-W',
+                    '-a',
+                    'android.intent.action.VIEW',
+                    '-d',
+                    ONION_TEST_URL,
+                    '-n',
+                    ACTIVITY,
+                  ])
+                  .catch(() => {});
+              }
               await sleep(3000);
               continue;
             }

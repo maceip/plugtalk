@@ -93,6 +93,7 @@ class TabSessionManager(
         var state: TabState,
         var latestDomHtml: String = "",
         var overrideDisplayUrl: String? = null,
+        var pendingNavigationUrl: String? = null,
         var hadErrorInCurrentLoad: Boolean = false,
     )
 
@@ -184,7 +185,11 @@ class TabSessionManager(
         return createTab(initialUrl = initialUrl, select = true)
     }
 
-    fun createTab(initialUrl: String = "about:blank", select: Boolean = true): String {
+    fun createTab(
+        initialUrl: String = "about:blank",
+        select: Boolean = true,
+        loadInitialBlank: Boolean = true,
+    ): String {
         val tabId = "tab-${UUID.randomUUID().toString().take(8)}"
         val activity = resolveActivity(context)
         val browser = if (activity != null && TrapApplication.isEngineReady) {
@@ -221,8 +226,8 @@ class TabSessionManager(
             id = tabId,
             url = startUrl,
             title = displayTitleForUrl(startUrl),
-            isLoading = false,
-            loadProgress = 100,
+            isLoading = startUrl != "about:blank",
+            loadProgress = if (startUrl == "about:blank") 100 else 10,
             canGoBack = false,
             canGoForward = false,
             zoomPercent = 100,
@@ -234,6 +239,7 @@ class TabSessionManager(
             browser = browser,
             surfaceWrapper = wrapper,
             state = initialState,
+            pendingNavigationUrl = startUrl.takeIf { it != "about:blank" },
         )
         sessions[tabId] = managed
 
@@ -250,7 +256,7 @@ class TabSessionManager(
 
         if (startUrl != "about:blank") {
             loadUrl(startUrl, tabId)
-        } else {
+        } else if (loadInitialBlank) {
             browser?.loadUrl("about:blank")
         }
 
@@ -400,6 +406,7 @@ class TabSessionManager(
         }
 
         managed.overrideDisplayUrl = null
+        managed.pendingNavigationUrl = normalized.takeIf { it != "about:blank" }
         updateTabState(targetTabId) {
             it.copy(
                 url = normalized,
@@ -485,7 +492,18 @@ class TabSessionManager(
             onSecurityNotice("Tor SOCKS5 tunnel is still initializing")
             return
         }
-        managed.browser?.reload()
+        val browserUrl = managed.browser?.url?.trim().orEmpty()
+        if (managed.state.url != "about:blank" &&
+            (browserUrl.isEmpty() || browserUrl == "about:blank" || browserUrl.startsWith("chrome-error://"))
+        ) {
+            managed.pendingNavigationUrl = managed.state.url
+            updateTabState(managed.id) {
+                it.copy(isLoading = true, loadProgress = 10)
+            }
+            managed.browser?.loadUrl(managed.state.url)
+        } else {
+            managed.browser?.reload()
+        }
     }
 
     fun stopLoading(tabId: String? = _activeTabId.value) {
@@ -689,7 +707,10 @@ class TabSessionManager(
                     updateTabState(tabId) {
                         it.copy(isLoading = false, loadProgress = 100)
                     }
-                    if (!failedUrl.isNullOrBlank() && failedUrl != "about:blank") {
+                    if (tabId == _activeTabId.value &&
+                        !failedUrl.isNullOrBlank() &&
+                        failedUrl != "about:blank"
+                    ) {
                         onSecurityNotice(
                             "Navigation failed (${errorText ?: "code $errorCode"}): $failedUrl",
                         )
@@ -713,11 +734,20 @@ class TabSessionManager(
             override fun onUrlChanged(url: String?) {
                 val rawSafeUrl = url?.trim().orEmpty().ifEmpty { "about:blank" }
                 mainHandler.post {
-                    val overrideUrl = sessions[tabId]?.overrideDisplayUrl
-                    val safeUrl = if (rawSafeUrl == "about:blank" && !overrideUrl.isNullOrBlank()) {
-                        overrideUrl
-                    } else {
-                        rawSafeUrl
+                    val managed = sessions[tabId]
+                    val overrideUrl = managed?.overrideDisplayUrl
+                    val pendingUrl = managed?.pendingNavigationUrl
+                    val safeUrl = when {
+                        rawSafeUrl == "about:blank" && !overrideUrl.isNullOrBlank() -> overrideUrl
+                        rawSafeUrl == "about:blank" && !pendingUrl.isNullOrBlank() -> pendingUrl
+                        rawSafeUrl.startsWith("chrome-error://") ->
+                            pendingUrl ?: managed?.state?.url?.takeIf { it.isNotBlank() } ?: "about:blank"
+                        else -> {
+                            if (rawSafeUrl != "about:blank") {
+                                managed?.pendingNavigationUrl = null
+                            }
+                            rawSafeUrl
+                        }
                     }
                     val isOnion = isOnionAddress(safeUrl)
                     updateTabState(tabId) { state ->

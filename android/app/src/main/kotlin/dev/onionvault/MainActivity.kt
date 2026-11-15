@@ -292,7 +292,11 @@ class MainActivity : FragmentActivity() {
         setIntent(intent)
         val viewUrl = intent.takeIf { it.action == Intent.ACTION_VIEW }?.dataString?.trim()
         if (!viewUrl.isNullOrEmpty() && crashReport == null && controllersReady) {
-            createNewTab(viewUrl)
+            if (isBlankOrStartUrl(uiState.url) && !uiState.isLoading) {
+                navigate(viewUrl)
+            } else {
+                createNewTab(viewUrl)
+            }
         }
     }
 
@@ -757,6 +761,7 @@ class MainActivity : FragmentActivity() {
         val active = tabSessionManager.activeTab() ?: return
         val snapshotTarget = activeSnapshotView?.url
         activeSnapshotView = null
+        clearStatusAndPgpError()
         uiState = uiState.copy(viewingSnapshot = false)
         if (!snapshotTarget.isNullOrBlank() && snapshotTarget != active.url) {
             navigate(snapshotTarget, active.id)
@@ -803,11 +808,17 @@ class MainActivity : FragmentActivity() {
     private fun createNewTab(initialUrl: String = "about:blank") {
         if (!controllersReady) return
         activeSnapshotView = null
-        val tabId = tabSessionManager.createTab(initialUrl = "about:blank", select = true)
+        clearStatusAndPgpError()
+        val hasInitialTarget = !isBlankOrStartUrl(initialUrl)
+        val tabId = tabSessionManager.createTab(
+            initialUrl = "about:blank",
+            select = true,
+            loadInitialBlank = !hasInitialTarget,
+        )
         if (prefs.defaultZoomPercent != 100) {
             tabSessionManager.setZoomPercent(prefs.defaultZoomPercent, tabId)
         }
-        if (!isBlankOrStartUrl(initialUrl)) {
+        if (hasInitialTarget) {
             navigate(initialUrl, tabId)
         }
     }
