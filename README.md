@@ -106,10 +106,10 @@ Every item below reflects commands executed and verified against this codebase:
 | Subsystem / Gate | Verification Method | Result |
 |---|---|---|
 | **Rust Formatting & Lint** (`ov-core`, `ov-cef`, `ov-pgp`, `ov-tor`) | `cargo fmt --all -- --check` & `cargo clippy --workspace --all-targets -- -D warnings` | **PASS** (`0` warnings) |
-| **Rust Crypto, Tor SOCKS5/Isolation & CDP DOM Suite** | `cargo test --workspace` | **PASS** (`61` passed, `0` failed, `2` live-Tor `#[ignore]`) |
+| **Rust Crypto, Tor SOCKS5/Isolation & CDP DOM Suite** | `cargo test --workspace` | **PASS** (`62` passed, `0` failed, `2` live-Tor `#[ignore]`) |
 | **Android Native NDK Build & ELF Audit** (`arm64-v8a`, `x86_64`) | `cargo ndk -t arm64-v8a -t x86_64 --platform 29 build` + `llvm-readobj` / `llvm-nm` | **PASS** (19/19 `Java_dev_onionvault_OvNative_*` symbols exported; zero `libcef.so` `DT_NEEDED`) |
 | **Compose Previews, 13 Visual Captures & Interactive Chrome Tests** | `./android/gradlew --project-dir android :app:testDebugUnitTest` (`OnionVaultPreviewsTest`, `ScreenshotTest`, `CrashGuardTest`, `OvNativeTest`) | **PASS** (`36` passed, `0` failed; 13 PNG screenshots rendered across `SecureDrop` & `NeonGraffiti` Dark/Light) |
-| **On-Device Instrumentation E2E (`connectedDebugAndroidTest`)** | `BrowserChromeInstrumentedTest` on `emulator-5554` (Android 15 `arm64-v8a`) | **PASS** (`1` passed, `0` failed in `5.1s`: Settings persistence, Tor Security & Circuit native policy toggle, Multi-Tab sheet, Sequoia + Android Keystore AES-256-GCM keypair generation & armored public-key export, clearnet policy blocking, and v3 `.onion` launch) |
+| **On-Device Instrumentation E2E (`connectedDebugAndroidTest`)** | `BrowserChromeInstrumentedTest` on `emulator-5554` (Android 15 `arm64-v8a`) | **PASS** (`2` passed, `0` failed in `6.6s`: Chrome settings/security/tabs/Keystore keyring E2E + live `CefriumBrowser` zero-JS CDP DOM PGP `Insert My PubKey`, `Encrypt Field` UA shadow read-back verification, and `Decrypt Block` -> `PlaintextSheet` signature verification) |
 | **Emulator Runtime Gate & Live `.onion` Circuit Isolation** | `./scripts/emulator-gate.sh app-debug.apk` + live v3 `.onion` navigation on `emulator-5554` | **PASS** (`TrapApplication` initialized Cefrium `0.19.0`, held 12s with zero Java/native crashes or ANRs, bootstrapped embedded `ov_tor` Arti client, and loaded `duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion` over isolated circuit `iso-duckduckgogg42xj` with zero-JS CDP DOM field anchoring) |
 
 ## License
