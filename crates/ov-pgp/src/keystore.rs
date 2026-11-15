@@ -173,10 +173,10 @@ impl MasterKeyProvider for AndroidKeystoreMasterKey {
             .map_err(|e| jni_err(env, "cannot initialise the Keystore cipher", e))?;
 
             let iv_obj = env
-                .call_method(&cipher, "getIv", "()[B", &[])
+                .call_method(&cipher, "getIV", "()[B", &[])
                 .map_err(|e| jni_err(env, "cannot read the GCM nonce", e))?
                 .l()
-                .map_err(|e| anyhow!("invalid getIv return value: {e}"))?;
+                .map_err(|e| anyhow!("invalid getIV return value: {e}"))?;
             if iv_obj.is_null() {
                 bail!("the Keystore cipher returned a null GCM IV");
             }
