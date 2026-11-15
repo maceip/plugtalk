@@ -2,6 +2,9 @@ package dev.onionvault
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import java.io.File
+import javax.xml.parsers.DocumentBuilderFactory
+import org.chromium.base.CommandLine
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -9,6 +12,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.w3c.dom.Element
 
 /**
  * The test of the guard against the crashes.
@@ -61,5 +65,59 @@ class CrashGuardTest {
         assertTrue(report != null)
         assertTrue(report!!.startsWith("Trap stopped with an error."))
         assertTrue(report.contains("When:"))
+    }
+
+    @Test
+    fun manifest_declares_memtag_mode_off_on_application() {
+        val candidates = listOf(
+            File("src/main/AndroidManifest.xml"),
+            File("app/src/main/AndroidManifest.xml"),
+            File("android/app/src/main/AndroidManifest.xml"),
+        )
+        val manifestFile = candidates.firstOrNull { it.isFile }
+        assertTrue("Expected AndroidManifest.xml in source tree", manifestFile != null)
+
+        val dbf = DocumentBuilderFactory.newInstance().apply {
+            isNamespaceAware = true
+        }
+        val doc = dbf.newDocumentBuilder().parse(manifestFile!!)
+        val androidNs = "http://schemas.android.com/apk/res/android"
+        val apps = doc.getElementsByTagName("application")
+        assertEquals(1, apps.length)
+        val appElement = apps.item(0) as Element
+        assertEquals("off", appElement.getAttributeNS(androidNs, "memtagMode"))
+    }
+
+    @Test
+    fun partition_alloc_memory_tagging_feature_merges_cleanly_into_command_line() {
+        CommandLine.init(null)
+        val cl = CommandLine.getInstance()
+
+        TrapApplication.appendDisabledFeature(
+            cl,
+            TrapApplication.PARTITION_ALLOC_MEMORY_TAGGING_FEATURE,
+        )
+        assertEquals(
+            "PartitionAllocMemoryTagging",
+            cl.getSwitchValue("disable-features", ""),
+        )
+
+        // Duplicate registration must be idempotent.
+        TrapApplication.appendDisabledFeature(
+            cl,
+            TrapApplication.PARTITION_ALLOC_MEMORY_TAGGING_FEATURE,
+        )
+        assertEquals(
+            "PartitionAllocMemoryTagging",
+            cl.getSwitchValue("disable-features", ""),
+        )
+
+        // Simulate Cefrium.initialize's private disableFeature(...) appending onto disable-features.
+        val existing = cl.getSwitchValue("disable-features", "")
+        cl.appendSwitchWithValue("disable-features", "$existing,NetworkTimeServiceQuerying")
+        assertEquals(
+            "PartitionAllocMemoryTagging,NetworkTimeServiceQuerying",
+            cl.getSwitchValue("disable-features", ""),
+        )
     }
 }
