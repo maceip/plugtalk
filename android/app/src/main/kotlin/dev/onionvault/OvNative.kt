@@ -1,5 +1,7 @@
 package dev.onionvault
 
+import androidx.compose.runtime.Immutable
+import java.net.URI
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -14,6 +16,9 @@ object OvNative {
 
     const val LIBRARY_NAME: String = "onion_vault"
 
+    /** Default 3-day clearnet allowlist TTL (`3 * 24 * 60 * 60` seconds). */
+    const val CLEARNET_DEFAULT_TTL_SECONDS: Long = 259_200L
+
     @Volatile
     var isLoaded: Boolean = false
         private set
@@ -26,7 +31,7 @@ object OvNative {
         }
     }
 
-    // --- Exact 19 JNI entry points exported by `src/lib.rs` ---
+    // --- Exact 24 JNI entry points exported by `src/lib.rs` ---
 
     external fun nativeInit(
         dataDir: String,
@@ -75,6 +80,21 @@ object OvNative {
 
     external fun nativeShutdown()
 
+    @JvmStatic
+    external fun nativeAllowClearnet(pattern: String, ttlSeconds: Long): String
+
+    @JvmStatic
+    external fun nativeDenyClearnet(host: String): Boolean
+
+    @JvmStatic
+    external fun nativeListClearnetRulesJson(): String
+
+    @JvmStatic
+    external fun nativeRevokeClearnetRule(pattern: String): String
+
+    @JvmStatic
+    external fun nativeClearClearnetRules(): Boolean
+
     // --- Typed JSON Data Models & Parsers ---
 
     data class TorStatusSnapshot(
@@ -82,16 +102,30 @@ object OvNative {
         val bootstrapPercent: Int = 0,
         val bootstrapSummary: String = "",
         val socksAddr: String = "",
-        val hiddenServiceOnly: Boolean = true,
+        val hiddenServiceOnly: Boolean = false,
         val isolationToken: String = "",
         val isolatedGroupCount: Int = 0,
+        val pendingClearnetHost: String = "",
     )
 
-    data class UrlPolicyDecision(
+    data class UrlPolicyResult(
         val allowed: Boolean,
-        val reason: String,
-        val isOnion: Boolean,
         val normalizedUrl: String,
+        val isOnion: Boolean,
+        val requiresClearnetConsent: Boolean = false,
+        val host: String = "",
+        val suggestedPattern: String = "",
+        val reason: String = "",
+    )
+
+    typealias UrlPolicyDecision = UrlPolicyResult
+
+    @Immutable
+    data class ClearnetRuleItem(
+        val pattern: String,
+        val createdAtMs: Long,
+        val expiresAtMs: Long,
+        val sessionOnly: Boolean,
     )
 
     data class TextClassification(
@@ -165,38 +199,112 @@ object OvNative {
                 bootstrapPercent = obj.optInt("bootstrapPercent", 0),
                 bootstrapSummary = obj.optString("bootstrapSummary", ""),
                 socksAddr = obj.optString("socksAddr", ""),
-                hiddenServiceOnly = obj.optBoolean("hiddenServiceOnly", true),
+                hiddenServiceOnly = obj.optBoolean("hiddenServiceOnly", false),
                 isolationToken = obj.optString("isolationToken", ""),
                 isolatedGroupCount = obj.optInt("isolatedGroupCount", 0),
+                pendingClearnetHost = obj.optString("pendingClearnetHost", ""),
             )
         }.getOrElse { TorStatusSnapshot() }
     }
 
-    fun parseUrlPolicy(json: String): UrlPolicyDecision {
+    fun parseUrlPolicy(json: String): UrlPolicyResult {
         if (json.isBlank()) {
-            return UrlPolicyDecision(
+            return UrlPolicyResult(
                 allowed = false,
-                reason = "Empty URL policy response",
-                isOnion = false,
                 normalizedUrl = "",
+                isOnion = false,
+                reason = "Empty URL policy response",
             )
         }
         return runCatching {
             val obj = JSONObject(json)
-            UrlPolicyDecision(
+            val normalizedUrl = obj.optString("normalizedUrl", "")
+            val requiresConsent = obj.optBoolean("requiresClearnetConsent", false)
+            val host = obj.optString("host", "").ifBlank {
+                extractHost(normalizedUrl)
+            }
+            val suggestedPattern = obj.optString("suggestedPattern", "").ifBlank {
+                if (requiresConsent && host.isNotBlank()) suggestGlobForHost(host) else ""
+            }
+            UrlPolicyResult(
                 allowed = obj.optBoolean("allowed", false),
-                reason = obj.optString("reason", ""),
+                normalizedUrl = normalizedUrl,
                 isOnion = obj.optBoolean("isOnion", false),
-                normalizedUrl = obj.optString("normalizedUrl", ""),
+                requiresClearnetConsent = requiresConsent,
+                host = host,
+                suggestedPattern = suggestedPattern,
+                reason = obj.optString("reason", ""),
             )
         }.getOrElse {
-            UrlPolicyDecision(
+            UrlPolicyResult(
                 allowed = false,
-                reason = "Invalid URL policy response",
-                isOnion = false,
                 normalizedUrl = "",
+                isOnion = false,
+                reason = "Invalid URL policy response",
             )
         }
+    }
+
+    fun parseClearnetRules(json: String): List<ClearnetRuleItem> {
+        if (json.isBlank()) return emptyList()
+        return runCatching {
+            val arr = JSONArray(json)
+            buildList(arr.length()) {
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val pattern = obj.optString("pattern", "").trim()
+                    if (pattern.isEmpty()) continue
+                    val createdAtMs = if (obj.has("createdAtMs")) {
+                        obj.optLong("createdAtMs", 0L)
+                    } else {
+                        obj.optLong("created_at_ms", 0L)
+                    }
+                    val expiresAtMs = if (obj.has("expiresAtMs")) {
+                        obj.optLong("expiresAtMs", 0L)
+                    } else {
+                        obj.optLong("expires_at_ms", 0L)
+                    }
+                    val sessionOnly = if (obj.has("sessionOnly")) {
+                        obj.optBoolean("sessionOnly", false)
+                    } else {
+                        obj.optBoolean("session_only", expiresAtMs <= 0L)
+                    }
+                    add(
+                        ClearnetRuleItem(
+                            pattern = pattern,
+                            createdAtMs = createdAtMs,
+                            expiresAtMs = expiresAtMs,
+                            sessionOnly = sessionOnly,
+                        ),
+                    )
+                }
+            }
+        }.getOrElse { emptyList() }
+    }
+
+    fun suggestGlobForHost(rawHost: String): String {
+        val clean = rawHost.trim().trimEnd('.').lowercase()
+        if (clean.isEmpty()) return ""
+        if (clean.endsWith(".onion")) return clean
+        if (clean.contains(':') || clean.startsWith("[") || clean.all { it.isDigit() || it == '.' }) {
+            return clean
+        }
+        val withoutWww = clean.removePrefix("www.")
+        val labels = withoutWww.split('.').filter { it.isNotEmpty() }
+        if (labels.size < 2) return clean
+        val base = if (labels.size >= 3 && labels[labels.size - 2].length <= 3 && labels.last().length == 2) {
+            labels.takeLast(3).joinToString(".")
+        } else {
+            labels.takeLast(2).joinToString(".")
+        }
+        return "*.$base"
+    }
+
+    private fun extractHost(url: String): String {
+        if (url.isBlank()) return ""
+        return runCatching {
+            URI(url).host?.trim()?.trimEnd('.')?.lowercase().orEmpty()
+        }.getOrDefault("")
     }
 
     fun parseTextClassification(json: String): TextClassification {

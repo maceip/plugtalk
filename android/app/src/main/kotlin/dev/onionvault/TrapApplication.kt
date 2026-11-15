@@ -33,6 +33,19 @@ class TrapApplication : Application() {
          */
         const val PARTITION_ALLOC_MEMORY_TAGGING_FEATURE: String = "PartitionAllocMemoryTagging"
 
+        /**
+         * Chromium features disabled at startup to prevent unsolicited Google background
+         * endpoints (`content-autofill.googleapis.com`, optimization hints, translate, cast)
+         * and ARMv9 MTE `SetHeapTaggingLevel` traps.
+         */
+        val HARDENED_DISABLED_FEATURES: List<String> = listOf(
+            PARTITION_ALLOC_MEMORY_TAGGING_FEATURE,
+            "AutofillServerCommunication",
+            "OptimizationHints",
+            "Translate",
+            "MediaRouter",
+        )
+
         @Volatile
         var isEngineReady: Boolean = false
             private set
@@ -112,8 +125,11 @@ class TrapApplication : Application() {
         }
 
         internal fun mergeDisabledFeature(existing: String?, feature: String): String {
-            val trimmedFeature = feature.trim()
-            if (trimmedFeature.isEmpty()) {
+            val incoming = feature
+                .split(",")
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+            if (incoming.isEmpty()) {
                 return existing.orEmpty().trim()
             }
             val items = existing
@@ -122,8 +138,10 @@ class TrapApplication : Application() {
                 .map { it.trim() }
                 .filter { it.isNotEmpty() }
                 .toMutableList()
-            if (trimmedFeature !in items) {
-                items.add(trimmedFeature)
+            for (item in incoming) {
+                if (item !in items) {
+                    items.add(item)
+                }
             }
             return items.joinToString(",")
         }
@@ -202,7 +220,9 @@ class TrapApplication : Application() {
             appendSwitch("disable-background-networking")
             // Pre-populate `disable-features` before `Cefrium.initialize(this)` appends
             // its own disabled features (`Cefrium.disableFeature` is private static).
-            appendDisabledFeature(this, PARTITION_ALLOC_MEMORY_TAGGING_FEATURE)
+            HARDENED_DISABLED_FEATURES.forEach { feature ->
+                appendDisabledFeature(this, feature)
+            }
         }
 
         val initialized = Cefrium.initialize(this)

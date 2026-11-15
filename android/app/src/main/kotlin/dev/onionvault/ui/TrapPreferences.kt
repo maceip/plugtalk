@@ -27,7 +27,7 @@ class TrapPreferences(private val prefs: SharedPreferences) {
         }
 
     var hiddenServiceOnly: Boolean
-        get() = prefs.getBoolean(KEY_HIDDEN_SERVICE_ONLY, true)
+        get() = prefs.getBoolean(KEY_HIDDEN_SERVICE_ONLY, false)
         set(value) {
             prefs.edit().putBoolean(KEY_HIDDEN_SERVICE_ONLY, value).apply()
         }

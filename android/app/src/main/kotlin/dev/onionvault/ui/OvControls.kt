@@ -134,8 +134,10 @@ fun OvNavCircleButton(
 }
 
 /**
- * Unified 44dp `[Shield · .onion Input · Clear ✕ | Go]` capsule (`0dp` internal seam,
- * `#E8A33D` `Go` fill, `#1A1510` bold ink, honest `.onion` URL hint, `about:blank` preserved).
+ * Unified 44dp single-row address capsule (`0dp` internal seam, `#E8A33D` `Go` fill,
+ * `#1A1510` bold ink):
+ * - Unfocused: `[ Tor Shield (green/amber) · URL/host input · Reload (when non-start) | Go ]`
+ * - Focused:   `[ URL/host input · Clear ✕ | Go ]`
  */
 @Composable
 fun OvUnifiedAddressCapsule(
@@ -144,14 +146,19 @@ fun OvUnifiedAddressCapsule(
     onGo: () -> Unit,
     onClear: () -> Unit,
     onSecurityClick: () -> Unit,
+    onReload: () -> Unit,
+    isFocused: Boolean,
+    onFocusChange: (Boolean) -> Unit,
+    torReady: Boolean,
+    isStartPage: Boolean,
+    isLoading: Boolean,
+    reloadRotation: Float,
     blocked: Boolean,
-    hiddenServiceOnly: Boolean,
     hint: String,
     modifier: Modifier = Modifier,
 ) {
     val colors = TrapTheme.colors
     val focusManager = LocalFocusManager.current
-    var isFocused by remember { mutableStateOf(false) }
 
     val leftShape = RoundedCornerShape(
         topStart = 22.dp,
@@ -184,40 +191,44 @@ fun OvUnifiedAddressCapsule(
                 .clip(leftShape)
                 .background(colors.control)
                 .border(1.dp, leftBorder, leftShape)
-                .padding(start = 10.dp, end = 6.dp),
+                .padding(start = if (isFocused) 12.dp else 8.dp, end = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
-                modifier = Modifier
-                    .size(28.dp)
-                    .clip(CircleShape)
-                    .clickable(
-                        role = Role.Button,
-                        onClick = onSecurityClick,
+            if (!isFocused) {
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .clickable(
+                            role = Role.Button,
+                            onClick = onSecurityClick,
+                        )
+                        .semantics { contentDescription = "Tor security status" }
+                        .testTag("address_security_button"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    TrapIcon(
+                        glyph = TrapGlyph.Shield,
+                        tint = if (torReady) colors.green else colors.amber,
+                        size = 17.dp,
+                        forceVector = true,
                     )
-                    .semantics { contentDescription = "Tor security status" },
-                contentAlignment = Alignment.Center,
-            ) {
-                TrapIcon(
-                    glyph = TrapGlyph.Shield,
-                    tint = if (hiddenServiceOnly) colors.teal else colors.amber,
-                    size = 17.dp,
-                )
-            }
+                }
 
-            Spacer(Modifier.width(6.dp))
+                Spacer(Modifier.width(6.dp))
+            }
 
             BasicTextField(
                 value = address,
                 onValueChange = onAddressChange,
                 modifier = Modifier
                     .weight(1f)
-                    .onFocusChanged { isFocused = it.isFocused }
+                    .onFocusChanged { onFocusChange(it.isFocused) }
                     .testTag("address_input"),
                 singleLine = true,
                 textStyle = TextStyle(
                     color = colors.textPrimary,
-                    fontSize = 14.sp,
+                    fontSize = 13.5.sp,
                     fontFamily = FontFamily.Monospace,
                 ),
                 cursorBrush = SolidColor(colors.teal),
@@ -239,7 +250,7 @@ fun OvUnifiedAddressCapsule(
                             Text(
                                 text = hint,
                                 color = colors.textMuted,
-                                fontSize = 13.5.sp,
+                                fontSize = 13.sp,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
@@ -249,7 +260,58 @@ fun OvUnifiedAddressCapsule(
                 },
             )
 
-            if (address.isNotEmpty()) {
+            if (isFocused) {
+                if (address.isNotEmpty()) {
+                    Spacer(Modifier.width(4.dp))
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .clickable(
+                                role = Role.Button,
+                                onClick = onClear,
+                            )
+                            .semantics { contentDescription = "Clear address" }
+                            .testTag("address_clear"),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        TrapIcon(
+                            glyph = TrapGlyph.Close,
+                            tint = colors.textMuted,
+                            size = 15.dp,
+                            forceVector = true,
+                        )
+                    }
+                }
+            } else if (!isStartPage) {
+                Spacer(Modifier.width(4.dp))
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .clickable(
+                            role = Role.Button,
+                            onClick = onReload,
+                        )
+                        .semantics {
+                            contentDescription = if (isLoading) "Stop loading" else "Reload"
+                        }
+                        .testTag("nav_reload"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    TrapIcon(
+                        glyph = TrapGlyph.Reload,
+                        tint = colors.teal,
+                        size = 15.5.dp,
+                        forceVector = true,
+                        modifier = if (reloadRotation != 0f) {
+                            Modifier.graphicsLayer { rotationZ = reloadRotation }
+                        } else {
+                            Modifier
+                        },
+                    )
+                }
+            } else if (address.isNotEmpty()) {
                 Spacer(Modifier.width(4.dp))
                 Box(
                     modifier = Modifier
@@ -267,6 +329,7 @@ fun OvUnifiedAddressCapsule(
                         glyph = TrapGlyph.Close,
                         tint = colors.textMuted,
                         size = 15.dp,
+                        forceVector = true,
                     )
                 }
             }
@@ -286,7 +349,7 @@ fun OvUnifiedAddressCapsule(
                         onGo()
                     },
                 )
-                .padding(horizontal = 18.dp)
+                .padding(horizontal = 14.dp)
                 .semantics { contentDescription = "Go" }
                 .testTag("address_go"),
             contentAlignment = Alignment.Center,
@@ -294,7 +357,7 @@ fun OvUnifiedAddressCapsule(
             Text(
                 text = "Go",
                 color = colors.onGoFill,
-                fontSize = 15.sp,
+                fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
             )

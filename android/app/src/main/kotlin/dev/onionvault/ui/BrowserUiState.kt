@@ -3,6 +3,7 @@ package dev.onionvault.ui
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.unit.IntOffset
+import dev.onionvault.OvNative
 
 /**
  * Pure immutable UI state of Trap's browser screen, sheets, and overlays.
@@ -25,7 +26,7 @@ data class BrowserUiState(
     val tabs: List<TabItemState> = listOf(
         TabItemState(
             id = "tab-1",
-            title = "Trap Start",
+            title = "Trap",
             url = "about:blank",
             isActive = true,
         ),
@@ -34,12 +35,14 @@ data class BrowserUiState(
     val keys: List<KeyInfo> = emptyList(),
     val defaultKeyFingerprint: String = "",
     val legalDocuments: List<LegalDocument> = emptyList(),
-    val hiddenServiceOnly: Boolean = true,
+    val hiddenServiceOnly: Boolean = false,
     val requireBiometric: Boolean = false,
     val zoomPercent: Int = 100,
     val defaultZoomPercent: Int = 100,
     val themeFamily: TrapThemeFamily = TrapThemeFamily.SecureDrop,
     val themeMode: TrapThemeMode = TrapThemeMode.Dark,
+    val clearnetPrompt: ClearnetPromptState? = null,
+    val clearnetRules: List<OvNative.ClearnetRuleItem> = emptyList(),
     val contextMenu: ContextMenuUiState? = null,
     val selectionPgp: SelectionPgpUiState? = null,
 ) {
@@ -48,6 +51,13 @@ data class BrowserUiState(
     val isStartPage: Boolean
         get() = isBlankOrStartUrl(url)
 }
+
+@Immutable
+data class ClearnetPromptState(
+    val host: String,
+    val pendingUrl: String?,
+    val suggestedPattern: String,
+)
 
 fun isBlankOrStartUrl(url: String): Boolean {
     val trimmed = url.trim()

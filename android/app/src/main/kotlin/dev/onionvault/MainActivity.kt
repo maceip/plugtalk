@@ -30,6 +30,7 @@ import androidx.lifecycle.lifecycleScope
 import dev.onionvault.ui.BackPreviewState
 import dev.onionvault.ui.BrowserScreen
 import dev.onionvault.ui.BrowserUiState
+import dev.onionvault.ui.ClearnetPromptState
 import dev.onionvault.ui.ContextMenuUiState
 import dev.onionvault.ui.DecryptPassphraseRequestState
 import dev.onionvault.ui.EncryptRequestState
@@ -151,6 +152,18 @@ class MainActivity : FragmentActivity() {
             BrowserScreen(
                 state = uiState,
                 onNavigate = { navigate(it) },
+                onAllowClearnet = { prompt, pattern, ttlSeconds ->
+                    allowClearnetAndProceed(prompt, pattern, ttlSeconds)
+                },
+                onBlockClearnet = { prompt ->
+                    denyClearnetPrompt(prompt)
+                },
+                onRevokeClearnetRule = { pattern ->
+                    revokeClearnetRule(pattern)
+                },
+                onClearClearnetRules = {
+                    clearAllClearnetRules()
+                },
                 onFieldAction = { handleFieldAction(it) },
                 onInsertMyPubKey = { insertOwnPublicKey(it) },
                 onConfirmEncrypt = { request, plaintext, recipientFp, signerFp, passphrase ->
@@ -381,6 +394,7 @@ class MainActivity : FragmentActivity() {
 
         ensureControllersInitialized(initialUrl)
         refreshKeys()
+        refreshClearnetRules()
         startTorPolling()
     }
 
@@ -400,6 +414,13 @@ class MainActivity : FragmentActivity() {
                 initialHiddenServiceOnly = prefs.hiddenServiceOnly,
                 onContextMenu = { target -> handleContextMenu(target) },
                 onSelectionPgpAction = { action -> handleSelectionPgpAction(action) },
+                onClearnetConsentRequired = { host, normalizedUrl, suggestedPattern ->
+                    openClearnetConsentPrompt(
+                        host = host,
+                        pendingUrl = normalizedUrl,
+                        suggestedPattern = suggestedPattern,
+                    )
+                },
                 onUrlBlocked = { _, blockedUrl, reason ->
                     showStatus("$reason ($blockedUrl)", blocked = true)
                 },
@@ -453,7 +474,7 @@ class MainActivity : FragmentActivity() {
                     listOf(
                         TabItemState(
                             id = effectiveActiveId,
-                            title = "Trap Start",
+                            title = "Trap",
                             url = "about:blank",
                             isActive = true,
                         ),
@@ -463,7 +484,7 @@ class MainActivity : FragmentActivity() {
                         TabItemState(
                             id = tab.id,
                             title = tab.title.ifBlank {
-                                if (isBlankOrStartUrl(tab.url)) "Trap Start" else tab.url
+                                if (isBlankOrStartUrl(tab.url)) "Trap" else tab.url
                             },
                             url = tab.url,
                             isActive = tab.id == effectiveActiveId,
@@ -516,8 +537,7 @@ class MainActivity : FragmentActivity() {
         torPollingJob = lifecycleScope.launch {
             while (isActive) {
                 pollTorStatusOnce()
-                val readyWithSocks = uiState.tor.ready && uiState.tor.socksAddr.isNotBlank()
-                delay(if (readyWithSocks) 2_000L else 600L)
+                delay(500L)
             }
         }
     }
@@ -555,6 +575,20 @@ class MainActivity : FragmentActivity() {
             }
         }
 
+        val pendingHost = snapshot.pendingClearnetHost.trim()
+        val updatedPrompt = if (uiState.clearnetPrompt == null &&
+            pendingHost.isNotEmpty() &&
+            !snapshot.hiddenServiceOnly
+        ) {
+            ClearnetPromptState(
+                host = pendingHost,
+                pendingUrl = null,
+                suggestedPattern = OvNative.suggestGlobForHost(pendingHost),
+            )
+        } else {
+            uiState.clearnetPrompt
+        }
+
         uiState = uiState.copy(
             tor = TorBootstrapState(
                 percent = snapshot.bootstrapPercent.coerceIn(0, 100),
@@ -565,6 +599,7 @@ class MainActivity : FragmentActivity() {
                 isolatedGroupCount = snapshot.isolatedGroupCount.coerceAtLeast(0),
             ),
             hiddenServiceOnly = snapshot.hiddenServiceOnly,
+            clearnetPrompt = updatedPrompt,
         )
     }
 
@@ -586,6 +621,7 @@ class MainActivity : FragmentActivity() {
             ?: tabSessionManager.ensureInitialTab()
         val decision = tabSessionManager.loadUrl(trimmed, effectiveTabId)
         if (!decision.allowed &&
+            !decision.requiresClearnetConsent &&
             decision.normalizedUrl.isNotBlank() &&
             decision.normalizedUrl != "about:blank" &&
             tabSessionManager.activeSocksAddr.value.isBlank()
@@ -593,6 +629,110 @@ class MainActivity : FragmentActivity() {
             deferredNavigationUntilSocks = effectiveTabId to decision.normalizedUrl
         }
         refreshTorStatusNow()
+    }
+
+    private fun openClearnetConsentPrompt(
+        host: String,
+        pendingUrl: String?,
+        suggestedPattern: String,
+    ) {
+        val cleanHost = host.trim().trimEnd('.').lowercase()
+        if (cleanHost.isEmpty()) return
+        val resolvedPattern = suggestedPattern.trim().ifBlank {
+            OvNative.suggestGlobForHost(cleanHost)
+        }.ifBlank { cleanHost }
+        uiState = uiState.copy(
+            blocked = false,
+            status = "",
+            clearnetPrompt = ClearnetPromptState(
+                host = cleanHost,
+                pendingUrl = pendingUrl?.takeIf { it.isNotBlank() },
+                suggestedPattern = resolvedPattern,
+            ),
+        )
+    }
+
+    private fun allowClearnetAndProceed(
+        prompt: ClearnetPromptState,
+        pattern: String,
+        ttlSeconds: Long,
+    ) {
+        val cleanPattern = pattern.trim()
+        if (cleanPattern.isEmpty()) return
+        uiState = uiState.copy(
+            clearnetPrompt = null,
+            blocked = false,
+            status = "",
+        )
+        if (!OvNative.isLoaded) return
+        lifecycleScope.launch {
+            val updatedRules = withContext(Dispatchers.IO) {
+                val rulesJson = runCatching {
+                    OvNative.nativeAllowClearnet(cleanPattern, ttlSeconds)
+                }.getOrDefault("")
+                val parsed = OvNative.parseClearnetRules(rulesJson)
+                if (parsed.isNotEmpty() || rulesJson.trim().startsWith("[")) {
+                    parsed
+                } else {
+                    val listJson = runCatching { OvNative.nativeListClearnetRulesJson() }.getOrDefault("")
+                    OvNative.parseClearnetRules(listJson)
+                }
+            }
+            uiState = uiState.copy(clearnetRules = updatedRules)
+            val targetUrl = prompt.pendingUrl?.takeIf { it.isNotBlank() }
+            if (targetUrl != null) {
+                navigate(targetUrl)
+            } else {
+                refreshTorStatusNow()
+            }
+        }
+    }
+
+    private fun denyClearnetPrompt(prompt: ClearnetPromptState) {
+        uiState = uiState.copy(clearnetPrompt = null)
+        if (!OvNative.isLoaded) return
+        lifecycleScope.launch {
+            withContext(Dispatchers.IO) {
+                runCatching { OvNative.nativeDenyClearnet(prompt.host) }
+            }
+            refreshTorStatusNow()
+        }
+    }
+
+    private fun refreshClearnetRules() {
+        if (!OvNative.isLoaded) return
+        lifecycleScope.launch {
+            val rules = withContext(Dispatchers.IO) {
+                val json = runCatching { OvNative.nativeListClearnetRulesJson() }.getOrDefault("")
+                OvNative.parseClearnetRules(json)
+            }
+            uiState = uiState.copy(clearnetRules = rules)
+        }
+    }
+
+    private fun revokeClearnetRule(pattern: String) {
+        if (!OvNative.isLoaded) return
+        lifecycleScope.launch {
+            val updated = withContext(Dispatchers.IO) {
+                val json = runCatching { OvNative.nativeRevokeClearnetRule(pattern) }.getOrDefault("")
+                OvNative.parseClearnetRules(json)
+            }
+            uiState = uiState.copy(clearnetRules = updated)
+        }
+    }
+
+    private fun clearAllClearnetRules() {
+        if (!OvNative.isLoaded) return
+        lifecycleScope.launch {
+            val cleared = withContext(Dispatchers.IO) {
+                runCatching { OvNative.nativeClearClearnetRules() }.getOrDefault(false)
+            }
+            if (cleared) {
+                uiState = uiState.copy(clearnetRules = emptyList())
+            } else {
+                refreshClearnetRules()
+            }
+        }
     }
 
     private fun reloadCurrentOrStop() {

@@ -4,21 +4,31 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -27,13 +37,342 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.onionvault.OvNative
+
+/**
+ * Compact interstitial consent bottom sheet presented before any clearnet site
+ * connects over Tor. Supports `*` / `?` globbing, 3-day persisted allowlist
+ * memory (`259,200` seconds), session-only allow, and immediate block.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ClearnetConsentSheet(
+    prompt: ClearnetPromptState,
+    onAllow: (prompt: ClearnetPromptState, pattern: String, ttlSeconds: Long) -> Unit,
+    onBlock: (prompt: ClearnetPromptState) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = TrapTheme.colors
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    val exactHost = remember(prompt.host) {
+        prompt.host.trim().trimEnd('.').lowercase()
+    }
+    val domainGlob = remember(prompt.host, prompt.suggestedPattern) {
+        prompt.suggestedPattern.trim().ifBlank {
+            OvNative.suggestGlobForHost(exactHost)
+        }.ifBlank { exactHost }
+    }
+    var pattern by remember(prompt.host, prompt.pendingUrl, prompt.suggestedPattern) {
+        mutableStateOf(domainGlob)
+    }
+
+    val cleanPattern = pattern.trim()
+    val canAllow = cleanPattern.isNotEmpty()
+    val isDomainSelected = cleanPattern.equals(domainGlob, ignoreCase = true) &&
+        (domainGlob != exactHost || !cleanPattern.equals(exactHost, ignoreCase = true))
+    val isExactSelected = cleanPattern.equals(exactHost, ignoreCase = true) && !isDomainSelected
+
+    ModalBottomSheet(
+        onDismissRequest = { onBlock(prompt) },
+        sheetState = sheetState,
+        containerColor = colors.surface,
+        contentColor = colors.textPrimary,
+        scrimColor = Color.Black.copy(alpha = 0.56f),
+    ) {
+        Column(
+            modifier = modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .imePadding()
+                .padding(start = 18.dp, end = 18.dp, bottom = 18.dp)
+                .testTag("clearnet_consent_sheet"),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(
+                    text = "Allow clearnet site over Tor?",
+                    color = colors.textPrimary,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = exactHost.ifEmpty { prompt.host },
+                    color = colors.amber,
+                    fontSize = 13.sp,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+
+            // Strictly 2 compact scope chips (<= 2:1 label density ceiling)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                ClearnetScopeChip(
+                    label = "*.domain",
+                    selected = isDomainSelected,
+                    onClick = { pattern = domainGlob },
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("clearnet_scope_domain"),
+                )
+                ClearnetScopeChip(
+                    label = "Exact host",
+                    selected = isExactSelected,
+                    onClick = { pattern = exactHost },
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("clearnet_scope_exact"),
+                )
+            }
+
+            OutlinedTextField(
+                value = pattern,
+                onValueChange = { pattern = it },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("clearnet_pattern_input"),
+                singleLine = true,
+                textStyle = TextStyle(
+                    color = colors.textPrimary,
+                    fontSize = 13.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                ),
+                placeholder = {
+                    Text(
+                        text = "*.example.com",
+                        color = colors.textMuted,
+                        fontSize = 13.sp,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                },
+                shape = RoundedCornerShape(10.dp),
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrectEnabled = false,
+                    keyboardType = KeyboardType.Uri,
+                ),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = colors.teal,
+                    unfocusedBorderColor = colors.border,
+                    focusedContainerColor = colors.surface2,
+                    unfocusedContainerColor = colors.surface2,
+                    cursorColor = colors.teal,
+                    focusedTextColor = colors.textPrimary,
+                    unfocusedTextColor = colors.textPrimary,
+                ),
+            )
+
+            // Primary full-width 44.dp Amber CTA: Allow for 3 days (259,200s)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(44.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(if (canAllow) colors.goFill else colors.control)
+                    .clickable(
+                        enabled = canAllow,
+                        role = Role.Button,
+                        onClick = {
+                            onAllow(prompt, cleanPattern, OvNative.CLEARNET_DEFAULT_TTL_SECONDS)
+                        },
+                    )
+                    .testTag("clearnet_allow_3d_button"),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "Allow for 3 days",
+                    color = if (canAllow) colors.onGoFill else colors.textMuted,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                )
+            }
+
+            // Secondary row: Allow once (session) & Block
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OvSecondaryButton(
+                    text = "Allow once",
+                    enabled = canAllow,
+                    onClick = { onAllow(prompt, cleanPattern, 0L) },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(42.dp)
+                        .testTag("clearnet_allow_once_button"),
+                )
+                OvSecondaryButton(
+                    text = "Block",
+                    accent = colors.danger,
+                    onClick = { onBlock(prompt) },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(42.dp)
+                        .testTag("clearnet_block_button"),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ClearnetScopeChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = TrapTheme.colors
+    val shape = RoundedCornerShape(8.dp)
+    Box(
+        modifier = modifier
+            .height(34.dp)
+            .clip(shape)
+            .background(if (selected) colors.control else colors.surface2)
+            .border(
+                width = 1.dp,
+                color = if (selected) colors.teal else colors.cardBorder,
+                shape = shape,
+            )
+            .clickable(role = Role.RadioButton, onClick = onClick)
+            .padding(horizontal = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            color = if (selected) colors.textPrimary else colors.textMuted,
+            fontSize = 12.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            fontFamily = FontFamily.Monospace,
+            maxLines = 1,
+        )
+    }
+}
+
+internal fun formatClearnetRuleTtl(
+    rule: OvNative.ClearnetRuleItem,
+    nowMs: Long = System.currentTimeMillis(),
+): String {
+    if (rule.sessionOnly || rule.expiresAtMs <= 0L) {
+        return "Session"
+    }
+    val remainingSecs = ((rule.expiresAtMs - nowMs).coerceAtLeast(0L)) / 1_000L
+    return when {
+        remainingSecs <= 0L -> "Expired"
+        remainingSecs > 86_400L -> "${(remainingSecs + 86_399L) / 86_400L}d left"
+        remainingSecs >= 3_600L -> "${(remainingSecs + 3_599L) / 3_600L}h left"
+        else -> "${((remainingSecs + 59L) / 60L).coerceAtLeast(1L)}m left"
+    }
+}
+
+@Composable
+private fun ClearnetRulesSection(
+    rules: List<OvNative.ClearnetRuleItem>,
+    hiddenServiceOnly: Boolean,
+    onRevokeRule: (String) -> Unit,
+    onClearAllRules: () -> Unit,
+) {
+    val colors = TrapTheme.colors
+    val cardShape = RoundedCornerShape(12.dp)
+    val nowMs = System.currentTimeMillis()
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        SettingSectionLabel(
+            if (rules.isEmpty()) "Clearnet Rules" else "Clearnet Rules (${rules.size})",
+        )
+
+        if (rules.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(cardShape)
+                    .background(colors.surface2)
+                    .border(1.dp, colors.cardBorder, cardShape)
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+            ) {
+                Text(
+                    text = if (hiddenServiceOnly) {
+                        "Clearnet disabled while Hidden Service Only is active."
+                    } else {
+                        "No active clearnet rules. Every clearnet site asks before connecting."
+                    },
+                    color = colors.textMuted,
+                    fontSize = 12.sp,
+                )
+            }
+        } else {
+            rules.forEach { rule ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(cardShape)
+                        .background(colors.surface2)
+                        .border(1.dp, colors.cardBorder, cardShape)
+                        .padding(horizontal = 12.dp, vertical = 9.dp)
+                        .testTag("clearnet_rule_row_${rule.pattern}"),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = rule.pattern,
+                            color = colors.textPrimary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = formatClearnetRuleTtl(rule, nowMs),
+                            color = colors.teal,
+                            fontSize = 11.5.sp,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1,
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    OvSecondaryButton(
+                        text = "Revoke",
+                        accent = colors.danger,
+                        onClick = { onRevokeRule(rule.pattern) },
+                        modifier = Modifier.testTag("clearnet_revoke_${rule.pattern}"),
+                    )
+                }
+            }
+
+            OvSecondaryButton(
+                text = "Clear all clearnet rules",
+                glyph = TrapGlyph.Delete,
+                accent = colors.danger,
+                onClick = onClearAllRules,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("clearnet_clear_all_button"),
+            )
+        }
+    }
+}
 
 /**
  * Multi-Tab Sheet backed by `TabSessionManager` sessions (switch, close `✕`, `+ New Tab`).
@@ -74,7 +413,7 @@ fun TabsSheet(
             tabs.forEach { tab ->
                 val shape = RoundedCornerShape(12.dp)
                 val displayTitle = tab.title.ifBlank {
-                    if (isBlankOrStartUrl(tab.url)) "Trap Start" else tab.url
+                    if (isBlankOrStartUrl(tab.url)) "Trap" else tab.url
                 }
                 val displayUrl = tab.url.ifBlank { "about:blank" }
 
@@ -143,16 +482,17 @@ fun TabsSheet(
 /**
  * Tor Security & Circuit Sheet.
  *
- * Renders vertical key-value rows (`<= 2:1` label density — zero 4-chip horizontal stacks!)
- * showing real Arti bootstrap %, summary, SOCKS5 loopback endpoint, active `.onion`
- * `isolationToken`, `isolatedGroupCount`, runtime `Hidden service only` toggle,
- * JS-disabled enforcement status, and `"New Identity / Reset Tor Isolation"`.
+ * Renders vertical key-value rows (`<= 2:1` label density), active clearnet rules
+ * with remaining TTL + Revoke / Clear All, runtime `Hidden Service Only` toggle,
+ * and `"New Identity / Reset Tor Isolation"`.
  */
 @Composable
 fun SecurityCircuitSheet(
     state: BrowserUiState,
     onToggleHiddenServiceOnly: (Boolean) -> Unit,
     onResetTorIsolation: () -> Unit,
+    onRevokeClearnetRule: (String) -> Unit = {},
+    onClearClearnetRules: () -> Unit = {},
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -161,14 +501,14 @@ fun SecurityCircuitSheet(
     val cardShape = RoundedCornerShape(12.dp)
 
     OvBottomSheet(
-        title = "Tor Security & Circuit",
+        title = "Tor & Clearnet Rules",
         onDismiss = onDismiss,
         modifier = modifier.testTag("security_circuit_sheet"),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(max = 460.dp)
+                .heightIn(max = 480.dp)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -218,6 +558,13 @@ fun SecurityCircuitSheet(
                 )
             }
 
+            ClearnetRulesSection(
+                rules = state.clearnetRules,
+                hiddenServiceOnly = state.hiddenServiceOnly,
+                onRevokeRule = onRevokeClearnetRule,
+                onClearAllRules = onClearClearnetRules,
+            )
+
             ToggleSettingRow(
                 title = "Hidden Service Only",
                 subtitle = "Refuse clearnet URLs; permit only v3 .onion & about:blank",
@@ -242,7 +589,7 @@ fun SecurityCircuitSheet(
 private fun VerticalTelemetryRow(
     title: String,
     value: String,
-    accent: androidx.compose.ui.graphics.Color,
+    accent: Color,
 ) {
     val colors = TrapTheme.colors
     Row(
@@ -271,13 +618,7 @@ private fun VerticalTelemetryRow(
 }
 
 /**
- * Persisted Settings Sheet (`TrapPreferences`-backed):
- * - Theme Family (`SecureDrop` / `Neon Graffiti`)
- * - Mode (`Dark` / `Light`)
- * - `Hidden service only`
- * - `Require biometric/device unlock for secret keys`
- * - Default Zoom (`75%..150%`)
- * - Clear Ephemeral Session
+ * Persisted Settings Sheet (`TrapPreferences` + `OvNative` clearnet rules).
  */
 @Composable
 fun SettingsSheet(
@@ -287,6 +628,8 @@ fun SettingsSheet(
     onToggleHiddenServiceOnly: (Boolean) -> Unit,
     onToggleRequireBiometric: (Boolean) -> Unit,
     onSelectDefaultZoom: (Int) -> Unit,
+    onRevokeClearnetRule: (String) -> Unit = {},
+    onClearClearnetRules: () -> Unit = {},
     onClearSession: () -> Unit,
     onOpenLegalNotices: () -> Unit,
     onDismiss: () -> Unit,
@@ -337,6 +680,13 @@ fun SettingsSheet(
                 testTag = "settings_hidden_service_switch",
             )
 
+            ClearnetRulesSection(
+                rules = state.clearnetRules,
+                hiddenServiceOnly = state.hiddenServiceOnly,
+                onRevokeRule = onRevokeClearnetRule,
+                onClearAllRules = onClearClearnetRules,
+            )
+
             ToggleSettingRow(
                 title = "Require Biometric / Device Unlock",
                 subtitle = "Confirm identity before decrypting, signing, or generating keys",
@@ -359,6 +709,8 @@ fun SettingsSheet(
                 modifier = Modifier.testTag("settings_default_zoom"),
             )
         }
+
+        Spacer(Modifier.height(10.dp))
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -483,10 +835,14 @@ private fun ToggleSettingRow(
 
 /**
  * Browser Menu Sheet (`☰`).
+ * Provides crisp 1-tap access to Forward, Reload, New Tab, Tabs, PGP Keyring,
+ * Tor & Clearnet Rules, Zoom, Settings, and Open-Source Licences.
  */
 @Composable
 fun BrowserMenuSheet(
     state: BrowserUiState,
+    onForward: () -> Unit,
+    onReload: () -> Unit,
     onNewTab: () -> Unit,
     onStartPage: () -> Unit,
     onOpenTabs: () -> Unit,
@@ -499,17 +855,42 @@ fun BrowserMenuSheet(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val securitySummary = when {
+        state.hiddenServiceOnly -> ".onion only"
+        state.clearnetRules.isNotEmpty() -> "${state.clearnetRules.size} allowed"
+        else -> "Ask"
+    }
+
     OvBottomSheet(
-        title = "Trap Menu",
+        title = "Menu",
         onDismiss = onDismiss,
         modifier = modifier.testTag("browser_menu_sheet"),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(max = 460.dp)
+                .heightIn(max = 480.dp)
                 .verticalScroll(rememberScrollState()),
         ) {
+            OvMenuRow(
+                glyph = TrapGlyph.Forward,
+                label = "Forward",
+                enabled = state.canGoForward,
+                onClick = {
+                    onDismiss()
+                    onForward()
+                },
+                testTag = "menu_forward",
+            )
+            OvMenuRow(
+                glyph = TrapGlyph.Reload,
+                label = if (state.isLoading) "Stop Loading" else "Reload",
+                onClick = {
+                    onDismiss()
+                    onReload()
+                },
+                testTag = "menu_reload",
+            )
             OvMenuRow(
                 glyph = TrapGlyph.NewTab,
                 label = "New Tab",
@@ -520,15 +901,6 @@ fun BrowserMenuSheet(
                 testTag = "menu_new_tab",
             )
             OvMenuRow(
-                glyph = TrapGlyph.Home,
-                label = "Start Page",
-                onClick = {
-                    onDismiss()
-                    onStartPage()
-                },
-                testTag = "menu_start_page",
-            )
-            OvMenuRow(
                 glyph = TrapGlyph.Tabs,
                 label = "Tabs",
                 trailing = state.tabCount.toString(),
@@ -537,6 +909,15 @@ fun BrowserMenuSheet(
                     onOpenTabs()
                 },
                 testTag = "menu_tabs",
+            )
+            OvMenuRow(
+                glyph = TrapGlyph.Home,
+                label = "Start Page",
+                onClick = {
+                    onDismiss()
+                    onStartPage()
+                },
+                testTag = "menu_start_page",
             )
             OvMenuRow(
                 glyph = TrapGlyph.Key,
@@ -550,8 +931,8 @@ fun BrowserMenuSheet(
             )
             OvMenuRow(
                 glyph = TrapGlyph.Shield,
-                label = "Tor Security & Circuit",
-                trailing = if (state.hiddenServiceOnly) ".onion only" else "Tor proxy",
+                label = "Tor & Clearnet Rules",
+                trailing = securitySummary,
                 onClick = {
                     onDismiss()
                     onOpenSecurity()
@@ -574,7 +955,7 @@ fun BrowserMenuSheet(
             OvMenuRow(
                 glyph = TrapGlyph.Settings,
                 label = "Settings",
-                trailing = "${state.themeFamily.displayName} · ${state.themeMode.displayName}",
+                trailing = state.themeFamily.displayName,
                 onClick = {
                     onDismiss()
                     onOpenSettings()
