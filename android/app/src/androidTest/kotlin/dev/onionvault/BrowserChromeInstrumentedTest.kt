@@ -6,13 +6,13 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
-import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import dev.onionvault.ui.DUCKDUCKGO_ONION_URL
 import dev.onionvault.ui.TrapPreferences
 import dev.onionvault.ui.TrapThemeFamily
 import dev.onionvault.ui.TrapThemeMode
@@ -63,7 +63,7 @@ class BrowserChromeInstrumentedTest {
         assertEquals(TrapThemeFamily.SecureDrop, prefs.themeFamily)
         assertEquals(TrapThemeMode.Dark, prefs.themeMode)
 
-        composeRule.onNodeWithContentDescription("Close").performClick()
+        composeRule.onNodeWithTag("sheet_close_button").performClick()
         composeRule.waitForIdle()
 
         // 3. TOR Pill -> Security & Circuit Sheet -> toggle Hidden Service Only -> native state transition
@@ -85,10 +85,10 @@ class BrowserChromeInstrumentedTest {
             composeRule.waitForIdle()
         }
         assertTrue(prefs.hiddenServiceOnly)
-        composeRule.onNodeWithContentDescription("Close").performClick()
+        composeRule.onNodeWithTag("sheet_close_button").performClick()
         composeRule.waitForIdle()
 
-        // 4. Multi-Tab Sheet: create tab, verify tab count, close tab
+        // 4. Multi-Tab Sheet: create tab, verify tab count, close sheet
         composeRule.onNodeWithTag("nav_tabs").performClick()
         composeRule.onNodeWithTag("tabs_sheet").assertIsDisplayed()
         composeRule.onNodeWithTag("tabs_new_tab").performClick()
@@ -96,7 +96,7 @@ class BrowserChromeInstrumentedTest {
 
         composeRule.onNodeWithTag("nav_tabs").performClick()
         composeRule.onNodeWithTag("tabs_sheet").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("Close").performClick()
+        composeRule.onNodeWithTag("sheet_close_button").performClick()
         composeRule.waitForIdle()
 
         // 5. Keyring Sheet: generate real Sequoia OpenPGP keypair & export public key to clipboard
@@ -128,8 +128,20 @@ class BrowserChromeInstrumentedTest {
 
             // Clean up generated test key
             OvNative.nativeDeleteKey(created.fingerprint)
-            composeRule.onNodeWithContentDescription("Close").performClick()
+            composeRule.onNodeWithTag("sheet_close_button").performClick()
             composeRule.waitForIdle()
         }
+
+        // 6. Hidden Service Only policy blocks clearnet URL & StartPage launches v3 .onion address
+        composeRule.onNodeWithTag("address_input").performTextInput("https://example.com")
+        composeRule.onNodeWithTag("address_go").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("status_notice_banner").assertIsDisplayed()
+        composeRule.onNodeWithTag("address_clear").performClick()
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("start_ddg_onion_card").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("address_input").assertTextEquals(DUCKDUCKGO_ONION_URL)
     }
 }

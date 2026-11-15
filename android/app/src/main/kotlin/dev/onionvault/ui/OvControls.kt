@@ -705,6 +705,7 @@ fun OvBottomSheet(
                     glyph = TrapGlyph.Close,
                     contentDescription = "Close $title",
                     onClick = onDismiss,
+                    modifier = Modifier.testTag("sheet_close_button"),
                     tint = colors.textMuted,
                     size = 34.dp,
                 )
