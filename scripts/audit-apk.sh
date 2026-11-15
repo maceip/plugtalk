@@ -7,8 +7,11 @@
 #
 # Verifies before emulator gate, attestation, or release:
 #   1. `aapt2 dump badging` confirms `applicationId='dev.onionvault'` (`package: name='dev.onionvault'`)
-#      and non-empty `versionCode` / `versionName`.
-#   2. Multi-ABI native libraries exist and are non-empty:
+#      and non-empty `versionCode` / `versionName`, AND `aapt2 dump xmltree` confirms
+#      `<application android:memtagMode="off">` (`0x01010624=0`) with zero `<service>` /
+#      `<process>` overrides (preventing ARMv9 MTE `SetHeapTaggingLevel` `SIGTRAP` crashes).
+#   2. Multi-ABI native libraries exist, are non-empty, and have 16KB-aligned (`p_align >= 0x4000`)
+#      ELF64 `PT_LOAD` segments:
 #        - lib/arm64-v8a/{libcef.so,libonion_vault.so}
 #        - lib/x86_64/{libcef.so,libonion_vault.so}
 #   3. Bundled legal notices exist:
@@ -18,6 +21,8 @@
 #      and `Ldev/onionvault/` (catching the missing-Java-layer crash from INCIDENT-REPORT.md).
 #   6. `libonion_vault.so` on BOTH `arm64-v8a` and `x86_64` has ZERO `libcef.so` `DT_NEEDED`
 #      entries and exports all 19 `Java_dev_onionvault_OvNative_*` JNI entry points.
+#   7. Valid APK Signature Scheme v2+ signature (matching deterministic `android/app/debug.keystore`
+#      when signed with the Android Debug DN).
 
 set -euo pipefail
 
@@ -87,6 +92,22 @@ find_nm_tool() {
     return 1
 }
 
+find_apksigner() {
+    if command -v apksigner >/dev/null 2>&1; then
+        command -v apksigner
+        return 0
+    fi
+    if [[ -d "${SDK_ROOT}/build-tools" ]]; then
+        local found
+        found="$(find "${SDK_ROOT}/build-tools" -type f -name apksigner 2>/dev/null | sort -V | tail -n 1 || true)"
+        if [[ -n "$found" ]]; then
+            echo "$found"
+            return 0
+        fi
+    fi
+    return 1
+}
+
 AAPT2="$(find_aapt2 || true)"
 if [[ -z "$AAPT2" ]]; then
     echo "::error::Could not locate aapt2 in PATH or ${SDK_ROOT}/build-tools" >&2
@@ -105,7 +126,9 @@ if [[ -z "$NM_TOOL" ]]; then
     exit 1
 fi
 
-echo "== [1/4] Auditing AndroidManifest badging with $(basename "$AAPT2") =="
+APKSIGNER="$(find_apksigner || true)"
+
+echo "== [1/5] Auditing AndroidManifest badging & ARMv9 memtagMode with $(basename "$AAPT2") =="
 BADGING="$("$AAPT2" dump badging "$APK")"
 PKG_LINE="$(printf '%s\n' "$BADGING" | grep -m 1 '^package:' || true)"
 if [[ -z "$PKG_LINE" ]]; then
@@ -131,7 +154,60 @@ if [[ -z "$VERSION_NAME" ]]; then
 fi
 echo "  applicationId='${APP_ID}' versionCode='${VERSION_CODE}' versionName='${VERSION_NAME}'"
 
-echo "== [2/4] Auditing ZIP entries, uncompressed .pak/.so storage, licenses, and DEX descriptors =="
+XMLTREE="$("$AAPT2" dump xmltree "$APK" --file AndroidManifest.xml)"
+printf '%s\n' "$XMLTREE" | python3 -c '
+import re
+import sys
+
+stack: list[tuple[int, str]] = []
+app_memtag: list[tuple[str, int]] = []
+overrides: list[tuple[str, str, int]] = []
+
+elem_re = re.compile(r"^(\s*)E:\s+([A-Za-z0-9_.-]+)")
+attr_re = re.compile(r"^(\s*)A:\s+.*:memtagMode\(0x01010624\)=(.*)$")
+val_re = re.compile(r"^(?:\(type\s+0x[0-9a-fA-F]+\))?\s*(0x[0-9a-fA-F]+|-?[0-9]+)")
+
+for raw_line in sys.stdin:
+    line = raw_line.rstrip("\r\n")
+    m_elem = elem_re.match(line)
+    if m_elem:
+        indent = len(m_elem.group(1))
+        name = m_elem.group(2)
+        while stack and stack[-1][0] >= indent:
+            stack.pop()
+        stack.append((indent, name))
+        continue
+
+    m_attr = attr_re.match(line)
+    if m_attr and stack:
+        attr_indent = len(m_attr.group(1))
+        rhs = m_attr.group(2).strip()
+        while len(stack) > 1 and stack[-1][0] >= attr_indent:
+            stack.pop()
+        owner = stack[-1][1]
+        m_val = val_re.match(rhs)
+        if not m_val:
+            raise SystemExit(
+                f"::error::Unrecognized android:memtagMode(0x01010624) value on <{owner}>: {rhs}"
+            )
+        parsed = int(m_val.group(1), 0)
+        if owner == "application":
+            app_memtag.append((rhs, parsed))
+        elif parsed != 0:
+            overrides.append((owner, rhs, parsed))
+
+if len(app_memtag) != 1 or app_memtag[0][1] != 0:
+    raise SystemExit(
+        f"::error::<application> must declare android:memtagMode=\"off\" (0x01010624=0); found: {app_memtag}"
+    )
+if overrides:
+    raise SystemExit(
+        f"::error::Child manifest component(s) override android:memtagMode away from off (0): {overrides}"
+    )
+print(f"  [manifest] <application android:memtagMode=\"off\"> verified ({app_memtag[0][0]}); 0 component overrides")
+'
+
+echo "== [2/5] Auditing ZIP entries, 16KB ELF PT_LOAD alignment, .pak storage, licenses, and DEX descriptors =="
 python3 - "$APK" <<'PY'
 import struct
 import sys
@@ -156,6 +232,43 @@ required_dex_prefixes = {
     "Lorg/jni_zero/": 0,
     "Ldev/onionvault/": 0,
 }
+
+
+def verify_elf64_16k_pt_load_alignment(zf: zipfile.ZipFile, entry: str) -> list[str]:
+    with zf.open(entry) as fp:
+        head = fp.read(64)
+        if len(head) < 64 or head[:4] != b"\x7fELF" or head[4] != 2 or head[5] != 1:
+            raise SystemExit(f"::error::{entry} is not a valid little-endian ELF64 shared library")
+        (e_phoff,) = struct.unpack_from("<Q", head, 32)
+        e_phentsize, e_phnum = struct.unpack_from("<HH", head, 54)
+        if e_phentsize < 56 or e_phnum == 0:
+            raise SystemExit(f"::error::{entry} has invalid ELF64 program header table ({e_phentsize=}, {e_phnum=})")
+        needed = e_phoff + e_phnum * e_phentsize
+        if needed > len(head):
+            head += fp.read(needed - len(head))
+        if len(head) < needed:
+            raise SystemExit(f"::error::{entry} truncated before ELF64 program headers")
+
+    pt_load_aligns: list[str] = []
+    for idx in range(e_phnum):
+        off = e_phoff + idx * e_phentsize
+        p_type, _p_flags, p_offset, p_vaddr, _p_paddr, _p_filesz, _p_memsz, p_align = struct.unpack_from(
+            "<IIQQQQQQ", head, off
+        )
+        if p_type == 1:  # PT_LOAD
+            if p_align < 0x4000 or (p_align & (p_align - 1)) != 0:
+                raise SystemExit(
+                    f"::error::{entry} PT_LOAD[{idx}] p_align={hex(p_align)} (< 0x4000 / 16KB page requirement)"
+                )
+            if (p_vaddr - p_offset) % p_align != 0:
+                raise SystemExit(
+                    f"::error::{entry} PT_LOAD[{idx}] (p_vaddr - p_offset) not congruent modulo p_align={hex(p_align)}"
+                )
+            pt_load_aligns.append(hex(p_align))
+
+    if not pt_load_aligns:
+        raise SystemExit(f"::error::{entry} contains zero PT_LOAD segments")
+    return pt_load_aligns
 
 
 def read_uleb128(buf: bytes, offset: int) -> tuple[int, int]:
@@ -199,8 +312,9 @@ with zipfile.ZipFile(apk_path, "r") as zf:
         info = infos[entry]
         if info.file_size == 0:
             raise SystemExit(f"::error::Empty native library in APK: {entry}")
+        aligns = verify_elf64_16k_pt_load_alignment(zf, entry)
         mode = "Stored" if info.compress_type == zipfile.ZIP_STORED else "Deflated"
-        print(f"  [lib] {entry}: {info.file_size:,} bytes ({mode})")
+        print(f"  [lib] {entry}: {info.file_size:,} bytes ({mode}, PT_LOAD p_align={aligns})")
 
     for entry in required_licenses:
         if entry not in infos or infos[entry].file_size == 0:
@@ -242,7 +356,7 @@ with zipfile.ZipFile(apk_path, "r") as zf:
             )
 PY
 
-echo "== [3/4] Auditing ELF DT_NEEDED & 19 JNI exports on arm64-v8a and x86_64 =="
+echo "== [3/5] Auditing ELF DT_NEEDED & 19 JNI exports on arm64-v8a and x86_64 =="
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
@@ -298,4 +412,27 @@ for abi in arm64-v8a x86_64; do
     echo "  [elf:${abi}] zero libcef.so DT_NEEDED; ${#EXPECTED_JNI_SYMBOLS[@]}/19 OvNative JNI symbols exported"
 done
 
-echo "== [4/4] APK audit PASSED: $(basename "$APK") (${APP_ID} v${VERSION_NAME}, code ${VERSION_CODE}) =="
+echo "== [4/5] Auditing APK Signature Scheme v2+ & deterministic debug signing certificate =="
+if [[ -n "$APKSIGNER" ]]; then
+    SIGN_OUT="$("$APKSIGNER" verify -v --print-certs "$APK")"
+    if ! printf '%s\n' "$SIGN_OUT" | grep -q "Verified using v2 scheme (APK Signature Scheme v2): true"; then
+        echo "::error::APK Signature Scheme v2 verification failed for ${APK}" >&2
+        printf '%s\n' "$SIGN_OUT" >&2
+        exit 1
+    fi
+    CERT_DN="$(printf '%s\n' "$SIGN_OUT" | sed -n 's/^Signer #1 certificate DN:[[:space:]]*//p' | head -n 1)"
+    CERT_SHA256="$(printf '%s\n' "$SIGN_OUT" | sed -n 's/^Signer #1 certificate SHA-256 digest:[[:space:]]*//p' | head -n 1 | tr '[:upper:]' '[:lower:]')"
+    PINNED_DEBUG_KEYSTORE="${REPO_ROOT}/android/app/debug.keystore"
+    if [[ "$CERT_DN" == *"CN=Android Debug"* && -f "$PINNED_DEBUG_KEYSTORE" ]] && command -v keytool >/dev/null 2>&1; then
+        EXPECTED_DEBUG_SHA256="$(keytool -list -v -keystore "$PINNED_DEBUG_KEYSTORE" -storepass android 2>/dev/null | sed -n 's/.*SHA256:[[:space:]]*//p' | head -n 1 | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+        if [[ -n "$EXPECTED_DEBUG_SHA256" && "$CERT_SHA256" != "$EXPECTED_DEBUG_SHA256" ]]; then
+            echo "::error::Android Debug APK signer SHA-256 (${CERT_SHA256}) does not match pinned android/app/debug.keystore (${EXPECTED_DEBUG_SHA256})" >&2
+            exit 1
+        fi
+    fi
+    echo "  [sign] v2=true DN='${CERT_DN}' SHA-256=${CERT_SHA256}"
+else
+    echo "  [sign] apksigner not found in PATH/SDK; skipped certificate pin check"
+fi
+
+echo "== [5/5] APK audit PASSED: $(basename "$APK") (${APP_ID} v${VERSION_NAME}, code ${VERSION_CODE}) =="

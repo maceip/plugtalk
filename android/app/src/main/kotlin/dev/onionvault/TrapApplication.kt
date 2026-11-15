@@ -25,6 +25,14 @@ class TrapApplication : Application() {
         /** Fail-closed loopback blackhole used until Arti binds its SOCKS5 listener. */
         const val FAIL_CLOSED_SOCKS_SERVER: String = "socks5://127.0.0.1:1"
 
+        /**
+         * Chromium 156 enables `PartitionAllocMemoryTagging` by default on ARMv9 (`FEAT_MTE`).
+         * Combined with `android:memtagMode="off"`, disabling this feature prevents
+         * `PartitionAllocSupport::ReconfigureAfterFeatureListInit` from calling
+         * `SetHeapTaggingLevel` (`SIGTRAP` under locked MTE) or `DumpWithoutCrashing`.
+         */
+        const val PARTITION_ALLOC_MEMORY_TAGGING_FEATURE: String = "PartitionAllocMemoryTagging"
+
         @Volatile
         var isEngineReady: Boolean = false
             private set
@@ -102,6 +110,35 @@ class TrapApplication : Application() {
                 Log.e(TAG, "Could not apply SOCKS5 proxy ($socksServer) on CefriumProfile", it)
             }
         }
+
+        internal fun mergeDisabledFeature(existing: String?, feature: String): String {
+            val trimmedFeature = feature.trim()
+            if (trimmedFeature.isEmpty()) {
+                return existing.orEmpty().trim()
+            }
+            val items = existing
+                .orEmpty()
+                .split(",")
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .toMutableList()
+            if (trimmedFeature !in items) {
+                items.add(trimmedFeature)
+            }
+            return items.joinToString(",")
+        }
+
+        internal fun appendDisabledFeature(commandLine: CommandLine, feature: String) {
+            val existing = commandLine.getSwitchValue("disable-features", "")
+            val merged = mergeDisabledFeature(existing, feature)
+            if (merged.isEmpty()) {
+                return
+            }
+            if (commandLine.hasSwitch("disable-features")) {
+                commandLine.removeSwitch("disable-features")
+            }
+            commandLine.appendSwitchWithValue("disable-features", merged)
+        }
     }
 
     override fun attachBaseContext(base: Context) {
@@ -145,6 +182,9 @@ class TrapApplication : Application() {
     }
 
     private fun initializeHardenedCefrium() {
+        // Isolate GPU execution inside `:privileged_process0` instead of `--in-process-gpu`.
+        Cefrium.setGpuProcessEnabled(true)
+
         // Disable all background clearnet connections before starting Chromium.
         Cefrium.setComponentUpdatesEnabled(false)
         Cefrium.setNetworkTimeQueriesEnabled(false)
@@ -160,6 +200,9 @@ class TrapApplication : Application() {
             appendSwitch("dns-prefetch-disable")
             appendSwitch("no-pings")
             appendSwitch("disable-background-networking")
+            // Pre-populate `disable-features` before `Cefrium.initialize(this)` appends
+            // its own disabled features (`Cefrium.disableFeature` is private static).
+            appendDisabledFeature(this, PARTITION_ALLOC_MEMORY_TAGGING_FEATURE)
         }
 
         val initialized = Cefrium.initialize(this)

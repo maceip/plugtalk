@@ -68,6 +68,17 @@ android {
         compose = true
     }
 
+    signingConfigs {
+        getByName("debug") {
+            // Deterministic repository debug keystore shared by local and CI builds so
+            // APK upgrades across GitHub releases never fail with INSTALL_FAILED_UPDATE_INCOMPATIBLE.
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -79,6 +90,7 @@ android {
         }
         debug {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 

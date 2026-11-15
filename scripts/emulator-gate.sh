@@ -70,7 +70,7 @@ while (( elapsed < WAIT_SECONDS )); do
     if (( engine_ready == 1 && socks_bound == 1 )); then
         break
     fi
-    if grep -qE "FATAL EXCEPTION|ANR in ${PACKAGE}|Fatal signal (11|6|4|8)" "$LOG"; then
+    if grep -qE "FATAL EXCEPTION|ANR in ${PACKAGE}|Fatal signal [0-9]+|SetHeapTaggingLevel: set_tcf_on_all_threads failed" "$LOG"; then
         break
     fi
     sleep 2
@@ -93,9 +93,15 @@ if grep -qE "FATAL EXCEPTION|ANR in ${PACKAGE}" "$LOG"; then
     failed=1
 fi
 
-if grep -qE "Fatal signal (11|6|4|8)|\*\*\* \*\*\* \*\*\*" "$LOG"; then
+if grep -qE "Fatal signal (11|6|5|4|7|8|31)|Fatal signal [0-9]+|\*\*\* \*\*\* \*\*\*" "$LOG"; then
     echo "::error::native fatal signal detected" >&2
     grep -E -A 30 "Fatal signal|\*\*\* \*\*\* \*\*\*" "$LOG" | head -60 >&2 || true
+    failed=1
+fi
+
+if grep -qE "SetHeapTaggingLevel: set_tcf_on_all_threads failed|PartitionAlloc: Failed to enable memory tagging" "$LOG"; then
+    echo "::error::ARMv9 MTE / PartitionAlloc heap-tagging error detected in logcat" >&2
+    grep -E -C 5 "SetHeapTaggingLevel: set_tcf_on_all_threads failed|PartitionAlloc: Failed to enable memory tagging" "$LOG" | head -60 >&2 || true
     failed=1
 fi
 
