@@ -1102,8 +1102,9 @@ private fun PgpFieldOverlay(
         fields.forEach { field ->
             val bounds = field.bounds
             val anchorX = (viewportW * bounds.left + 8.dp).coerceIn(8.dp, (viewportW - 140.dp).coerceAtLeast(8.dp))
-            val rawAnchorY = if (field.kind in EDITABLE_FIELD_KINDS) {
-                (viewportH * bounds.bottom - 38.dp).coerceAtLeast(viewportH * bounds.top + 6.dp)
+            val fieldHeight = viewportH * (bounds.bottom - bounds.top).coerceAtLeast(0f)
+            val rawAnchorY = if (field.kind in EDITABLE_FIELD_KINDS && fieldHeight < 76.dp) {
+                viewportH * bounds.bottom + 6.dp
             } else {
                 (viewportH * bounds.bottom - 38.dp).coerceAtLeast(viewportH * bounds.top + 6.dp)
             }
