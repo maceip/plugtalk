@@ -1,59 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-    The strings of Trap.
-
-    Only the strings that are marked as live are read by the interface;
-    every other visible label of the application is a **literal in the
-    Kotlin code** ("Back", "Forward", "Reload", "New tab", "The tabs of
-    Trap", "Search or enter the address of a hidden service", …).  The
-    interface therefore cannot be translated, and the strings below that
-    are not live are the remains of the first generation of the chrome.
-
-    The live ones:
-      app_name, blocked, crash_copied, start_url, key_created, key_failed,
-      key_copied, no_message, no_key, unknown_field, mutation_applied,
-      mutation_failed, mutation_stale, authenticate_for_key,
-      authentication_failed, hidden_service_only_on,
-      hidden_service_only_off
-
-    The dead ones:
-      address_hint, go, starting, tor_progress, engine_failed,
-      action_decrypt, action_import_key, action_encrypt, action_field,
-      signature_verified, signature_unverified, insert_into_page, close,
-      cancel
--->
 <resources>
     <string name="app_name">Trap</string>
-    <string name="address_hint">onion address</string>
-    <string name="go">Go</string>
-    <string name="starting">Starting the Tor client…</string>
-    <string name="tor_progress">Tor: %1$d%% (%2$s)</string>
-    <string name="blocked">The request was blocked by the leak protection.</string>
-    <string name="engine_failed">The browser engine could not be started.</string>
-    <string name="crash_copied">The trace was copied into the clipboard.</string>
     <string name="start_url">about:blank</string>
-    <string name="key_created">The new key is %1$s</string>
-    <string name="key_failed">The key could not be created</string>
-    <string name="key_copied">The public key is in the clipboard</string>
-
-    <string name="action_decrypt">Decrypt</string>
-    <string name="action_import_key">Import key</string>
-    <string name="action_encrypt">Encrypt</string>
-    <string name="action_field">Field</string>
-    <string name="no_message">The message is empty.</string>
-    <string name="no_key">The key is empty.</string>
-    <string name="unknown_field">This field cannot be used.</string>
-
-    <string name="signature_verified">The signature of the message is valid.</string>
-    <string name="signature_unverified">The signature of the message could not be verified.</string>
-    <string name="insert_into_page">Insert</string>
-    <string name="mutation_applied">The field carries the new text.</string>
-    <string name="mutation_failed">The field could not be changed: %1$s</string>
-    <string name="mutation_stale">the field still holds the old text</string>
-    <string name="authenticate_for_key">Confirm to use your private key</string>
-    <string name="authentication_failed">The confirmation failed; the key stays locked.</string>
-    <string name="close">Close</string>
-    <string name="cancel">Cancel</string>
-    <string name="hidden_service_only_on">Only hidden services can be reached.</string>
-    <string name="hidden_service_only_off">The browser may reach the clearnet.</string>
+    <string name="ddg_onion_url">https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/</string>
+    <string name="address_hint">Enter .onion address</string>
+    <string name="blocked">Clearnet request refused by Hidden Service Only policy.</string>
+    <string name="crash_copied">Crash trace copied to clipboard.</string>
+    <string name="plaintext_copied">Decrypted plaintext copied to clipboard.</string>
+    <string name="link_copied">Address copied to clipboard.</string>
+    <string name="ciphertext_copied">Encrypted PGP message copied to clipboard.</string>
+    <string name="key_created">Generated key %1$s</string>
+    <string name="key_imported">Imported key %1$s</string>
+    <string name="key_deleted">Deleted key from keyring.</string>
+    <string name="key_failed">PGP key operation failed: %1$s</string>
+    <string name="key_copied">Armored public key copied to clipboard.</string>
+    <string name="no_own_key">Generate or import your own keypair first.</string>
+    <string name="no_message">No armored PGP message found.</string>
+    <string name="no_key">No armored PGP key block found.</string>
+    <string name="mutation_applied">Verified live form field write.</string>
+    <string name="mutation_failed">Live field write failed: %1$s</string>
+    <string name="authenticate_for_key">Unlock Trap PGP secret keyring</string>
+    <string name="authentication_failed">Authentication cancelled; secret keys remain locked.</string>
+    <string name="hidden_service_only_on">Hidden Service Only enabled (.onion only).</string>
+    <string name="hidden_service_only_off">Tor clearnet routing permitted.</string>
+    <string name="tor_identity_reset">Reset Tor circuit isolation (%1$d isolated groups rotated).</string>
+    <string name="session_cleared">Cleared ephemeral tabs, snapshots, and Tor isolation.</string>
 </resources>

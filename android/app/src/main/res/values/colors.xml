@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- SecureDrop Chrome Dark Tokens -->
+    <color name="trap_sd_bg">#FF0F0C09</color>
+    <color name="trap_sd_surface">#FF1A1510</color>
+    <color name="trap_sd_surface_2">#FF14100C</color>
+    <color name="trap_sd_control">#FF2A211A</color>
+    <color name="trap_sd_line">#FF4A3A2A</color>
+    <color name="trap_sd_amber">#FFE8A33D</color>
+    <color name="trap_sd_teal">#FF2EC4B0</color>
+    <color name="trap_sd_green">#FF3ECF6A</color>
+    <color name="trap_sd_text">#FFE8DDD0</color>
+    <color name="trap_sd_muted">#FFB9AEA0</color>
+
+    <!-- Neon Graffiti Board Dark Tokens -->
+    <color name="trap_neon_bg">#FF15181F</color>
+    <color name="trap_neon_surface">#FF1E222C</color>
+    <color name="trap_neon_control">#FF2A2F3C</color>
+    <color name="trap_neon_line">#FF3A4050</color>
+    <color name="trap_neon_teal">#FF00E4C1</color>
+    <color name="trap_neon_mint">#FF67EEE1</color>
+    <color name="trap_neon_pink">#FFFD96C3</color>
+    <color name="trap_neon_amber">#FFE8933E</color>
+    <color name="trap_neon_cream">#FFFBD4A9</color>
+    <color name="trap_neon_purple">#FF8F55A6</color>
+</resources>

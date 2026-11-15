@@ -1,13 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!--
-        Trap draws its own chrome; the platform theme only provides the
-        dark background and the correct status bar behaviour.
+        Trap renders edge-to-edge Compose chrome with explicit WindowInsets;
+        initial window and bar surfaces match TrapTheme's default dark surface
+        and are synchronized dynamically at runtime when switching themes/modes.
     -->
     <style name="Theme.Trap" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">#FF0B0E11</item>
-        <item name="android:statusBarColor">#FF101418</item>
-        <item name="android:navigationBarColor">#FF101418</item>
+        <item name="android:windowBackground">@color/trap_sd_bg</item>
+        <item name="android:statusBarColor">@color/trap_sd_bg</item>
+        <item name="android:navigationBarColor">@color/trap_sd_surface</item>
         <item name="android:windowLightStatusBar">false</item>
     </style>
 </resources>
