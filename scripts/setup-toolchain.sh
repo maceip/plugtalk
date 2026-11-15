@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 # Install everything needed to build the Trap APK on a Linux x86_64 machine:
-# JDK 25, Android SDK 37, NDK r27c, the Rust Android targets and cargo-ndk.
+# JDK 25, Android SDK 37, NDK r27c, the Rust Android targets, and cargo-ndk.
 #
-# The engine of the browser is **not** installed here: it is CEF, built from
-# its own sources by the bundling service of the workspace (`crates/cefpack`),
-# and that build takes hours.  The bundle it produces is what
-# CEF_ANDROID_ROOT points at.
+# Browser rendering is provided by Cefrium (`com.cefrium:cefrium-sdk:0.19.0`),
+# resolved automatically by Gradle from `https://maven.cefrium.com`.
 #
 #   scripts/setup-toolchain.sh            # installs into /opt/trap-toolchain
 #   source /opt/trap-toolchain/env.sh
@@ -43,7 +41,9 @@ if [ ! -x "$SDK/cmdline-tools/latest/bin/sdkmanager" ]; then
 fi
 if [ ! -d "$SDK/platforms/android-37.0" ]; then
   echo "== Android SDK 37"
+  set +o pipefail
   yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" --licenses >/dev/null || true
+  set -o pipefail
   "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" \
     "platforms;android-37.0" "build-tools;37.0.0" "platform-tools" >/dev/null
 fi
@@ -52,26 +52,13 @@ ln -sfn "$TC/ndk-$NDK_VERSION" "$SDK/ndk/$NDK_PACKAGE"
 
 echo "== Rust targets and cargo-ndk"
 rustup target add aarch64-linux-android x86_64-linux-android >/dev/null
-command -v cargo-ndk >/dev/null || cargo install cargo-ndk
-
-# The engine of the browser is CEF, built from its own sources with the NDK
-# by the bundling service of the workspace.  The service is the crate
-# `crates/cefpack`; the build of the engine takes hours and needs a lot of
-# memory and disk, therefore it is **not** part of this script.  Run it by
-# hand when the engine is needed:
-#
-#   cargo run -p cefpack -- fetch     # the pinned CEF sources
-#   cargo run -p cefpack -- build     # the engine, the headers, the resources
-#
-# and point CEF_ANDROID_ROOT at the bundle it produces.
-CEF="${CEF_ANDROID_ROOT:-$TC/cef-bundle}"
+command -v cargo-ndk >/dev/null || cargo install cargo-ndk --locked
 
 cat > "$TC/env.sh" <<EOF
 export JAVA_HOME=$TC/jdk25
 export ANDROID_HOME=$SDK
 export ANDROID_SDK_ROOT=$SDK
 export ANDROID_NDK_HOME=$TC/ndk-$NDK_VERSION
-export CEF_ANDROID_ROOT=$CEF
 export PATH=\$JAVA_HOME/bin:\$ANDROID_HOME/platform-tools:\$PATH
 EOF
 
