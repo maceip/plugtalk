@@ -58,14 +58,10 @@ class OvNativeTest {
     }
 
     private fun sourceFile(path: String): File {
-        val cwd = File(".").absoluteFile
-        val root = when {
-            File(cwd, path).isFile -> cwd
-            cwd.parentFile != null && File(cwd.parentFile, path).isFile -> cwd.parentFile
-            cwd.parentFile?.parentFile != null && File(cwd.parentFile.parentFile, path).isFile ->
-                cwd.parentFile.parentFile
-            else -> cwd.parentFile?.parentFile ?: cwd
-        }
+        val cwd = File(".").canonicalFile
+        val root = generateSequence(cwd) { it.parentFile }
+            .firstOrNull { File(it, path).isFile }
+            ?: cwd
         val file = File(root, path)
         assertTrue("Expected repository file to exist: ${file.path}", file.isFile)
         return file
