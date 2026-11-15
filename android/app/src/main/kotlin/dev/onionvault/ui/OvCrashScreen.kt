@@ -1,6 +1,8 @@
 package dev.onionvault.ui
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -9,9 +11,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -21,7 +24,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -30,35 +34,11 @@ import androidx.compose.ui.unit.sp
 import dev.onionvault.R
 
 /**
- * The screen that shows the trace of a crash.
+ * Crash & exit-reason recovery screen.
  *
- * The application does not die silently: the trace of the error that
- * stopped it is written into the private directory of the application, and
- * the next start shows this screen instead of the browser.  The trace can
- * be copied into the clipboard, and the user can try again: the report is
- * forgotten and the browser starts as if nothing had happened.
- *
- * The screen wears the colours of the design board: the near black of the
- * panel, the pink of the graffiti and the teal of the brand.
- *
- * ## The catalogue of the surfaces
- *
- * | surface | glyph | what it does |
- * |---|---|---|
- * | the plate of the title | `ic_neon_menu` | the mark of the screen, in the cream of the board |
- * | the trace | — | the whole report, in the mint of the board, monospace, scrollable in both directions |
- * | "Copy the trace" | `ic_neon_sign_pgp` | the trace goes into the clipboard |
- * | "Try again" | `ic_neon_reload` | the report is forgotten and the browser starts |
- *
- * The trace comes from three sources, in the order of how close they are to
- * the crash: the file of the **native guard** (the signal that killed the
- * process), the file of the **Java handler** (the stack trace of an
- * exception) and the **record of the platform** (the reason of the exit
- * and the tombstone of the system).
- *
- * **This screen has no screenshot test.**  It is the one screen that must
- * never be wrong, and it is the only one that is not rendered by
- * `ScreenshotTest.kt`.
+ * Respects system-bar insets, renders the Trap onion emblem as an untinted
+ * RGBA [Image] alongside crisp semantic vectors, supports full 2D scrolling
+ * over long traces, and provides working Copy & Dismiss/Retry controls.
  */
 @Composable
 fun OvCrashScreen(
@@ -67,42 +47,56 @@ fun OvCrashScreen(
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val colors = TrapTheme.colors
+    val verticalScroll = rememberScrollState()
+    val horizontalScroll = rememberScrollState()
+
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(OnionPalette.Surface)
-            .padding(start = 20.dp, end = 20.dp, top = 32.dp, bottom = 24.dp),
+            .background(colors.background)
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(horizontal = 20.dp, vertical = 20.dp)
+            .testTag("crash_screen"),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
                 modifier = Modifier
-                    .size(44.dp)
+                    .size(48.dp)
                     .clip(RoundedCornerShape(14.dp))
-                    .background(OnionPalette.PinkDeep),
+                    .background(colors.dangerContainer)
+                    .border(1.dp, colors.danger, RoundedCornerShape(14.dp)),
                 contentAlignment = Alignment.Center,
             ) {
-                androidx.compose.material3.Icon(
-                    painter = painterResource(R.drawable.ic_neon_menu),
-                    contentDescription = null,
-                    tint = OnionPalette.Cream,
-                    modifier = Modifier.size(26.dp),
+                Image(
+                    painter = painterResource(R.drawable.ov_trap_mark),
+                    contentDescription = "Trap",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.size(32.dp),
                 )
             }
             Spacer(Modifier.width(12.dp))
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "Trap stopped",
-                    color = OnionPalette.TextPrimary,
-                    fontSize = 24.sp,
+                    text = "Trap Stopped Unexpectedly",
+                    color = colors.textPrimary,
+                    fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
-                    text = "the trace of the error is below",
-                    color = OnionPalette.TextMuted,
+                    text = "Diagnostic trace captured locally on device",
+                    color = colors.textMuted,
                     fontSize = 13.sp,
                 )
             }
+            TrapIcon(
+                glyph = TrapGlyph.Warning,
+                tint = colors.danger,
+                size = 24.dp,
+                forceVector = true,
+            )
         }
 
         Box(
@@ -110,74 +104,46 @@ fun OvCrashScreen(
                 .fillMaxWidth()
                 .weight(1f)
                 .clip(RoundedCornerShape(14.dp))
-                .background(OnionPalette.SurfaceRaised)
+                .background(colors.surface)
+                .border(1.dp, colors.border, RoundedCornerShape(14.dp))
                 .padding(14.dp),
         ) {
-            Text(
-                text = report,
-                color = OnionPalette.Mint,
-                fontSize = 11.sp,
-                fontFamily = FontFamily.Monospace,
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .horizontalScroll(rememberScrollState()),
-            )
+                    .verticalScroll(verticalScroll)
+                    .horizontalScroll(horizontalScroll),
+            ) {
+                Text(
+                    text = report,
+                    color = colors.textBody,
+                    fontSize = 11.5.sp,
+                    lineHeight = 16.sp,
+                    fontFamily = FontFamily.Monospace,
+                )
+            }
         }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            OvCrashButton(
-                label = "Copy the trace",
-                glyph = R.drawable.ic_neon_sign_pgp,
-                accent = OnionPalette.Teal,
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            OvSecondaryButton(
+                text = "Copy Trace",
+                glyph = TrapGlyph.Copy,
                 onClick = onCopy,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("crash_copy"),
             )
-            OvCrashButton(
-                label = "Try again",
-                glyph = R.drawable.ic_neon_reload,
-                accent = OnionPalette.Pink,
+            OvPrimaryButton(
+                text = "Dismiss & Retry",
+                glyph = TrapGlyph.Reload,
                 onClick = onRetry,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("crash_retry"),
             )
         }
-    }
-}
-
-/**
- * A button of the crash screen.
- *
- * @param label the name of the action.
- * @param glyph the neon glyph of the action.
- * @param accent the colour of the plate.
- * @param onClick the user tapped the button.
- * @param modifier the modifier of the button.
- */
-@Composable
-private fun OvCrashButton(
-    label: String,
-    glyph: Int,
-    accent: Color,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    androidx.compose.material3.Button(
-        onClick = onClick,
-        modifier = modifier.height(52.dp),
-        shape = RoundedCornerShape(16.dp),
-        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-            containerColor = OnionPalette.SurfaceHigh,
-            contentColor = accent,
-        ),
-        border = androidx.compose.foundation.BorderStroke(1.dp, accent),
-    ) {
-        androidx.compose.material3.Icon(
-            painter = painterResource(glyph),
-            contentDescription = null,
-            tint = accent,
-            modifier = Modifier.size(20.dp),
-        )
-        Spacer(Modifier.width(8.dp))
-        Text(text = label, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
     }
 }

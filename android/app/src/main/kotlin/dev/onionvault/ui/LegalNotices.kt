@@ -1,6 +1,7 @@
 package dev.onionvault.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,12 +12,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
@@ -30,6 +32,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -39,25 +42,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * The list of the licence documents that travel with the application.
- *
- * The LGPL-3.0 of the engine asks for the recipient of the binary to be able
- * to read the licence of the library.  The documents are therefore shown by
- * the application itself and not only shipped in the archive of the release.
- *
- * ## The catalogue of the surfaces
- *
- * | surface | what it is |
- * |---|---|
- * | the sheet | an `AlertDialog` whose title is "The licences of Trap"; it opens with a paragraph that says that the engine is CEF and that it can be replaced |
- * | a row of the list | the title of the document, its size, and the word "read" in the teal of the brand |
- * | the reader | a `Dialog` with the title of the document, the text in the monospace of the machine, and a "Close" button |
- * | the reading | the notice of the engine is 2.2 MiB long; it is read in blocks on a worker thread and shown in a `LazyColumn` that only builds the visible rows |
- * | the spinner | a `CircularProgressIndicator` in the teal of the brand, while the document is being read |
- *
- * @param documents the documents that are packaged into the application.
- * @param onOpenDocument the user wants to read a document.
- * @param onDismiss the user closed the list.
+ * Scrollable open-source license index for Trap's bundled runtime components:
+ * Cefrium `0.19.0` (LGPL-3.0-or-later / Chromium BSD-3-Clause), Sequoia OpenPGP
+ * (LGPL-2.0-or-later), and Arti Tor (MIT OR Apache-2.0).
  */
 @Composable
 fun LegalNoticesDialog(
@@ -65,41 +52,49 @@ fun LegalNoticesDialog(
     onOpenDocument: (LegalDocument) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val colors = TrapTheme.colors
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = OnionPalette.SurfaceRaised,
-        titleContentColor = OnionPalette.TextPrimary,
-        textContentColor = OnionPalette.TextMuted,
+        containerColor = colors.surface,
+        titleContentColor = colors.textPrimary,
+        textContentColor = colors.textMuted,
         title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "The licences of Trap",
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
+            Text(
+                text = "Open-Source Licences",
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Bold,
+            )
         },
         text = {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 320.dp),
+                    .heightIn(max = 360.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Text(
-                    text = "The engine of the browser is the Chromium Embedded " +
-                        "Framework, which is free software under the LGPL-3.0-or-later. " +
-                        "It is loaded as a shared library and can be replaced.",
+                    text = "Trap embeds Cefrium 0.19.0 (Android port of Chromium Embedded " +
+                        "Framework, LGPL-3.0-or-later / Chromium BSD-3-Clause), Sequoia OpenPGP " +
+                        "(LGPL-2.0-or-later), and Arti (MIT OR Apache-2.0). Full licence texts " +
+                        "ship inside assets/licenses/ and alongside release artifacts.",
+                    color = colors.textMuted,
                     fontSize = 12.sp,
-                    modifier = Modifier.padding(bottom = 10.dp),
+                    lineHeight = 17.sp,
+                    modifier = Modifier.padding(bottom = 6.dp),
                 )
                 if (documents.isEmpty()) {
                     Text(
-                        text = "The documents are not available in this build.",
+                        text = "No licence files found in assets/licenses/.",
+                        color = colors.textMuted,
                         fontSize = 13.sp,
                     )
                 } else {
                     documents.forEach { document ->
-                        DocumentRow(document = document, onClick = { onOpenDocument(document) })
+                        DocumentRow(
+                            document = document,
+                            onClick = { onOpenDocument(document) },
+                        )
                     }
                 }
             }
@@ -107,70 +102,65 @@ fun LegalNoticesDialog(
         confirmButton = {},
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Close", color = OnionPalette.TextMuted)
+                Text("Close", color = colors.teal, fontWeight = FontWeight.SemiBold)
             }
         },
     )
 }
 
 /**
- * A row of the list of the licence documents.
- *
- * @param document the document of the row.
- * @param onClick the user tapped the row.
+ * Strict <= 2:1 label density: 1 primary title + 1 byte-size subtitle + 1 trailing action word.
  */
 @Composable
-private fun DocumentRow(document: LegalDocument, onClick: () -> Unit) {
+private fun DocumentRow(
+    document: LegalDocument,
+    onClick: () -> Unit,
+) {
+    val colors = TrapTheme.colors
+    val shape = RoundedCornerShape(10.dp)
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .clickable(onClick = onClick)
-            .padding(vertical = 8.dp, horizontal = 4.dp),
+            .clip(shape)
+            .background(colors.surface2)
+            .border(1.dp, colors.cardBorder, shape)
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(vertical = 10.dp, horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = document.title,
-                color = OnionPalette.TextPrimary,
+                color = colors.textPrimary,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
             )
             if (document.sizeBytes > 0) {
                 Text(
                     text = formatSize(document.sizeBytes),
-                    color = OnionPalette.TextMuted,
-                    fontSize = 10.sp,
+                    color = colors.textMuted,
+                    fontSize = 10.5.sp,
                     fontFamily = FontFamily.Monospace,
                 )
             }
         }
         Spacer(Modifier.width(8.dp))
         Text(
-            text = "read",
-            color = OnionPalette.Teal,
+            text = "Read",
+            color = colors.teal,
             fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold,
         )
     }
 }
 
-/**
- * The text of a licence document.
- *
- * The text of the notice of the engine is 2.2 MiB long; it is read in blocks
- * of a few kilobytes and shown in a list that only builds the visible rows.
- *
- * @param document the document that is read.
- * @param loadLines the function that reads the document.
- * @param onDismiss the user closed the document.
- */
 @Composable
 fun LegalDocumentDialog(
     document: LegalDocument,
     loadLines: suspend () -> List<String>,
     onDismiss: () -> Unit,
 ) {
+    val colors = TrapTheme.colors
     var lines by remember(document.name) { mutableStateOf<List<String>?>(null) }
 
     LaunchedEffect(document.name) {
@@ -178,31 +168,33 @@ fun LegalDocumentDialog(
     }
 
     Dialog(onDismissRequest = onDismiss) {
+        val shape = RoundedCornerShape(16.dp)
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(max = 520.dp)
-                .clip(RoundedCornerShape(14.dp))
-                .background(OnionPalette.SurfaceRaised)
-                .padding(14.dp),
+                .heightIn(max = 540.dp)
+                .clip(shape)
+                .background(colors.surface)
+                .border(1.dp, colors.border, shape)
+                .padding(16.dp),
         ) {
             Text(
                 text = document.title,
-                color = OnionPalette.TextPrimary,
+                color = colors.textPrimary,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Bold,
             )
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(10.dp))
 
             val content = lines
             if (content == null) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(120.dp),
+                        .height(140.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    CircularProgressIndicator(color = OnionPalette.Teal)
+                    CircularProgressIndicator(color = colors.teal)
                 }
             } else {
                 val listState = rememberLazyListState()
@@ -210,13 +202,16 @@ fun LegalDocumentDialog(
                     state = listState,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(1f, fill = false),
+                        .weight(1f, fill = false)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(colors.surface2)
+                        .padding(10.dp),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
                     items(content) { block ->
                         Text(
                             text = block,
-                            color = OnionPalette.TextPrimary,
+                            color = colors.textBody,
                             fontSize = 11.sp,
                             fontFamily = FontFamily.Monospace,
                         )
@@ -224,7 +219,7 @@ fun LegalDocumentDialog(
                 }
             }
 
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(12.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End,
@@ -235,11 +230,6 @@ fun LegalDocumentDialog(
     }
 }
 
-/**
- * The size of a document in a form that a person can read.
- *
- * @param bytes the size in bytes.
- */
 private fun formatSize(bytes: Long): String = when {
     bytes >= 1024L * 1024L -> "%.1f MiB".format(bytes / (1024.0 * 1024.0))
     bytes >= 1024L -> "%d KiB".format(bytes / 1024L)

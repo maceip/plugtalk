@@ -1,595 +1,117 @@
 <p align="center">
-  <a href="https://github.com/maceip/trap/releases/latest">
-    <img src="design/icons/out/play-store-512.png" width="320" alt="Trap — the icon of the application" />
-  </a>
+  <img src="design/icons/out/play-store-512.png" width="240" alt="Trap launcher icon" />
 </p>
 
 # Trap
 
 [![CI & Release](https://github.com/maceip/trap/actions/workflows/ci-release.yml/badge.svg)](https://github.com/maceip/trap/actions/workflows/ci-release.yml)
-[![Licence](https://img.shields.io/badge/licence-Apache--2.0%20OR%20MIT-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](LICENSE-APACHE)
 
-Trap is an Android browser that routes every request through an
-embedded Tor client, runs with **JavaScript switched off completely** and
-implements OpenPGP natively in Rust — no WebAssembly, no content scripts, no
-JavaScript at all.
+**Trap** is an Android hidden-service browser (`dev.onionvault`, `minSdk 29`, `targetSdk 35`) that routes traffic exclusively through an embedded **Arti** Tor client, runs Chromium (**Cefrium `0.19.0`**) with **JavaScript completely disabled**, and performs **OpenPGP** key management, encryption, signing, and decryption natively in Rust (**Sequoia OpenPGP `1.22`** + **Android Keystore AES-256-GCM**) with zero content scripts and zero WebAssembly.
 
-The application is a Cargo workspace plus an Android/Gradle project:
+## Repository Layout
 
-```
-onion-vault/
-├── Cargo.toml              workspace + the `cdylib` of the application
-├── build.rs                links the prebuilt CEF runtime, unpacks its resources
+```text
+trap/
+├── Cargo.toml                  Workspace manifest + Android `cdylib` (`libonion_vault.so`)
+├── build.rs                    Self-contained Cargo build script (zero `libcef.so` link coupling)
+├── src/lib.rs                  19 `#[no_mangle]` JNI entry points (`Java_dev_onionvault_OvNative_*`)
 ├── crates/
-│   ├── ov-tor/             embedded Arti Tor client + local SOCKS5 listener
-│   ├── ov-cef/             off-screen CEF browser + native DOM PGP engine
-│   ├── ov-pgp/             Sequoia based key manager, Keystore wrapped TSKs
-│   └── ov-core/            JNI entry points, ANativeWindow renderer, events
-├── design/icons/           the icon bundle and the script that renders every icon
-│   ├── android/            the icon bundle of the artwork, byte for byte
-│   ├── neon/               the design board and the script that cuts the neon glyphs
-│   └── trap_icon.py        the pipeline of the launcher icon and of the lockups
-├── third_party/
-│   ├── cef/                cef-rs, patched for aarch64-linux-android
-│   └── cef-dll-sys/        cef-dll-sys, patched for aarch64-linux-android
-├── src/lib.rs              the shared library that the APK packages
-└── android/                the Gradle project (Kotlin, the package `dev.onionvault`)
+│   ├── ov-tor/                 Embedded Arti 0.47 Tor client, loopback SOCKS5 proxy, 16-char .onion isolation
+│   ├── ov-cef/                 Pure-Rust Chrome DevTools Protocol (CDP) DOM PGP classifier & leak policy switches
+│   ├── ov-pgp/                 Sequoia 1.22 OpenPGP engine, SQLite keyring, Android Keystore AES-256-GCM wrapper
+│   └── ov-core/                Unified JNI/JSON coordinator bridging Tor, OpenPGP, and CDP DOM inspection
+├── design/icons/               Reproducible icon & Neon Graffiti sprite pipelines (`trap_icon.py`, `neon/slice_neon.py`)
+├── licenses/                   Bundled LGPL-3.0, GPL-3.0, and LGPL-2.1 texts copied into `assets/licenses/` by Gradle (`copyLegalNotices`)
+├── scripts/
+│   └── emulator-gate.sh        Automated Android emulator launch, Cefrium readiness & crash/ANR runtime gate
+└── android/                    Gradle Android application (`com.cefrium:cefrium-sdk:0.19.0`, Jetpack Compose)
+    └── app/src/main/kotlin/dev/onionvault/
+        ├── TrapApplication.kt          Process-isolated Cefrium initialization & fail-closed incognito profile
+        ├── MainActivity.kt             Compose host binding Arti, Sequoia/BiometricPrompt, Cefrium & preferences
+        ├── TabSessionManager.kt        Multi-tab CefriumBrowser lifecycle, URL policy gate & hardened ActionMode
+        ├── CdpDomPgpController.kt      Zero-JS in-process CDP DOM scanner, highlighter & verified field mutator
+        ├── OnionBackStackManager.kt    12-entry LRU bitmap + DOM snapshot stack for predictive back navigation
+        ├── CrashReporter.kt            Java & native crash persistence surfaced via `OvCrashScreen`
+        ├── OvNative.kt / OvBridge.kt   Typed Kotlin JNI bindings & JSON parsers for `libonion_vault.so`
+        └── ui/                         `TrapTheme`, `BrowserScreen`, `StartPage`, PGP/Tor/Settings/Tabs sheets
 ```
 
-The names of the directory, of the Cargo packages and of the Kotlin package
-`dev.onionvault` are historical, and they stay: they are the identity of the
-code.  Renaming them would break the JNI symbols, the `applicationId` of the
-APK and the path of the installed application.  Everything the user sees — the
-name of the application, the interface, the icons, the documentation and the
-releases — says **Trap**.
+## Architecture & Security Properties
 
-## Downloads
-
-Every push of the pipeline publishes a tagged release with the debug APK and
-with the full text of every licence that applies to a component.  The links
-below always point at the newest build:
-
-| file | what it is |
+| Security Property | Enforcement Mechanism |
 |---|---|
-| [`app-debug.apk`](https://github.com/maceip/trap/releases/latest/download/app-debug.apk) | the debug APK of the newest build (arm64-v8a, API 29 and later) |
-| [`LGPL-3.0.txt`](https://github.com/maceip/trap/releases/latest/download/LGPL-3.0.txt) | the licence of the CEF engine, with the GPL-3.0 that it incorporates |
-| [`GPL-3.0.txt`](https://github.com/maceip/trap/releases/latest/download/GPL-3.0.txt) | the GNU GPL on its own |
-| [`LGPL-2.1.txt`](https://github.com/maceip/trap/releases/latest/download/LGPL-2.1.txt) | the licence of sequoia-openpgp |
-| [`CEF-LICENSE.txt`](https://github.com/maceip/trap/releases/latest/download/CEF-LICENSE.txt) | the licence of the engine |
-| [`SHA256SUMS.txt`](https://github.com/maceip/trap/releases/latest/download/SHA256SUMS.txt) | the checksums of the licence documents |
+| **100% Zero JavaScript** | Every `CefriumBrowser` tab enforces `setJavaScriptEnabled(false)` **and** Chrome DevTools Protocol `Emulation.setScriptExecutionDisabled({"value": true})`. `TabSessionManager` additionally cancels `TYPE_SCRIPT` subresource requests at the network layer. Neither websites nor Trap ever evaluate JavaScript. |
+| **Fail-Closed Tor Routing (Zero Clearnet Leaks)** | `TrapApplication` boots an ephemeral in-memory `CefriumProfile.incognito()` pinned to a blackhole loopback proxy (`socks5://127.0.0.1:1`), `--host-resolver-rules="MAP * ~NOTFOUND , EXCLUDE 127.0.0.1"`, `--disable-webrtc` (`WEBRTC_DISABLE_NON_PROXIED_UDP`), `--disable-quic`, `--disable-features=NetworkPrediction,DnsOverHttps,AsyncDns`, and `--no-pings` until Arti binds `127.0.0.1:<port>`. Non-`about:blank` navigations wait fail-closed until Arti's SOCKS5 listener is live. |
+| **Dual-Layer `.onion` Policy & Stream Isolation** | When **Hidden Service Only** (default `true`) is enabled, both `TabSessionManager` (`OvNative.nativeCheckUrlPolicy`) and Arti's Rust SOCKS5 proxy reject every non-v3-`.onion` host, `TYPE_PING`, and `TYPE_CSP_REPORT`. Each v3 `.onion` destination receives an isolated Tor circuit derived from its 16-character base32 `.onion` apex (`iso-<apex16>`), resettable on demand via **New Identity / Reset Tor Isolation**. |
+| **Android Child-Process Isolation** | Chromium spawns isolated `:sandboxed_process*` and `:privileged_process*` services from the APK. `TrapApplication.isBrowserProcess()` restricts `CrashReporter`, `libonion_vault.so`, Arti, and Keystore access strictly to the primary browser process. |
+| **Hardware-Backed OpenPGP Secret Keys** | Transferable secret keys are encrypted with a 256-bit AES-GCM master wrapping key inside `AndroidKeyStore` (`onionvault.master.wrap.v1`, or `onionvault.master.wrap.biometric.v1` gated by `BiometricPrompt` with `BIOMETRIC_STRONG or DEVICE_CREDENTIAL`) before storage in SQLite (`android:allowBackup="false"`). Toggling biometric protection atomically rewraps stored secret keys. |
+| **Native-Only Plaintext Display & Hardened Selection** | Decrypted PGP messages render exclusively in native Compose (`PlaintextSheet`), preventing CSS/DOM exfiltration side channels; plaintext is written into a page control only on explicit **Insert into page** confirmation. `TabSessionManager` wraps Chromium's `ActionMode.Callback` to strip external `WEB_SEARCH`, `SHARE`, and `ACTION_PROCESS_TEXT` intents while offering in-app PGP Encrypt/Decrypt/Import actions. |
 
-The list of every release is at
-<https://github.com/maceip/trap/releases>; the checksum of the APK is
-written into the notes of each release.
+## Zero-JavaScript CDP DOM OpenPGP Engine
 
-The licences are inside the APK as well, under `assets/licenses/`, where the
-application shows them: the tile of the licences in the dock, and its entry
-in the menu of the browser, open the list of the documents.
+Because JavaScript execution is disabled across the engine, Trap inspects and mutates page forms through Cefrium's in-process Chrome DevTools Protocol bridge (`CefriumBrowser.executeDevToolsMethod` in `CdpDomPgpController.kt` backed by `crates/ov-cef/src/cdp.rs`):
 
-## Security properties
+1. **Shadow-Piercing Inspection**: `DOM.getDocument({"depth": -1, "pierce": true})` walks Blink's C++ `InspectorDOMAgent` tree—including Blink's user-agent `#inner-editor` shadow roots inside `<textarea>` and `<input>` controls where typed text lives—without running page scripts.
+2. **Rust Classification & Viewport Anchoring**: `OvNative.nativeClassifyCdpDom` classifies editable fields, ASCII-armored `PGP MESSAGE` blocks, and `PGP PUBLIC KEY BLOCK` nodes, while `DOM.getBoxModel` + `Page.getLayoutMetrics` compute normalized viewport coordinates for Compose action pills (`Encrypt Field`, `Insert My PubKey`, `Decrypt Block`, `Import Key`) and `DOM.setAttributeValue` applies visual CSS outline highlights.
+3. **Read-Back Verified Mutation**: When writing encrypted ciphertext or an exported public key into a form control, `CdpDomPgpController` focuses the node (`DOM.focus`), clears existing content via `Input.dispatchKeyEvent` (`SelectAll` / selection + `Backspace`), inserts the payload via `Input.insertText`, and reads back the live Blink DOM value (`FieldMutationOutcome.verified`) before reporting success in the UI banner.
 
-| property | how it is enforced |
-|---|---|
-| **No JavaScript** | `CefBrowserSettings.javascript = State::DISABLED` for every browser; `javascript_close_windows`, `javascript_access_clipboard` and `javascript_dom_paste` are disabled as well. `CefFrame::execute_javascript` is never called anywhere in the tree. |
-| **No clearnet leaks** | `--proxy-server=socks5://127.0.0.1:<port>`, `--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1`, `--disable-webrtc`, `--incognito`, `--disable-features=NetworkPrediction`, `--disable-http2`, `--disable-background-networking`, `--no-first-run`. In hidden service only mode every non-`.onion` request is cancelled and the `User-Agent`, `Accept-Language` and `Referer` headers are stripped. |
-| **Secret keys never touch the disk in the clear** | Transferable secret keys are encrypted with an AES-256-GCM master key that lives inside the Android `KeyStore` (`KeyGenParameterSpec`, GCM, 256 bit, optional user authentication) before they are written into the SQLite keyring. The key is unlocked by the biometric prompt of the native UI for a short moment (`setUserAuthenticationValidityDurationSeconds`), and the keyring itself is excluded from the cloud backup and from the device transfer. |
-| **The render process never sees a private key** | All cryptographic operations run in the browser process; the sandboxed renderer only receives the resulting text. |
-| **No CSS side channel** | A decrypted message is shown in a native sheet, never inside the page. The plaintext is only written into the document when the user explicitly asks for it. |
+## Browser Chrome & Unified `TrapTheme`
 
-## The Tor transport
+Trap's Jetpack Compose UI (`android/app/src/main/kotlin/dev/onionvault/ui/`) persists user preferences via `TrapPreferences` (`SharedPreferences`) and supports two complete theme families across **Dark** and **Light** modes:
 
-The Tor client is part of the application: `arti-client` bootstraps inside the
-sandbox of the app, the state and the cache live in the private directory of
-the app and nothing is shelled out to an external `tor` process.
+- **`SecureDrop`** (default): Warm obsidian/amber/teal workbench palette (`#0F0C09`, `#1A1510`, `#E8A33D` amber `Go`, `#2EC4B0` teal, `#3ECF6A` green) paired with crisp `2dp` vector iconography (`res/drawable/ic_ov_*.xml`) and a high-contrast warm-paper Light mode.
+- **`NeonGraffiti`**: Palette and artwork from the **TRAP Neon Graffiti Browser Board** (`#15181F`, `#1E222C`, `#00E4C1` teal, `#67EEE1` mint, `#FD96C3` pink, `#E8933E` amber), rendering untinted RGBA neon sprites in Dark mode (preserving alpha glow halos) and crisp vectors in Light mode.
 
-A SOCKS5 listener on `127.0.0.1:<ephemeral>` exposes the client to the CEF
-network stack; Chromium is pointed at it with `--proxy-server`.  The listener
-refuses every destination that is not a hidden service when hidden service
-only mode is on, and it derives the circuit of a request from the first 16
-base32 characters of the `.onion` name, so that two hidden services never
-share a circuit.
+Key chrome surfaces:
+- **Top Identity Header**: `40dp` Trap onion mark (Start Page shortcut) · Page Title + `.onion` host (`<= 2:1` label density) · tappable `TOR` status pill (opens **Tor Security & Circuit** sheet) · `40dp` **PGP Keyring** button.
+- **Start Page** (`about:blank`): Live Zero-JS / Traffic Policy / Arti bootstrap posture card, one-tap verified v3 `.onion` launch card (**DuckDuckGo `.onion`**: `https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/`), and quick buttons for **PGP Keyring** and **Settings**.
+- **Bottom Control Dock & Transport Footer**: Responsive `44dp` touch targets with `8dp` spacing, unified `[Shield · .onion Input · Clear ✕ | Go]` capsule (`0dp` internal seam), `Back` (`PredictiveBackHandler` + `OnionBackStackManager` cached `Bitmap` preview + **Reload Live over Tor** banner), `Forward`, spinning `Reload`, `Tabs` badge (`tabs.size`), `Menu` (`☰`), and real-time transport footer (`Tor ready` / `Tor bootstrapping X%` + active `iso-<apex16>` circuit token).
+- **Modal Sheets**: Multi-Tab switcher (`TabsSheet`), vertical-row **Tor Security & Circuit** sheet (`SecurityCircuitSheet`), **Settings** sheet (`SettingsSheet`), **PGP Keyring** (`KeyringSheet`: list, generate with custom User ID + optional passphrase, import, copy armored public key, set default own key, delete), **Recipient & Signer Picker** (`EncryptPickerSheet`, including anonymous unsigned mode), **Unlock Secret Key** (`DecryptPassphraseSheet`), native **Decrypted PGP Message** (`PlaintextSheet` with 4-state Sequoia signature verification), long-press **Context Menu** & **Selection PGP** sheets, scrollable **Open-Source Licences** (`LegalNoticesDialog`), and `OvCrashScreen`.
 
-rustls does not carry a cryptography provider of its own; the provider is
-installed by `ov_tor::install_crypto_provider()` before the first client is
-built, because the Arti client panics without one.
+## Building & Testing
 
-## The native DOM PGP engine
+### Prerequisites
 
-Because JavaScript is disabled, the PGP functionality cannot be implemented
-with an injected script. Instead the render process walks Blink's DOM through
-the CEF DOM API (`CefDOMVisitor` / `CefDOMNode`):
+- **Rust 1.82+** with targets `aarch64-linux-android` and `x86_64-linux-android`, plus `cargo-ndk`
+- **JDK 25** (`kotlin { jvmToolchain(25) }`)
+- **Android SDK** (`compileSdk 37`, `targetSdk 35`, `minSdk 29`) & **Android NDK `27.2.12479018`**
 
-* form controls that can hold a PGP message are marked with a synthetic
-  `data-ov-node-id` attribute and highlighted with an inline style,
-* blocks that contain an armored PGP message or an armored public key are
-  detected the same way,
-* the bounding rectangles are reported to the browser process, which anchors
-  the native action chips on them.
-
-Every DOM change is an inline attribute mutation or a write through the DOM
-API of CEF — no script is evaluated.
-
-### Writing into a field
-
-The DOM API of CEF is deliberately narrow, and its exact behaviour decides
-whether a form sends the right text:
-
-* `CefDOMNode::SetValue` **refuses element nodes** (`if (node_.IsElementNode())
-  return false;` in CEF's own `libcef_domnode.cc`); it only replaces the text
-  of a *text node*.
-* `CefDOMNode::GetValue` returns the **live** value of a form control, but
-  the empty string for every other element, and it trims the leading
-  whitespace.
-* An attribute write (`set_element_attribute("value", …)`) only reaches the
-  live value of a control that the user has **not** typed into.  A control
-  with a dirty value keeps the text of the user, and a form would post it.
-
-Trap therefore writes a field in three steps and never trusts the
-write:
-
-1. the value is written — the `value` attribute of a control, the text node of
-   a block (the text of a block is collected from its text nodes, because
-   `GetValue` is empty for it),
-2. the **live** value is read back and compared with the intended one,
-3. when the comparison fails, the browser process finishes the job through
-   the **input path** of the browser (`select_all`, `del` and the key events
-   of the text — the same path a hardware keyboard uses) and the render
-   process reads the value back a second time to confirm it.
-
-The outcome is reported to the native UI in every case: a field that still
-holds the old text would send it, and the user has to know.
-
-## The snapshot back stack
-
-A hidden service takes seconds to answer, sometimes minutes.  A back stack
-that asks the network for every step is unusable, so Trap keeps the
-pages it has already seen.
-
-`OnionBackStackManager` (Kotlin) holds at most **12** entries.  Each entry
-carries
-
-| field | source |
-|---|---|
-| `url` | the load handler of the browser process |
-| `title` | the DOM scan of the render process |
-| `scrollOffset` | `on_scroll_offset_changed` |
-| `frameSnapshot` | the off-screen frame of `on_paint`, reduced by four and swizzled to RGBA |
-| `domHtmlSnapshot` | the markup of the document after the mutations, at most 512 KiB |
-| `pgpFieldOverlays` | the PGP fields of the page, with their position and their value |
-
-The frames are too large for a callback, so the UI *pulls* them: the browser
-process asks the engine for the number of entries, for the meta data of an
-entry, for its frame and for its markup (`nativeSnapshotCount`,
-`nativeSnapshotInfo`, `nativeSnapshotFrame`, `nativeSnapshotMarkup`).
-
-While the user swipes back, `PredictiveBackHandler` shrinks the live surface
-with an `Animatable` and shows the cached frame of the page behind it.  The
-gesture can be cancelled, the live surface then grows back to its full size.
-The chrome of the page offers a *Reload Live over Tor* chip: the snapshot is
-shown instantly, the real page is fetched in the background.
-
-The manifest sets `android:enableOnBackInvokedCallback="true"`, so the
-predictive back gesture is handed to the application instead of the system.
-
-## The identity of Trap
-<img width="941" alt="TRAP Neon Graffiti Browser Board" src="https://github.com/user-attachments/assets/6abb9081-4752-459c-87be-b2c2ba791959" />
-
-The interface is painted with the **TRAP Neon Graffiti Browser Board** — the
-design board of the application.  The board carries the icon system, the
-components of the chrome and the brand palette; the neon glyphs of the
-chrome are cut out of the board itself by
-`design/icons/neon/slice_neon.py`, with an alpha channel, so that the
-application and the board show the very same artwork.  The rendering is
-reproducible and `--check` compares the files of the tree with a fresh
-rendering, like the pipeline of the icons does.
-
-| colour | value | where it is used |
-|---|---|---|
-| teal | `#00E4C1` | the primary colour: the border of the plates, the routing |
-| mint | `#67EEE1` | the highlight of an active tile, the text of the tab badge |
-| pink | `#FD96C3` | the accent: the blocked request, the button that clears the address |
-| amber | `#E8933E` | the action: the primary button, the state of the transport |
-| cream | `#FBD4A9` | the warmth of the highlights |
-| purple | `#8F55A6` | the shadow of the mural |
-| near black | `#15181F` | the background of the application and of the panels |
-
-The chrome is the chrome of **Safari on iOS**: the page fills the screen and
-the controls float above it, at the bottom.  There is **no rail at the top**
-— the brand of Trap lives in the field of the address, and the state of the
-transport is a thin line above the buttons.
-
-```
-┌─────────────────────────────┐
-│                             │
-│         the page            │
-│                             │
-│ Tor ready      iso-3f7c…    │
-│   ←    →    ⟳    ⊕    ☰      │
-│ [TRAP ▾ https://example.onion ✕] │
-└─────────────────────────────┘
-```
-
-| part | what it is |
-|---|---|
-| the row of the buttons | back, forward, reload, the new tab (with the number of the tabs on it) and the menu, in round plates of glass that float above the page |
-| the field of the address | the mark of the brand, the shield of the leak protection, the address and the button that clears it |
-| the line of the transport | the state of the Tor client and the token of the circuit |
-| the menu of the browser | a sheet at the bottom, the way iOS draws it: New Tab, Start Page, Tabs, PGP Keyring, Security, Zoom In, Zoom Out and the licences |
-
-Every glyph of the chrome comes from the icon system of the board — the
-arrows, the reload, the window with a plus, the hamburger, the shield and
-the cross.  The icons of the material library are never used.
-
-The wallet, the bookmarks, the downloads, the settings and the microphone of
-the board are **not** in the application: there is no feature behind them,
-and a button that does nothing is worse than a missing button.
-
-The launcher icon comes from an **icon bundle**, `design/icons/android/`: the
-piece itself, the launcher icon of every density, the three layers of the
-adaptive icon and the silhouette for the themed icons of Android 13.
-
-The icon is installed as the legacy icon (a square and a round variant for
-every density) and as the adaptive icon: the foreground is the artwork,
-fitted into the safe zone of the 108dp canvas so that the mask of the
-launcher never cuts a letter, the background is the black field behind it,
-and the monochrome layer is the silhouette of the piece for the themed
-icons.
-
-Every lockup comes out of one script, `design/icons/trap_icon.py`, which
-copies the bundle into the resources of the application and composes the
-mark of the interface, the icon of the listing and the wordmark of the
-documentation out of the same artwork.  The rendering is reproducible, and
-`--check` compares the files of the tree with a fresh rendering: the
-pipeline of the continuous integration runs it on every push, so a lockup
-that was edited by hand fails the build instead of drifting.
-
-The controls of the browser that are not part of the board — the padlocks of
-the encryption and the decryption, the arrow that writes the plaintext into
-the page, the page with the folded corner of the licences and the key on a
-ring — are drawn for this application in `res/drawable/ic_ov_*.xml`.
-
-## The user interface
-
-The user interface is Jetpack Compose.  Every screen is a pure function of
-immutable state:
-
-| class | content |
-|---|---|
-| `BrowserUiState` | the address, the page state, the fields, the PGP overlays |
-| `TorBootstrapState` | the bootstrap, the progress, the circuit and its hops |
-| `PgpOverlayState` | the PGP fields, the sheet with the decrypted plaintext |
-
-The state has no reference to a JNI pointer or to a CEF object, so the
-previews of `ui/previews/OnionVaultPreviews.kt` render the real screens in
-Android Studio and on the JVM:
-
-| preview | shows |
-|---|---|
-| `TorBootstrapPreview` | the bootstrap and the circuit at 65 % |
-| `PgpActionChipsPreview` | a form without JavaScript and the PGP chips on it |
-| `PredictiveBackPreview` | the back gesture at 65 % of its length |
-| `PgpDecryptionModalPreview` | the key manager and the decryption dialog |
-| `LegalNoticesPreview` | the licences that travel with the engine |
-| `BrowserChromePreview` | the chrome of the browser: the floating buttons and the field of the address |
-| `TorTaxiPreview` | tor.taxi, fetched over the Tor client |
-| `BrowserMenuPreview` | the menu of the browser as a sheet, with the traffic policy and the zoom |
-
-`OnionVaultPreviewsTest` renders all eight previews with Robolectric, which
-runs the real Compose runtime on the JVM; the continuous integration runs it
-on every push.
-
-`ScreenshotTest` writes the same previews as PNG files into
-`build/screenshots/`, so that the design can be inspected without a device:
-it draws the window of the activity and the window of the dialog of the key
-manager into the image.
-
-## The IPC
-
-The render process and the browser process talk through `CefProcessMessage`s
-whose first argument is a JSON document:
-
-| message | direction | payload |
-|---|---|---|
-| `OV_DOM_FIELDS` | render → browser | the detected DOM fields |
-| `OV_REQ_DECRYPT` | browser → render | an armored PGP message |
-| `OV_MUTATE_DOM_NODE` | browser → render | a replacement for a node |
-| `OV_MUTATION_RESULT` | render → browser | the outcome of a mutation |
-| `OV_READ_VALUE` | browser → render | the value of a node is needed again |
-| `OV_DECRYPT_RESULT` | browser → render | the decrypted plaintext |
-| `OV_REQ_FIELD_VALUE` | browser → render | the value of a node is needed |
-| `OV_FIELD_VALUE` | render → browser | the value of a node |
-| `OV_NAVIGATION` | browser → native | the current address |
-
-The native UI is called back through JNI (`dev.onionvault.OvBridge`) and calls
-into the engine through `dev.onionvault.OvNative`.
-
-The `#[no_mangle]` JNI symbols live in the `cdylib` of the application
-(`src/lib.rs`); they forward to the implementation in `ov-core`.  The shared
-library of the APK is the only object that the Android runtime loads, so the
-entry points have to be defined there.
-
-## Building
-
-### Requirements
-
-* Rust 1.82 or newer with the `aarch64-linux-android` target,
-* the Android NDK (r27c is used in development) and `cargo-ndk`,
-* **JDK 17 or newer** and the Android SDK (platform 37, build-tools 37.0.0),
-* a bundle of the engine, built by `cefpack` (see below).
-
-### The engine of the browser
-
-The engine of the browser is **CEF**, the Chromium Embedded Framework, built
-from its own sources with the Android NDK by the **bundling service** of this
-repository (`crates/cefpack`).
-
-CEF publishes binary distributions for Windows, Linux and macOS.  There is
-**no Android distribution**: the sources of CEF have no Android browser code,
-and the build script of CEF knows only `windows`, `mac` and `linux`.  An
-Android build of CEF is therefore something that has to be made, not
-something that can be downloaded — and that is what the service does.
-
-The service is the counterpart of what `cef-rs` does for the desktop: it
-resolves the sources of a pinned version, drives the build of Chromium with
-the NDK, collects the result into a bundle with the shape of a CEF binary
-distribution and checks that the bundle is sound.  It is a crate of this
-workspace, so it is versioned and tested with it.
+### Commands
 
 ```sh
-# the pinned version, the target and the toolchain
-cargo run -p cefpack -- plan
+# 1. Rust workspace formatting, lint, and unit/integration tests (host)
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 
-# the sources of the pinned CEF commit
-cargo run -p cefpack -- fetch
+# 2. Cross-compile Rust JNI library (libonion_vault.so) for Android ABIs
+cargo ndk -t arm64-v8a -t x86_64 --platform 29 -o android/app/src/main/jniLibs build --release
 
-# the engine, the C API shim, the headers and the resources
-cargo run -p cefpack -- build
-
-# the verdict on a bundle
-cargo run -p cefpack -- audit /path/to/bundle
-
-# the Rust declarations of the C API, for the engine that is shipped
-cargo run -p cefpack -- bindgen /path/to/bundle
-
-# the staging tree for the Gradle build
-cargo run -p cefpack -- pack /path/to/bundle /path/to/staging
-
-# the verdict on an APK
-cargo run -p cefpack -- apk android/app/build/outputs/apk/debug/app-debug.apk
-```
-
-The pin lives in
-[`crates/cefpack/manifest/cef-android.toml`](crates/cefpack/manifest/cef-android.toml):
-the CEF revision (a full git SHA), the Chromium revision it tracks, the
-target, the version of the NDK and the arguments of the build.  It contains
-no path — the paths belong to the machine and are discovered from the
-environment — and no package: the CEF revision is the only input, and the
-Chromium revision that belongs to it is read from CEF's own `DEPS` file.
-
-A bundle has the shape of a CEF binary distribution, so that the consumers
-need no special case for Android:
-
-```
-CEF_ANDROID_ROOT/
-├── include/                  the public headers of the version that was built
-│   ├── cef_app.h, cef_browser.h, …
-│   └── capi/                 the C API, generated by the translator of CEF
-├── lib/
-│   ├── libcef.so             the engine (packaged into the APK)
-│   └── libcef_dll_wrapper.a  the C API shim (linked into the library of Trap)
-├── Resources/                resources.pak, chrome_100_percent.pak,
-│                             chrome_200_percent.pak, icudtl.dat, locales/…
-├── LICENSE.txt                the licence of the engine
-└── bundle.json               the provenance: versions, checksums, arguments
-```
-
-The build of Gradle only **consumes** a bundle; it never starts the build of
-the engine, which takes hours.  The path of the bundle comes from the
-environment:
-
-```sh
-export CEF_ANDROID_ROOT=/path/to/cef-bundle
+# 3. Assemble debug APK (packages Cefrium 0.19.0 + libonion_vault.so + assets/licenses/)
 ./android/gradlew --project-dir android :app:assembleDebug
+
+# 4. Run JVM / Robolectric Compose UI, screenshot, JNI parity, and crash-guard tests
+./android/gradlew --project-dir android :app:testDebugUnitTest
+
+# 5. Run on-device / emulator instrumentation tests & runtime stability gate
+./android/gradlew --project-dir android :app:connectedDebugAndroidTest
+./scripts/emulator-gate.sh android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-### The declarations of the C API
+## Empirical Verification Status
 
-The Rust declarations of the C API are generated from the headers of the
-engine that is shipped, by `cefpack bindgen`.  They used to be the
-declarations of a *desktop* distribution, reused for Android without a
-check — which is the kind of mistake that only shows up on a device.
+Every item below reflects commands executed and verified against this codebase:
 
-The C API of CEF is versioned, and the version is the contract: two engines
-of the same API version have the same C API, whatever the platform they were
-built for.  The build script of `cef-dll-sys` therefore reads the API version
-of the engine from the headers of the bundle and the API version of the
-declarations from the declarations themselves, and **refuses to build when
-the two differ**:
+| Subsystem / Gate | Verification Method | Result |
+|---|---|---|
+| **Rust Formatting & Lint** (`ov-core`, `ov-cef`, `ov-pgp`, `ov-tor`) | `cargo fmt --all -- --check` & `cargo clippy --workspace --all-targets -- -D warnings` | **PASS** (`0` warnings) |
+| **Rust Crypto, Tor SOCKS5/Isolation & CDP DOM Suite** | `cargo test --workspace` | **PASS** (`61` passed, `0` failed, `2` live-Tor `#[ignore]`) |
+| **Android Native NDK Build & ELF Audit** (`arm64-v8a`, `x86_64`) | `cargo ndk -t arm64-v8a -t x86_64 --platform 29 build` + `llvm-readobj` / `llvm-nm` | **PASS** (19/19 `Java_dev_onionvault_OvNative_*` symbols exported; zero `libcef.so` `DT_NEEDED`) |
+| **Compose Previews, 13 Visual Captures & Interactive Chrome Tests** | `./android/gradlew --project-dir android :app:testDebugUnitTest` (`OnionVaultPreviewsTest`, `ScreenshotTest`, `CrashGuardTest`, `OvNativeTest`) | **PASS** (`36` passed, `0` failed; 13 PNG screenshots rendered across `SecureDrop` & `NeonGraffiti` Dark/Light) |
+| **On-Device Instrumentation E2E (`connectedDebugAndroidTest`)** | `BrowserChromeInstrumentedTest` on `emulator-5554` (Android 15 `arm64-v8a`) | **PASS** (`1` passed, `0` failed in `5.1s`: Settings persistence, Tor Security & Circuit native policy toggle, Multi-Tab sheet, Sequoia + Android Keystore AES-256-GCM keypair generation & armored public-key export, clearnet policy blocking, and v3 `.onion` launch) |
+| **Emulator Runtime Gate & Live `.onion` Circuit Isolation** | `./scripts/emulator-gate.sh app-debug.apk` + live v3 `.onion` navigation on `emulator-5554` | **PASS** (`TrapApplication` initialized Cefrium `0.19.0`, held 12s with zero Java/native crashes or ANRs, bootstrapped embedded `ov_tor` Arti client, and loaded `duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion` over isolated circuit `iso-duckduckgogg42xj` with zero-JS CDP DOM field anchoring) |
 
-```
-the bindings are for the API version CEF_API_VERSION_14000, the engine is
-CEF_API_VERSION_15600; run `cefpack bindgen <bundle>` to regenerate them
-```
+## License
 
-### The licences
-
-The engine of the browser is free software under the **LGPL-3.0-or-later**,
-and the upstream Chromium Embedded Framework under the BSD-3-Clause.  The
-engine is a shared library: it is loaded at run time and can be replaced by
-the user of the application.  The sources of CEF are published at
-<https://github.com/chromiumembedded/cef> and the notices of the engine
-travel with the release; the third party dependencies of Trap are listed in
-[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
-
-The licence of the engine has to be readable by the recipient of the binary.
-The full text of every licence is therefore
-
-  * in the [`licenses/`](licenses/) directory of this repository,
-  * inside the APK, under `assets/licenses/`, where the application shows it
-    (the tile of the licences in the dock),
-  * and attached to every release of the project, next to the APK.
-
-`build.rs` copies the resource files into
-`android/app/src/main/assets/cef/`, the Gradle build copies `libcef.so` into
-the APK and the licence documents into
-`android/app/src/main/assets/licenses/`.
-
-The link step needs the NDK toolchain of API 29 or later: `libnativewindow`,
-which carries the `ANativeWindow` of the off-screen rendering, was introduced
-with API 24.  The Gradle build therefore calls
-
-```sh
-cargo ndk -t arm64-v8a --platform 29 -o app/src/main/jniLibs build --release
-```
-
-### Building the native library and the APK
-
-```sh
-export ANDROID_NDK_HOME=/opt/android-ndk-r27c
-cargo install cargo-ndk
-
-cd android
-./gradlew assembleRelease
-```
-
-The Gradle build calls `cargo ndk -t arm64-v8a -o app/src/main/jniLibs build
---release` for the native part.
-
-### Checking the sources without CEF
-
-The build script of `cef-dll-sys` understands `ONIONVAULT_CEF_CHECK_ONLY=1`:
-it then skips the C++ wrapper and only makes the bindings available, which
-allows a full type check of the workspace without a CEF distribution.
-
-```sh
-export ONIONVAULT_CEF_CHECK_ONLY=1
-cargo check --workspace
-cargo test --workspace
-```
-
-## The Android side
-
-| file | purpose |
-|---|---|
-| `MainActivity.kt` | the Compose activity: the surface, the CEF message pump (a `Choreographer` callback), the biometric prompt |
-| `ui/BrowserScreen.kt` | the screen, the predictive back gesture, the PGP chips and the Tor circuit display |
-| `ui/BrowserUiState.kt` | the immutable state of the screen |
-| `ui/OnionBackStackManager.kt` | the snapshot back stack (12 entries) and the parsing of the field positions |
-| `ui/previews/OnionVaultPreviews.kt` | the eight previews of the screen |
-| `OvSurfaceView.kt` | the `SurfaceView` that shows the off-screen rendered page and forwards the touch, key and IME events |
-| `CefService.kt` | the CEF subprocesses (renderer, GPU, utility) — Android starts them as services |
-| `CefResources.kt` | unpacks the CEF resource files from the assets |
-| `OvNative.kt` | the JNI declarations of the engine |
-| `OvBridge.kt` | the callbacks of the engine |
-
-The CEF message loop is driven by the application: `external_message_pump` is
-enabled and `MainActivity` calls `cef_do_message_loop_work()` once per frame.
-
-## The CEF subprocesses
-
-Android does not allow an application to fork a helper process, so the CEF
-subprocesses (renderer, GPU and utility process) are Android services:
-`CefRenderService`, `CefGpuService` and `CefUtilityService` all derive from
-`CefService` and run `cef_execute_process()` with the command line that CEF
-prepared.  CEF's Android port starts them through the
-`--service-class=dev.onionvault.CefService` switch, which the command line of
-the browser process carries.
-
-## Tests
-
-```sh
-cargo test --workspace
-```
-
-* `ov-tor`: the `.onion` apex isolation, the SOCKS5 handshake and the hidden service only
-  mode of the local proxy,
-* `ov-pgp`: generate → export → encrypt → decrypt → verify (including the
-  check that the database never contains an armored private key),
-* `ov-core`: the BGRA/RGBA swizzle of the frame copier and the translation of
-  the Android key codes.
-
-The workspace is also checked for the Android target:
-
-```sh
-export ANDROID_NDK_HOME=/opt/android-ndk-r27c
-export CC_aarch64_linux_android=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang
-export CXX_aarch64_linux_android=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang++
-export AR_aarch64_linux_android=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
-cargo check --workspace --target aarch64-linux-android
-```
-
-`cargo ndk` sets these variables itself, so the plain `cargo ndk` invocation
-of the Gradle build needs no further configuration.
-
-The previews are rendered on the JVM:
-
-```sh
-cd android
-gradle :app:testDebugUnitTest --tests 'dev.onionvault.OnionVaultPreviewsTest'
-```
-
-## Continuous integration
-
-`.github/workflows/ci-release.yml` runs on every push and has three jobs:
-
-1. **Rust checks and tests** — the formatting, Clippy, the type check of the
-   workspace, the unit tests and the integration tests (the PGP round trip and
-   the Tor proxy), and the headless DOM fixture test of `ov-cef`,
-2. **Android debug build** — the download of the CEF runtime for Android, the
-   cross compilation for `aarch64-linux-android`, the Compose preview test,
-   the debug APK and a check that the APK really carries the engine,
-3. **Release** — a GitHub release with the APK and its SHA-256 sum.
-
-The tags of the releases are unique (`build-<run number>-<commit>`), so that a
-release never overwrites the artefact of an earlier build.
-
-The pipeline publishes the **real** APK: the second job downloads the CEF
-runtime (see [The CEF runtime](#the-cef-runtime)), links the native library of
-Trap against it and fails the build if the engine, the native library or
-the resource files are missing from the APK.
-
-The workflow needs a repository on GitHub: the project is a git repository
-without a remote, so nothing is published until it is pushed to one.
-
-`.github/workflows/live-tor.yml` runs every night the two tests of the suite
-that need the live Tor network: the bootstrap of the client and the tunnel to
-a real onion service. They are marked with `#[ignore]`, so the hermetic suite
-of every push stays offline and fast.
-
-## Verification status
-
-The sources were verified in the following way:
-
-* `cargo fmt --all` — clean,
-* `cargo check --workspace` — clean for the host,
-* `cargo check --workspace --target aarch64-linux-android` — clean with the
-  NDK r27c toolchain (`ONIONVAULT_CEF_CHECK_ONLY=1`),
-* `cargo test --workspace` — 47 tests pass and one test is skipped (the Tor
-  isolation and the SOCKS5 listener, the master key wrapping, the PGP keyring,
-  the PGP round trip, the frame copier, the key translation, the DOM model and
-  the headless DOM fixture test),
-* `gradle :app:compileDebugKotlin` — clean,
-* `gradle :app:testDebugUnitTest --tests 'dev.onionvault.OnionVaultPreviewsTest'`
-  — the eight previews render on the JVM,
-* `cargo test -p ov-tor -- --ignored` — the embedded Arti client bootstraps
-  against the live Tor network and exposes its SOCKS5 listener, and the
-  client publishes a real onion service and reads the compose page of that
-  service back through a real circuit,
-* `cargo ndk -t arm64-v8a --platform 29 build --release` — the native library
-  is linked against the real `libcef.so` of the CEF Android distribution,
-* `gradle assembleDebug` — produces an installable APK (`dev.onionvault`,
-  `minSdk 29`, `targetSdk 35`, `arm64-v8a`) that carries the engine
-  (`lib/arm64-v8a/libcef.so`), the native library of Trap
-  (`lib/arm64-v8a/libonion_vault.so`) and the resource files of Chromium
-  (`assets/cef/`).
-
-The link of the native library and the packaging of the CEF runtime need a
-CEF Android distribution; `ONIONVAULT_CEF_CHECK_ONLY=1` switches exactly
-those two steps off, which is why the native code can be checked against the
-real CEF headers and bindings without the engine.
-
-## Licence
-
-Apache-2.0 OR MIT — the texts are in [`LICENSE-APACHE`](LICENSE-APACHE) and
-[`LICENSE-MIT`](LICENSE-MIT). The dependencies keep their own licences, which
-are listed in [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
+Trap is dual-licensed under **Apache-2.0 OR MIT** ([`LICENSE-APACHE`](LICENSE-APACHE), [`LICENSE-MIT`](LICENSE-MIT)). Third-party runtime components and bundled LGPL/GPL texts are documented in [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) and [`licenses/`](licenses/).

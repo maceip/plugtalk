@@ -3,6 +3,11 @@ package dev.onionvault.ui
 import androidx.activity.BackEventCompat
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -10,7 +15,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -18,21 +22,18 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -43,124 +44,32 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.text.input.ImeAction
 import dev.onionvault.R
+import java.net.URI
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * The screen of the browser.
+ * Primary Compose Browser Chrome for Trap.
  *
- * The chrome is the one of Safari on iOS: the page fills the screen and the
- * controls float above it, at the bottom — the row of the buttons and, under
- * it, the field of the address.  There is no rail at the top of the screen.
- *
- * The glyphs are the ones of the icon system of the design board of Trap:
- * every button of the chrome is drawn with them, and never with the icons
- * of the material library.
- *
- * The screen is driven by a pure [BrowserUiState]: the surface of the
- * off-screen rendered page is injected, so that the screen can be rendered
- * in a preview without a browser.
- *
- * The predictive back gesture shows the frame of the previous page while the
- * finger is on the screen.  The gesture does not wait for the hidden
- * service: the frame was rendered before and is kept in the back stack.
- *
- * ## The catalogue of the chrome
- *
- * Every surface of the browser, and the glyph it is drawn with.  This is
- * the one list; the detail of each part is in the documentation of the
- * composable that draws it.
- *
- * | surface | glyph | what it does |
- * |---|---|---|
- * | the line of the transport | — | the state of the client of Tor, the token of the circuit, the progress of the bootstrap |
- * | the row of the buttons | `ic_neon_back` | back, dimmed when the stack is empty |
- * | | `ic_neon_forward` | forward; there is **no** `canGoForward` in the state, so the button is never dimmed |
- * | | `ic_neon_reload` | fetch the page again over Tor |
- * | | `ic_neon_new_tab` | a new tab, with the number of the tabs on it |
- * | | `ic_neon_menu` | the menu of the browser |
- * | the field of the address | `ov_trap_mark` | the mark of the brand |
- * | | `ic_neon_shield` | the shield of the leak protection |
- * | | — | the field itself; the hint is "Search or enter the address of a hidden service", but there is **no** search |
- * | | `ic_neon_cancel` | clear the field; it only appears when the field is not empty |
- * | the menu of the browser | `ic_neon_new_tab` | New Tab |
- * | | `ic_neon_home` | Start Page; it navigates to `about:blank` |
- * | | `ic_neon_new_partial_tab` | Tabs, with the number of the tabs |
- * | | `ic_neon_key` | the PGP keyring |
- * | | `ic_neon_shield` | Security; it **toggles** the traffic policy and closes the sheet |
- * | | `ic_neon_zoom_in` | zoom in, with the zoom in percent |
- * | | `ic_neon_zoom_out` | zoom out |
- * | | `ic_ov_legal` | the licences that travel with the application |
- * | the overlay of the page | `ic_ov_encrypt` | the chip of a field that can be encrypted |
- * | | `ic_ov_decrypt` | the chip of a PGP message |
- * | | `ic_ov_keys` | the chip of a PGP public key |
- * | the sheet of the plaintext | `ic_ov_insert` | write the plaintext back into the page |
- * | the key manager | `ic_ov_keys` | copy the public key of a certificate |
- * | | `ic_ov_new_key` | create a key |
- *
- * ## What is **not** here
- *
- * The catalogue is as much about the absences as about the presences, and
- * the absences are deliberate:
- *
- *   * **there is no start page.**  The application starts on `about:blank`
- *     (`R.string.start_url`).  There are no bookmarks, no shortcuts and no
- *     search.
- *   * **there is no settings screen.**  Two preferences are persisted —
- *     `hidden_service_only` and `require_user_authentication` — and the
- *     first of them is toggled by the row "Security" of the menu.  The
- *     second one is **read but never written**: there is no screen that
- *     turns the confirmation of the user on.
- *   * **there is no context menu.**  A long press on the page, on a link
- *     or on a selection does nothing; the ⋮ of the chrome is the menu of
- *     the *browser*, not of the *page*.
- *   * **there is no forward gesture**, only the forward button.
- *   * **there is no wallet, no bookmarks, no downloads and no
- *     microphone.**  The board carries `ic_neon_wallet`, `ic_neon_monero`,
- *     `ic_neon_usd`, `ic_neon_mic` and `ic_neon_microphone`, and none of
- *     them is in the application: there is no feature behind them, and a
- *     button that does nothing is worse than a missing button.
- *
- * @param state the state of the browser.
- * @param modifier the modifier of the screen.
- * @param onNavigate the user asked for another address.
- * @param onFieldAction the user tapped a PGP action chip.
- * @param onInsertPlaintext the user wants the plaintext in the page.
- * @param onReloadLive the user wants the page to be fetched again.
- * @param onBack the user committed the back gesture.
- * @param onForward the user tapped the forward button.
- * @param onReload the user tapped the reload button.
- * @param onNewTab the user tapped the new tab button.
- * @param onHome the user tapped the start page.
- * @param onCreateKey the user wants a new PGP key.
- * @param onExportKey the user wants the public key of a certificate.
- * @param onToggleRouting the user changed the traffic policy.
- * @param onZoomIn the user wants a bigger page.
- * @param onZoomOut the user wants a smaller page.
- * @param surface the off-screen rendered page.
- * @param previewProgress the progress of the back gesture; the previews use
- * it to show the gesture in the middle of the swipe.
- * @param showKeyManager the key manager is open; the previews use it to show
- * the manager of the keys.
- * @param showLegalNotices the list of the licences is open; the previews use
- * it to show the licences that travel with the application.
- * @param showMenu the menu of the browser is open; the previews use it to
- * show the sheet of the menu.
- * @param onLoadLegalLines the function that reads the text of a licence
- * document; it is called away from the thread of the interface.
+ * Implements the `Securedrop+Browser+Chrome+Fixed` structural geometry (44dp touch targets,
+ * 8dp gaps, unified `[Shield · .onion Input · Clear ✕ | Go]` capsule with `0dp` seam and
+ * `#E8A33D` `Go` fill, compact Top Identity Header, real Transport Footer Line, and
+ * `<= 2:1` label density across every component) across both `SecureDrop` and `NeonGraffiti`
+ * theme families in `Dark` and `Light` modes.
  */
 @Composable
 fun BrowserScreen(
@@ -168,46 +77,220 @@ fun BrowserScreen(
     modifier: Modifier = Modifier,
     onNavigate: (String) -> Unit = {},
     onFieldAction: (PgpFieldState) -> Unit = {},
-    onInsertPlaintext: (String) -> Unit = {},
+    onInsertMyPubKey: (PgpFieldState) -> Unit = {},
+    onConfirmEncrypt: (
+        request: EncryptRequestState,
+        plaintext: String,
+        recipientFingerprint: String,
+        signerFingerprintOrEmpty: String,
+        passphrase: String,
+    ) -> Unit = { _, _, _, _, _ -> },
+    onDismissEncrypt: () -> Unit = {},
+    onSubmitDecryptPassphrase: (DecryptPassphraseRequestState, String) -> Unit = { _, _ -> },
+    onDismissDecryptPassphrase: () -> Unit = {},
+    onCopyPlaintext: (String) -> Unit = {},
+    onInsertPlaintext: (PgpPlaintextState) -> Unit = {},
+    onDismissPlaintext: () -> Unit = {},
     onReloadLive: () -> Unit = {},
     onBack: () -> Unit = {},
     onForward: () -> Unit = {},
     onReload: () -> Unit = {},
     onNewTab: () -> Unit = {},
+    onSelectTab: (String) -> Unit = {},
+    onCloseTab: (String) -> Unit = {},
     onHome: () -> Unit = {},
-    onCreateKey: () -> Unit = {},
+    onGenerateKey: (userId: String, passphrase: String) -> Unit = { _, _ -> },
+    onImportKey: (armored: String, passphrase: String) -> Unit = { _, _ -> },
     onExportKey: (String) -> Unit = {},
+    onSetDefaultKey: (String) -> Unit = {},
+    onDeleteKey: (String) -> Unit = {},
     onToggleRouting: (Boolean) -> Unit = {},
+    onToggleRequireBiometric: (Boolean) -> Unit = {},
+    onResetTorIsolation: () -> Unit = {},
+    onSelectThemeFamily: (TrapThemeFamily) -> Unit = {},
+    onSelectThemeMode: (TrapThemeMode) -> Unit = {},
+    onSelectDefaultZoom: (Int) -> Unit = {},
+    onClearSession: () -> Unit = {},
     onZoomIn: () -> Unit = {},
     onZoomOut: () -> Unit = {},
+    onDismissStatus: () -> Unit = {},
+    onContextMenuOpenNewTab: (String) -> Unit = {},
+    onContextMenuOpenCurrentTab: (String) -> Unit = {},
+    onCopyText: (String) -> Unit = {},
+    onDecryptArmoredText: (String) -> Unit = {},
+    onEncryptSelectedText: (String) -> Unit = {},
+    onDismissContextMenu: () -> Unit = {},
+    onDismissSelectionPgp: () -> Unit = {},
+    onOverlayOpenChanged: (Boolean) -> Unit = {},
     onLoadLegalLines: suspend (String) -> List<String> = { emptyList() },
     surface: @Composable () -> Unit = {},
     previewProgress: Float = 0f,
     showKeyManager: Boolean = false,
     showLegalNotices: Boolean = false,
     showMenu: Boolean = false,
+    showTabs: Boolean = false,
+    showSecurity: Boolean = false,
+    showSettings: Boolean = false,
 ) {
-    var address by remember(state.url) { mutableStateOf(state.url) }
-    // The preview of the gesture starts in the state that the parameter
-    // describes; the gesture itself drives the values.
+    TrapTheme(
+        family = state.themeFamily,
+        mode = state.themeMode,
+    ) {
+        BrowserScreenContent(
+            state = state,
+            modifier = modifier,
+            onNavigate = onNavigate,
+            onFieldAction = onFieldAction,
+            onInsertMyPubKey = onInsertMyPubKey,
+            onConfirmEncrypt = onConfirmEncrypt,
+            onDismissEncrypt = onDismissEncrypt,
+            onSubmitDecryptPassphrase = onSubmitDecryptPassphrase,
+            onDismissDecryptPassphrase = onDismissDecryptPassphrase,
+            onCopyPlaintext = onCopyPlaintext,
+            onInsertPlaintext = onInsertPlaintext,
+            onDismissPlaintext = onDismissPlaintext,
+            onReloadLive = onReloadLive,
+            onBack = onBack,
+            onForward = onForward,
+            onReload = onReload,
+            onNewTab = onNewTab,
+            onSelectTab = onSelectTab,
+            onCloseTab = onCloseTab,
+            onHome = onHome,
+            onGenerateKey = onGenerateKey,
+            onImportKey = onImportKey,
+            onExportKey = onExportKey,
+            onSetDefaultKey = onSetDefaultKey,
+            onDeleteKey = onDeleteKey,
+            onToggleRouting = onToggleRouting,
+            onToggleRequireBiometric = onToggleRequireBiometric,
+            onResetTorIsolation = onResetTorIsolation,
+            onSelectThemeFamily = onSelectThemeFamily,
+            onSelectThemeMode = onSelectThemeMode,
+            onSelectDefaultZoom = onSelectDefaultZoom,
+            onClearSession = onClearSession,
+            onZoomIn = onZoomIn,
+            onZoomOut = onZoomOut,
+            onDismissStatus = onDismissStatus,
+            onContextMenuOpenNewTab = onContextMenuOpenNewTab,
+            onContextMenuOpenCurrentTab = onContextMenuOpenCurrentTab,
+            onCopyText = onCopyText,
+            onDecryptArmoredText = onDecryptArmoredText,
+            onEncryptSelectedText = onEncryptSelectedText,
+            onDismissContextMenu = onDismissContextMenu,
+            onDismissSelectionPgp = onDismissSelectionPgp,
+            onOverlayOpenChanged = onOverlayOpenChanged,
+            onLoadLegalLines = onLoadLegalLines,
+            surface = surface,
+            previewProgress = previewProgress,
+            showKeyManager = showKeyManager,
+            showLegalNotices = showLegalNotices,
+            showMenu = showMenu,
+            showTabs = showTabs,
+            showSecurity = showSecurity,
+            showSettings = showSettings,
+        )
+    }
+}
+
+@Composable
+private fun BrowserScreenContent(
+    state: BrowserUiState,
+    modifier: Modifier,
+    onNavigate: (String) -> Unit,
+    onFieldAction: (PgpFieldState) -> Unit,
+    onInsertMyPubKey: (PgpFieldState) -> Unit,
+    onConfirmEncrypt: (
+        request: EncryptRequestState,
+        plaintext: String,
+        recipientFingerprint: String,
+        signerFingerprintOrEmpty: String,
+        passphrase: String,
+    ) -> Unit,
+    onDismissEncrypt: () -> Unit,
+    onSubmitDecryptPassphrase: (DecryptPassphraseRequestState, String) -> Unit,
+    onDismissDecryptPassphrase: () -> Unit,
+    onCopyPlaintext: (String) -> Unit,
+    onInsertPlaintext: (PgpPlaintextState) -> Unit,
+    onDismissPlaintext: () -> Unit,
+    onReloadLive: () -> Unit,
+    onBack: () -> Unit,
+    onForward: () -> Unit,
+    onReload: () -> Unit,
+    onNewTab: () -> Unit,
+    onSelectTab: (String) -> Unit,
+    onCloseTab: (String) -> Unit,
+    onHome: () -> Unit,
+    onGenerateKey: (userId: String, passphrase: String) -> Unit,
+    onImportKey: (armored: String, passphrase: String) -> Unit,
+    onExportKey: (String) -> Unit,
+    onSetDefaultKey: (String) -> Unit,
+    onDeleteKey: (String) -> Unit,
+    onToggleRouting: (Boolean) -> Unit,
+    onToggleRequireBiometric: (Boolean) -> Unit,
+    onResetTorIsolation: () -> Unit,
+    onSelectThemeFamily: (TrapThemeFamily) -> Unit,
+    onSelectThemeMode: (TrapThemeMode) -> Unit,
+    onSelectDefaultZoom: (Int) -> Unit,
+    onClearSession: () -> Unit,
+    onZoomIn: () -> Unit,
+    onZoomOut: () -> Unit,
+    onDismissStatus: () -> Unit,
+    onContextMenuOpenNewTab: (String) -> Unit,
+    onContextMenuOpenCurrentTab: (String) -> Unit,
+    onCopyText: (String) -> Unit,
+    onDecryptArmoredText: (String) -> Unit,
+    onEncryptSelectedText: (String) -> Unit,
+    onDismissContextMenu: () -> Unit,
+    onDismissSelectionPgp: () -> Unit,
+    onOverlayOpenChanged: (Boolean) -> Unit,
+    onLoadLegalLines: suspend (String) -> List<String>,
+    surface: @Composable () -> Unit,
+    previewProgress: Float,
+    showKeyManager: Boolean,
+    showLegalNotices: Boolean,
+    showMenu: Boolean,
+    showTabs: Boolean,
+    showSecurity: Boolean,
+    showSettings: Boolean,
+) {
+    val colors = TrapTheme.colors
+    var address by remember(state.url, state.activeTabId) {
+        mutableStateOf(if (isBlankOrStartUrl(state.url)) "" else state.url)
+    }
     val scale = remember { Animatable(1f - previewProgress * 0.12f) }
     val shift = remember { Animatable(previewProgress * 96f) }
     var progress by remember { mutableFloatStateOf(previewProgress) }
-    var edge by remember { mutableStateOf(BackEventCompat.EDGE_LEFT) }
     var keysOpen by remember { mutableStateOf(showKeyManager) }
     var legalOpen by remember { mutableStateOf(showLegalNotices) }
     var legalDocument by remember { mutableStateOf<LegalDocument?>(null) }
     var menuOpen by remember { mutableStateOf(showMenu) }
-    var tabsOpen by remember { mutableStateOf(false) }
+    var tabsOpen by remember { mutableStateOf(showTabs) }
+    var securityOpen by remember { mutableStateOf(showSecurity) }
+    var settingsOpen by remember { mutableStateOf(showSettings) }
     val scope = rememberCoroutineScope()
 
-    PredictiveBackHandler(enabled = state.canGoBack) { backFlow ->
+    val anyOverlayOpen = keysOpen ||
+        legalOpen ||
+        legalDocument != null ||
+        menuOpen ||
+        tabsOpen ||
+        securityOpen ||
+        settingsOpen ||
+        state.pgp.plaintext != null ||
+        state.pgp.encryptRequest != null ||
+        state.pgp.decryptPassphraseRequest != null ||
+        state.contextMenu != null ||
+        state.selectionPgp != null
+
+    LaunchedEffect(anyOverlayOpen) {
+        onOverlayOpenChanged(anyOverlayOpen)
+    }
+
+    PredictiveBackHandler(enabled = state.canGoBack && !anyOverlayOpen) { backFlow ->
         try {
             backFlow.collect { event ->
-                edge = event.swipeEdge
                 progress = event.progress
-                // The live page shrinks and moves away, the cached page of the
-                // back stack becomes visible behind it.
                 scope.launch {
                     scale.snapTo(1f - event.progress * 0.12f)
                     shift.snapTo(
@@ -216,11 +299,8 @@ fun BrowserScreen(
                     )
                 }
             }
-            // The gesture was committed.
             onBack()
         } finally {
-            // The gesture was cancelled (or the back was committed): the
-            // live page returns to its place.
             withContext(NonCancellable) {
                 scale.animateTo(1f, animationSpec = tween(180))
                 shift.animateTo(0f, animationSpec = tween(180))
@@ -229,495 +309,739 @@ fun BrowserScreen(
         }
     }
 
-    Column(
+    Box(
         modifier = modifier
             .fillMaxSize()
-            .background(OnionPalette.Surface)
-            // Keep the address bar above the soft keyboard.
-            .imePadding(),
+            .background(colors.background)
+            .testTag("browser_screen"),
     ) {
-        Box(modifier = Modifier.weight(1f)) {
-            // The cached frame of the previous page.
-            BackPreviewLayer(state = state, progress = progress)
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .imePadding(),
+        ) {
+            // Top Identity Header (40dp onion mark · Title + .onion host · TOR pill · 40dp Keyring)
+            TopIdentityHeader(
+                state = state,
+                onBrandClick = onHome,
+                onTorClick = { securityOpen = true },
+                onKeyringClick = { keysOpen = true },
+            )
 
-            // The live page.
+            // Center Viewport
             Box(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        scaleX = scale.value
-                        scaleY = scale.value
-                        translationX = shift.value
-                    },
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .background(colors.surface2),
             ) {
-                surface()
+                if (progress > 0f && state.backPreview != null) {
+                    BackPreviewLayer(state = state, progress = progress)
+                }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            scaleX = scale.value
+                            scaleY = scale.value
+                            translationX = shift.value
+                        },
+                ) {
+                    surface()
+
+                    if (state.viewingSnapshot && state.backPreview != null && progress == 0f) {
+                        BackPreviewLayer(state = state, progress = 1f)
+                    }
+
+                    if (state.isStartPage && progress == 0f) {
+                        StartPage(
+                            state = state,
+                            onNavigate = { target ->
+                                address = target
+                                onNavigate(target)
+                            },
+                            onOpenKeyring = { keysOpen = true },
+                            onOpenSettings = { settingsOpen = true },
+                            onOpenSecurity = { securityOpen = true },
+                        )
+                    }
+                }
+
+                if (!state.isStartPage && state.pgp.fields.isNotEmpty() && progress == 0f) {
+                    PgpFieldOverlay(
+                        state = state,
+                        onFieldAction = onFieldAction,
+                        onInsertMyPubKey = onInsertMyPubKey,
+                    )
+                }
+
+                // Top Viewport Banners (Loading Bar, Snapshot Live Reload, Blocked/Error Notice)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.TopCenter),
+                ) {
+                    if (state.isLoading) {
+                        OvProgressBar(
+                            progress = (state.loadProgress.coerceIn(8, 100)) / 100f,
+                            height = 2.5.dp,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+
+                    if (state.viewingSnapshot) {
+                        SnapshotReloadBanner(onReloadLive = onReloadLive)
+                    }
+
+                    val bannerMessage = state.pgp.error?.takeIf { it.isNotBlank() }
+                        ?: state.status.takeIf { it.isNotBlank() }
+                        ?: if (state.blocked) "Clearnet request refused by Hidden Service Only policy." else null
+
+                    if (bannerMessage != null) {
+                        StatusNoticeBanner(
+                            message = bannerMessage,
+                            isAlert = state.blocked || !state.pgp.error.isNullOrBlank(),
+                            onDismiss = onDismissStatus,
+                        )
+                    }
+                }
             }
 
-            // The action chips of the PGP fields.
-            PgpFieldOverlay(state = state, onFieldAction = onFieldAction)
+            // Bottom Controls + Transport Footer Line
+            BottomControlDock(
+                state = state,
+                address = address,
+                onAddressChange = { address = it },
+                onSubmitAddress = {
+                    val trimmed = address.trim()
+                    onNavigate(trimmed.ifEmpty { "about:blank" })
+                },
+                onClearAddress = { address = "" },
+                onSecurityClick = { securityOpen = true },
+                onBack = onBack,
+                onForward = onForward,
+                onReload = onReload,
+                onOpenTabs = { tabsOpen = true },
+                onOpenMenu = { menuOpen = true },
+            )
         }
 
-        BottomChrome(
-            state = state,
-            address = address,
-            onAddressChange = { address = it },
-            onNavigate = { onNavigate(address) },
-            onClear = { address = "" },
-            onBack = onBack,
-            onForward = onForward,
-            onNewTab = {
-                address = ""
-                onNewTab()
-            },
-            onReload = onReload,
-            onMenu = { menuOpen = true },
-        )
+        // Modal Sheets & Dialogs
+        if (menuOpen) {
+            BrowserMenuSheet(
+                state = state,
+                onNewTab = {
+                    address = ""
+                    onNewTab()
+                },
+                onStartPage = {
+                    address = ""
+                    onHome()
+                },
+                onOpenTabs = { tabsOpen = true },
+                onOpenKeyring = { keysOpen = true },
+                onOpenSecurity = { securityOpen = true },
+                onOpenSettings = { settingsOpen = true },
+                onZoomIn = onZoomIn,
+                onZoomOut = onZoomOut,
+                onOpenLegal = { legalOpen = true },
+                onDismiss = { menuOpen = false },
+            )
+        }
+
+        if (tabsOpen) {
+            TabsSheet(
+                tabs = state.tabs,
+                onSelectTab = onSelectTab,
+                onCloseTab = onCloseTab,
+                onNewTab = {
+                    address = ""
+                    onNewTab()
+                },
+                onDismiss = { tabsOpen = false },
+            )
+        }
+
+        if (securityOpen) {
+            SecurityCircuitSheet(
+                state = state,
+                onToggleHiddenServiceOnly = onToggleRouting,
+                onResetTorIsolation = onResetTorIsolation,
+                onDismiss = { securityOpen = false },
+            )
+        }
+
+        if (settingsOpen) {
+            SettingsSheet(
+                state = state,
+                onSelectThemeFamily = onSelectThemeFamily,
+                onSelectThemeMode = onSelectThemeMode,
+                onToggleHiddenServiceOnly = onToggleRouting,
+                onToggleRequireBiometric = onToggleRequireBiometric,
+                onSelectDefaultZoom = onSelectDefaultZoom,
+                onClearSession = onClearSession,
+                onOpenLegalNotices = { legalOpen = true },
+                onDismiss = { settingsOpen = false },
+            )
+        }
+
+        if (keysOpen) {
+            KeyringSheet(
+                keys = state.keys,
+                defaultKeyFingerprint = state.defaultKeyFingerprint,
+                errorMessage = state.pgp.error,
+                onGenerateKey = onGenerateKey,
+                onImportKey = onImportKey,
+                onExportKey = onExportKey,
+                onSetDefaultKey = onSetDefaultKey,
+                onDeleteKey = onDeleteKey,
+                onDismiss = { keysOpen = false },
+            )
+        }
+
+        state.pgp.encryptRequest?.let { req ->
+            EncryptPickerSheet(
+                request = req,
+                keys = state.keys,
+                defaultKeyFingerprint = state.defaultKeyFingerprint,
+                errorMessage = state.pgp.error,
+                onOpenKeyring = { keysOpen = true },
+                onConfirmEncrypt = { plaintext, recipientFp, signerFp, passphrase ->
+                    onConfirmEncrypt(req, plaintext, recipientFp, signerFp, passphrase)
+                },
+                onDismiss = onDismissEncrypt,
+            )
+        }
+
+        state.pgp.decryptPassphraseRequest?.let { req ->
+            DecryptPassphraseSheet(
+                request = req,
+                onSubmitPassphrase = { passphrase -> onSubmitDecryptPassphrase(req, passphrase) },
+                onDismiss = onDismissDecryptPassphrase,
+            )
+        }
 
         state.pgp.plaintext?.let { plaintext ->
             PlaintextSheet(
                 plaintext = plaintext,
-                onInsert = { onInsertPlaintext(plaintext.nodeId) },
+                onCopy = onCopyPlaintext,
+                onInsert = onInsertPlaintext,
+                onClose = onDismissPlaintext,
+            )
+        }
+
+        state.contextMenu?.let { menu ->
+            ContextMenuSheet(
+                menu = menu,
+                onOpenInNewTab = onContextMenuOpenNewTab,
+                onOpenInCurrentTab = onContextMenuOpenCurrentTab,
+                onCopyUrl = onCopyText,
+                onDecryptSelection = onDecryptArmoredText,
+                onImportKeySelection = { armored -> onImportKey(armored, "") },
+                onEncryptSelection = onEncryptSelectedText,
+                onDismiss = onDismissContextMenu,
+            )
+        }
+
+        state.selectionPgp?.let { selection ->
+            SelectionPgpSheet(
+                selection = selection,
+                onDecrypt = onDecryptArmoredText,
+                onImportKey = { armored -> onImportKey(armored, "") },
+                onEncrypt = onEncryptSelectedText,
+                onCopy = onCopyText,
+                onDismiss = onDismissSelectionPgp,
+            )
+        }
+
+        if (legalOpen) {
+            LegalNoticesDialog(
+                documents = state.legalDocuments,
+                onOpenDocument = { doc ->
+                    legalOpen = false
+                    legalDocument = doc
+                },
+                onDismiss = { legalOpen = false },
+            )
+        }
+
+        legalDocument?.let { doc ->
+            LegalDocumentDialog(
+                document = doc,
+                loadLines = { onLoadLegalLines(doc.name) },
+                onDismiss = { legalDocument = null },
             )
         }
     }
+}
 
-    if (menuOpen) {
-        MenuSheet(
-            state = state,
-            onNewTab = {
-                menuOpen = false
-                address = ""
-                onNewTab()
-            },
-            onHome = {
-                menuOpen = false
-                onHome()
-            },
-            onTabs = {
-                menuOpen = false
-                tabsOpen = true
-            },
-            onKeys = {
-                menuOpen = false
-                keysOpen = true
-            },
-            onLegal = {
-                menuOpen = false
-                legalOpen = true
-            },
-            onToggleRouting = { enabled ->
-                menuOpen = false
-                onToggleRouting(enabled)
-            },
-            onZoomIn = {
-                menuOpen = false
-                onZoomIn()
-            },
-            onZoomOut = {
-                menuOpen = false
-                onZoomOut()
-            },
-            onDismiss = { menuOpen = false },
-        )
+/**
+ * Top Identity Header matching `Securedrop+Browser+Chrome+Fixed` (`App.tsx:62-101`):
+ * - 40dp Trap onion mark
+ * - Page Title + `.onion` host (`1:1` label ratio, `<= 2:1`)
+ * - Tappable `TOR` status pill (opens Tor Security & Circuit Sheet)
+ * - 40dp Keyring circular button
+ */
+@Composable
+private fun TopIdentityHeader(
+    state: BrowserUiState,
+    onBrandClick: () -> Unit,
+    onTorClick: () -> Unit,
+    onKeyringClick: () -> Unit,
+) {
+    val colors = TrapTheme.colors
+    val headerTitle = when {
+        state.isStartPage -> "Trap Start"
+        state.title.isNotBlank() -> state.title
+        else -> formatDisplayHost(state.url)
+    }
+    val headerSubtitle = when {
+        state.isStartPage -> "about:blank · zero-JS"
+        else -> state.url
     }
 
-    if (tabsOpen) {
-        TabsDialog(
-            state = state,
-            onDismiss = { tabsOpen = false },
-        )
-    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(colors.surface)
+            .testTag("top_identity_header"),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(colors.control)
+                    .border(1.dp, colors.border, CircleShape)
+                    .clickable(role = Role.Button, onClick = onBrandClick)
+                    .semantics { contentDescription = "Trap Start Page" },
+                contentAlignment = Alignment.Center,
+            ) {
+                Image(
+                    painter = painterResource(R.drawable.ov_trap_mark),
+                    contentDescription = null,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.size(26.dp),
+                )
+            }
 
-    if (keysOpen) {
-        KeyManagerDialog(
-            keys = state.keys,
-            onCreate = onCreateKey,
-            onExport = onExportKey,
-            onDismiss = { keysOpen = false },
-        )
-    }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = headerTitle,
+                    color = colors.textPrimary,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = headerSubtitle,
+                    color = colors.textMuted,
+                    fontSize = 11.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
 
-    if (legalOpen) {
-        LegalNoticesDialog(
-            documents = state.legalDocuments,
-            onOpenDocument = { document ->
-                legalOpen = false
-                legalDocument = document
-            },
-            onDismiss = { legalOpen = false },
-        )
-    }
+            // Tappable TOR status pill
+            val torReady = state.tor.ready
+            val pillShape = RoundedCornerShape(50)
+            Box(
+                modifier = Modifier
+                    .height(28.dp)
+                    .clip(pillShape)
+                    .background(if (torReady) colors.greenContainer else colors.control)
+                    .border(
+                        width = 1.dp,
+                        color = if (torReady) colors.greenBorder else colors.amber,
+                        shape = pillShape,
+                    )
+                    .clickable(role = Role.Button, onClick = onTorClick)
+                    .padding(horizontal = 10.dp)
+                    .semantics { contentDescription = "Tor security and circuit status" }
+                    .testTag("top_tor_pill"),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = if (torReady) "TOR" else "TOR ${state.tor.percent}%",
+                    color = if (torReady) colors.green else colors.amber,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                )
+            }
 
-    legalDocument?.let { document ->
-        LegalDocumentDialog(
-            document = document,
-            loadLines = { onLoadLegalLines(document.name) },
-            onDismiss = { legalDocument = null },
+            // 40dp Keyring button
+            OvIconButton(
+                glyph = TrapGlyph.Key,
+                contentDescription = "PGP Keyring",
+                onClick = onKeyringClick,
+                tint = colors.teal,
+                containerColor = colors.tealContainer,
+                borderColor = if (state.keys.isNotEmpty()) colors.teal else colors.border,
+                size = 40.dp,
+                modifier = Modifier.testTag("top_keyring_button"),
+            )
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(colors.cardBorder),
         )
     }
 }
 
 /**
- * The chrome of the browser, at the bottom of the screen.
- *
- * It is the chrome of Safari on iOS: the page fills the screen, and the
- * controls float above it — the row of the buttons and, under it, the field
- * of the address.  There is no rail at the top: the brand of Trap lives in
- * the field of the address, and the state of the transport is a thin line
- * above the buttons.
- *
- * Every glyph is the one of the icon system of the design board; the
- * material icons of the library are never used.
- *
- * @param state the state of the browser.
- * @param address the address that is shown.
- * @param onAddressChange the user typed in the address.
- * @param onNavigate the user wants to go to the address.
- * @param onClear the user cleared the address.
- * @param onBack the user wants to go back.
- * @param onForward the user wants to go forward.
- * @param onNewTab the user wants a new tab.
- * @param onReload the user wants the page again.
- * @param onMenu the user wants the menu of the browser.
+ * Bottom Control Dock + Transport Footer Line:
+ * - Responsive adaptive layout:
+ *   - `< 520dp` portrait phones: 2 rows so 56-char `.onion` addresses get full width on Row 1,
+ *     and Row 2 holds the five `44dp` circular controls (`Back`, `Forward`, single `Reload`,
+ *     `Tabs [tabs.size]`, `Menu ☰`) with `8dp` gaps.
+ *   - `>= 520dp` landscape/tablet: single `44dp` row with `8dp` gaps matching `App.tsx`.
  */
 @Composable
-private fun BottomChrome(
+private fun BottomControlDock(
     state: BrowserUiState,
     address: String,
     onAddressChange: (String) -> Unit,
-    onNavigate: () -> Unit,
-    onClear: () -> Unit,
+    onSubmitAddress: () -> Unit,
+    onClearAddress: () -> Unit,
+    onSecurityClick: () -> Unit,
     onBack: () -> Unit,
     onForward: () -> Unit,
-    onNewTab: () -> Unit,
     onReload: () -> Unit,
-    onMenu: () -> Unit,
+    onOpenTabs: () -> Unit,
+    onOpenMenu: () -> Unit,
 ) {
+    val colors = TrapTheme.colors
+    val reloadRotation = if (state.isLoading) {
+        val transition = rememberInfiniteTransition(label = "reload_spin")
+        val angle by transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 700, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart,
+            ),
+            label = "reload_angle",
+        )
+        angle
+    } else {
+        0f
+    }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(OnionPalette.Surface),
+            .background(colors.surface)
+            .testTag("bottom_control_dock"),
     ) {
-        TorStatusLine(state = state)
-
-        // The row of the buttons, floating above the page.
-        Row(
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 6.dp, start = 12.dp, end = 12.dp),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OvGlassButton(
-                icon = painterResource(R.drawable.ic_neon_back),
-                contentDescription = "Back",
-                onClick = onBack,
-                enabled = state.canGoBack,
-            )
-            Spacer(Modifier.width(22.dp))
-            OvGlassButton(
-                icon = painterResource(R.drawable.ic_neon_forward),
-                contentDescription = "Forward",
-                onClick = onForward,
-            )
-            Spacer(Modifier.width(22.dp))
-            OvGlassButton(
-                icon = painterResource(R.drawable.ic_neon_reload),
-                contentDescription = "Reload",
-                onClick = onReload,
-            )
-            Spacer(Modifier.width(22.dp))
-            OvGlassButton(
-                icon = painterResource(R.drawable.ic_neon_new_tab),
-                contentDescription = "New tab",
-                onClick = onNewTab,
-                badge = state.tabCount,
-            )
-            Spacer(Modifier.width(22.dp))
-            OvGlassButton(
-                icon = painterResource(R.drawable.ic_neon_menu),
-                contentDescription = "The menu of Trap",
-                onClick = onMenu,
-            )
-        }
-
-        Spacer(Modifier.height(8.dp))
-
-        // The field of the address, at the bottom of the screen.
-        AddressField(
-            address = address,
-            onAddressChange = onAddressChange,
-            onNavigate = onNavigate,
-            onClear = onClear,
-            blocked = state.blocked,
-            modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 18.dp),
+                .height(1.dp)
+                .background(colors.cardBorder),
         )
 
-    }
-}
-
-/**
- * The field of the address.
- *
- * It is the field of Safari: a rounded plate with the mark of the brand and
- * the shield of the leak protection on the left, the address in the middle
- * and the button that clears it on the right.
- *
- * @param address the address that is shown.
- * @param onAddressChange the user typed in the address.
- * @param onNavigate the user wants to go to the address.
- * @param onClear the user cleared the address.
- * @param blocked `true` when the last request was blocked.
- * @param modifier the modifier of the field.
- */
-@Composable
-private fun AddressField(
-    address: String,
-    onAddressChange: (String) -> Unit,
-    onNavigate: () -> Unit,
-    onClear: () -> Unit,
-    blocked: Boolean,
-    modifier: Modifier = Modifier,
-) {
-    OvAddressPlate(
-        modifier = modifier,
-        border = if (blocked) OnionPalette.Bad else OnionPalette.Hairline,
-    ) {
-        Row(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 10.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .padding(horizontal = 12.dp, vertical = 10.dp),
         ) {
-            Image(
-                painter = painterResource(R.drawable.ov_trap_mark),
-                contentDescription = "Trap",
-                contentScale = ContentScale.Fit,
-                modifier = Modifier.size(22.dp),
-            )
-            Spacer(Modifier.width(8.dp))
-            Image(
-                painter = painterResource(R.drawable.ic_neon_shield),
-                contentDescription = null,
-                contentScale = ContentScale.Fit,
-                modifier = Modifier.size(16.dp),
-            )
-            Spacer(Modifier.width(8.dp))
-            BasicTextField(
-                value = address,
-                onValueChange = onAddressChange,
-                modifier = Modifier.weight(1f),
-                singleLine = true,
-                textStyle = TextStyle(
-                    color = OnionPalette.TextPrimary,
-                    fontSize = 15.sp,
-                    fontFamily = FontFamily.Monospace,
-                ),
-                cursorBrush = SolidColor(OnionPalette.Mint),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                keyboardActions = KeyboardActions(onGo = { onNavigate() }),
-                decorationBox = { inner ->
-                    if (address.isEmpty()) {
-                        Text(
-                            text = "Search or enter the address of a hidden service",
-                            color = OnionPalette.TextMuted,
-                            fontSize = 14.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+            val isWide = maxWidth >= 520.dp
+            if (isWide) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OvNavCircleButton(
+                        glyph = TrapGlyph.Back,
+                        contentDescription = "Back",
+                        enabled = state.canGoBack,
+                        accent = colors.amber,
+                        onClick = onBack,
+                        testTag = "nav_back",
+                    )
+                    OvNavCircleButton(
+                        glyph = TrapGlyph.Forward,
+                        contentDescription = "Forward",
+                        enabled = state.canGoForward,
+                        accent = colors.amber,
+                        onClick = onForward,
+                        testTag = "nav_forward",
+                    )
+                    OvNavCircleButton(
+                        glyph = TrapGlyph.Reload,
+                        contentDescription = "Reload",
+                        accent = colors.teal,
+                        rotationDegrees = reloadRotation,
+                        onClick = onReload,
+                        testTag = "nav_reload",
+                    )
+                    OvNavCircleButton(
+                        glyph = TrapGlyph.NewTab,
+                        contentDescription = "Tabs",
+                        accent = colors.teal,
+                        badge = state.tabCount,
+                        onClick = onOpenTabs,
+                        testTag = "nav_tabs",
+                    )
+                    OvUnifiedAddressCapsule(
+                        address = address,
+                        onAddressChange = onAddressChange,
+                        onGo = onSubmitAddress,
+                        onClear = onClearAddress,
+                        onSecurityClick = onSecurityClick,
+                        blocked = state.blocked,
+                        hiddenServiceOnly = state.hiddenServiceOnly,
+                        hint = "Enter .onion address",
+                        modifier = Modifier.weight(1f),
+                    )
+                    OvNavCircleButton(
+                        glyph = TrapGlyph.Menu,
+                        contentDescription = "Menu",
+                        accent = colors.teal,
+                        onClick = onOpenMenu,
+                        testTag = "nav_menu",
+                    )
+                }
+            } else {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OvUnifiedAddressCapsule(
+                        address = address,
+                        onAddressChange = onAddressChange,
+                        onGo = onSubmitAddress,
+                        onClear = onClearAddress,
+                        onSecurityClick = onSecurityClick,
+                        blocked = state.blocked,
+                        hiddenServiceOnly = state.hiddenServiceOnly,
+                        hint = "Enter .onion address",
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(
+                            space = 8.dp,
+                            alignment = Alignment.CenterHorizontally,
+                        ),
+                    ) {
+                        OvNavCircleButton(
+                            glyph = TrapGlyph.Back,
+                            contentDescription = "Back",
+                            enabled = state.canGoBack,
+                            accent = colors.amber,
+                            onClick = onBack,
+                            testTag = "nav_back",
+                        )
+                        OvNavCircleButton(
+                            glyph = TrapGlyph.Forward,
+                            contentDescription = "Forward",
+                            enabled = state.canGoForward,
+                            accent = colors.amber,
+                            onClick = onForward,
+                            testTag = "nav_forward",
+                        )
+                        OvNavCircleButton(
+                            glyph = TrapGlyph.Reload,
+                            contentDescription = "Reload",
+                            accent = colors.teal,
+                            rotationDegrees = reloadRotation,
+                            onClick = onReload,
+                            testTag = "nav_reload",
+                        )
+                        OvNavCircleButton(
+                            glyph = TrapGlyph.NewTab,
+                            contentDescription = "Tabs",
+                            accent = colors.teal,
+                            badge = state.tabCount,
+                            onClick = onOpenTabs,
+                            testTag = "nav_tabs",
+                        )
+                        OvNavCircleButton(
+                            glyph = TrapGlyph.Menu,
+                            contentDescription = "Menu",
+                            accent = colors.teal,
+                            onClick = onOpenMenu,
+                            testTag = "nav_menu",
                         )
                     }
-                    inner()
-                },
-            )
-            if (address.isNotEmpty()) {
-                OvGlassButton(
-                    icon = painterResource(R.drawable.ic_neon_cancel),
-                    contentDescription = "Clear the address",
-                    onClick = onClear,
-                    size = 28.dp,
-                    glyph = 15.dp,
-                    accent = OnionPalette.Pink,
-                    elevation = 0.dp,
-                )
+                }
             }
         }
+
+        // Transport Footer Line (real Arti status + real 16-char .onion isolation token)
+        TransportFooterLine(
+            tor = state.tor,
+            onClick = onSecurityClick,
+        )
     }
 }
 
-/**
- * The thin line with the state of the transport.
- *
- * It is the line that Safari draws above the toolbar: one line of text and
- * the progress of the bootstrap while the client is not ready.
- *
- * @param state the state of the browser.
- */
 @Composable
-private fun TorStatusLine(state: BrowserUiState) {
-    val tor = state.tor
+private fun TransportFooterLine(
+    tor: TorBootstrapState,
+    onClick: () -> Unit,
+) {
+    val colors = TrapTheme.colors
+    val statusText = if (tor.ready) {
+        "Tor ready"
+    } else if (tor.stage.isNotBlank()) {
+        "Tor bootstrapping ${tor.percent}% · ${tor.stage}"
+    } else {
+        "Tor bootstrapping ${tor.percent}%"
+    }
+    val isolation = tor.isolationToken?.takeIf { it.isNotBlank() }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 16.dp, end = 16.dp, top = 4.dp),
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(start = 14.dp, end = 14.dp, bottom = 8.dp)
+            .testTag("transport_footer"),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Text(
-                text = if (tor.ready) "Tor ready" else "Tor: ${tor.percent}% ${tor.stage}",
-                color = if (tor.ready) OnionPalette.Good else OnionPalette.TextMuted,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Medium,
+                text = statusText,
+                color = if (tor.ready) colors.green else colors.amber,
+                fontSize = 11.5.sp,
+                fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
-            tor.isolationToken?.let {
+            if (isolation != null) {
+                Spacer(Modifier.width(8.dp))
                 Text(
-                    text = it,
-                    color = OnionPalette.Teal,
-                    fontSize = 10.sp,
+                    text = isolation,
+                    color = colors.teal,
+                    fontSize = 11.sp,
                     fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
                 )
             }
         }
         if (!tor.ready) {
             Spacer(Modifier.height(4.dp))
-            OvProgressBar(progress = tor.percent / 100f, modifier = Modifier.fillMaxWidth())
+            OvProgressBar(
+                progress = tor.percent / 100f,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }
 
-/**
- * The menu of the browser.
- *
- * The menu is the sheet of the board: the entries that have a real function
- * behind them.
- *
- * @param state the state of the browser.
- * @param onNewTab the user wants a new tab.
- * @param onKeys the user wants the key manager.
- * @param onLegal the user wants the licences.
- * @param onToggleRouting the user changed the traffic policy.
- * @param onZoomIn the user wants a bigger page.
- * @param onZoomOut the user wants a smaller page.
- * @param onDismiss the user closed the menu.
- */
 @Composable
-private fun MenuSheet(
-    state: BrowserUiState,
-    onNewTab: () -> Unit,
-    onHome: () -> Unit,
-    onTabs: () -> Unit,
-    onKeys: () -> Unit,
-    onLegal: () -> Unit,
-    onToggleRouting: (Boolean) -> Unit,
-    onZoomIn: () -> Unit,
-    onZoomOut: () -> Unit,
+private fun SnapshotReloadBanner(onReloadLive: () -> Unit) {
+    val colors = TrapTheme.colors
+    val shape = RoundedCornerShape(10.dp)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .clip(shape)
+            .background(colors.surface)
+            .border(1.dp, colors.teal, shape)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .testTag("snapshot_reload_banner"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "Cached snapshot",
+            color = colors.textPrimary,
+            fontSize = 12.5.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.weight(1f),
+        )
+        OvSecondaryButton(
+            text = "Reload Live over Tor",
+            glyph = TrapGlyph.Reload,
+            onClick = onReloadLive,
+            modifier = Modifier.testTag("reload_live_button"),
+        )
+    }
+}
+
+@Composable
+private fun StatusNoticeBanner(
+    message: String,
+    isAlert: Boolean,
     onDismiss: () -> Unit,
 ) {
-    Box(
+    val colors = TrapTheme.colors
+    val shape = RoundedCornerShape(10.dp)
+    val borderColor = if (isAlert) colors.danger else colors.teal
+    val bgColor = if (isAlert) colors.dangerContainer else colors.surface
+
+    Row(
         modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.45f))
-            .clickable(onClick = onDismiss),
-        contentAlignment = Alignment.BottomCenter,
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .clip(shape)
+            .background(bgColor)
+            .border(1.dp, borderColor, shape)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .testTag("status_notice_banner"),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
-                .background(OnionPalette.SurfaceRaised.copy(alpha = 0.97f))
-                .border(
-                    1.dp,
-                    OnionPalette.Hairline,
-                    RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp),
-                )
-                .padding(vertical = 8.dp),
-        ) {
-            // The grabber of the sheet, the way iOS draws it.
-            Box(
-                modifier = Modifier
-                    .align(Alignment.CenterHorizontally)
-                    .padding(bottom = 8.dp)
-                    .width(36.dp)
-                    .height(5.dp)
-                    .clip(RoundedCornerShape(3.dp))
-                    .background(OnionPalette.Hairline),
-            )
-            OvMenuRow(
-                icon = painterResource(R.drawable.ic_neon_new_tab),
-                label = "New Tab",
-                onClick = onNewTab,
-            )
-            OvMenuRow(
-                icon = painterResource(R.drawable.ic_neon_home),
-                label = "Start Page",
-                onClick = onHome,
-            )
-            OvMenuRow(
-                icon = painterResource(R.drawable.ic_neon_new_partial_tab),
-                label = "Tabs",
-                onClick = onTabs,
-                trailing = state.tabCount.toString(),
-            )
-            OvMenuRow(
-                icon = painterResource(R.drawable.ic_neon_key),
-                label = "PGP Keyring",
-                onClick = onKeys,
-            )
-            OvMenuRow(
-                icon = painterResource(R.drawable.ic_neon_shield),
-                label = "Security",
-                onClick = { onToggleRouting(!state.hiddenServiceOnly) },
-                trailing = if (state.hiddenServiceOnly) "hidden services only" else "clearnet allowed",
-            )
-            OvMenuRow(
-                icon = painterResource(R.drawable.ic_neon_zoom_in),
-                label = "Zoom In",
-                onClick = onZoomIn,
-                trailing = "${zoomPercent(state.zoomLevel)}%",
-            )
-            OvMenuRow(
-                icon = painterResource(R.drawable.ic_neon_zoom_out),
-                label = "Zoom Out",
-                onClick = onZoomOut,
-            )
-            OvMenuRow(
-                icon = painterResource(R.drawable.ic_ov_legal),
-                label = "Licences",
-                onClick = onLegal,
-            )
-        }
+        TrapIcon(
+            glyph = if (isAlert) TrapGlyph.Warning else TrapGlyph.Shield,
+            tint = borderColor,
+            size = 16.dp,
+            forceVector = true,
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = message,
+            color = colors.textPrimary,
+            fontSize = 12.sp,
+            modifier = Modifier.weight(1f),
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.width(6.dp))
+        OvIconButton(
+            glyph = TrapGlyph.Close,
+            contentDescription = "Dismiss notice",
+            onClick = onDismiss,
+            tint = colors.textMuted,
+            size = 26.dp,
+        )
     }
 }
 
-/**
- * The zoom of the page in percent.
- *
- * The zoom level of CEF is the one of Chromium: the level `0.0` is the
- * default size and every step of `0.25` is a notch of the zoom.
- *
- * @param level the zoom level of the browser.
- */
-private fun zoomPercent(level: Float): Int =
-    (Math.pow(1.2, level.toDouble()) * 100.0).toInt()
-
-/**
- * The layer that shows the cached frame of the previous page.
- *
- * The scrim lightens while the gesture goes on, so that the page that is
- * about to come back is readable.
- */
 @Composable
 private fun BackPreviewLayer(state: BrowserUiState, progress: Float) {
+    val colors = TrapTheme.colors
     val preview = state.backPreview ?: return
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(OnionPalette.SurfaceRaised),
+            .background(colors.surface)
+            .testTag("back_preview_layer"),
         contentAlignment = Alignment.Center,
     ) {
         val frame = preview.frameSnapshot
         if (frame != null) {
-            // The frame that was rendered before the navigation; it is the
-            // page that comes back, without waiting for the circuit.
             Image(
                 bitmap = frame,
                 contentDescription = preview.title.ifEmpty { preview.url },
@@ -725,358 +1049,125 @@ private fun BackPreviewLayer(state: BrowserUiState, progress: Float) {
                 modifier = Modifier.fillMaxSize(),
             )
         } else {
-            Text(
-                text = preview.title.ifEmpty { preview.url },
-                color = OnionPalette.TextMuted,
-                fontSize = 14.sp,
-                modifier = Modifier.padding(16.dp),
-            )
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.padding(24.dp),
+            ) {
+                Text(
+                    text = preview.title.ifEmpty { "Previous Hidden Service" },
+                    color = colors.textPrimary,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = preview.url,
+                    color = colors.textMuted,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
 
-        // The scrim lightens while the gesture goes on.
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.45f * (1f - progress))),
+                .background(Color.Black.copy(alpha = 0.42f * (1f - progress.coerceIn(0f, 1f)))),
         )
     }
 }
 
 /**
- * The overlay with the action chips of the PGP fields.
- *
- * The chips are anchored on the bounds of the fields, which the render
- * process reports in the normalized space of the page.
+ * Anchored PGP overlay chips positioned from CDP `DOM.getBoxModel` normalized viewport bounds.
  */
 @Composable
 private fun PgpFieldOverlay(
     state: BrowserUiState,
     onFieldAction: (PgpFieldState) -> Unit,
+    onInsertMyPubKey: (PgpFieldState) -> Unit,
 ) {
     val fields = state.pgp.fields
-    if (fields.isEmpty()) {
-        return
-    }
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val width = maxWidth
-        val height = maxHeight
+    if (fields.isEmpty()) return
+
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            .testTag("pgp_field_overlay"),
+    ) {
+        val viewportW = maxWidth
+        val viewportH = maxHeight
+
         fields.forEach { field ->
             val bounds = field.bounds
-            // The bounds are relative to the page; the overlay is placed with
-            // the same proportions, so that it follows the layout.
+            val anchorX = (viewportW * bounds.left + 8.dp).coerceIn(8.dp, (viewportW - 140.dp).coerceAtLeast(8.dp))
+            val fieldHeight = viewportH * (bounds.bottom - bounds.top).coerceAtLeast(0f)
+            val rawAnchorY = if (field.isEditableTarget() && fieldHeight < 76.dp) {
+                viewportH * bounds.bottom + 6.dp
+            } else {
+                (viewportH * bounds.bottom - 38.dp).coerceAtLeast(viewportH * bounds.top + 6.dp)
+            }
+            val anchorY = rawAnchorY.coerceIn(6.dp, (viewportH - 42.dp).coerceAtLeast(6.dp))
+
             Box(
-                modifier = Modifier
-                    .offset(
-                        x = width * bounds.left,
-                        y = height * bounds.top,
-                    )
-                    .width(width * bounds.width)
-                    .padding(2.dp),
+                modifier = Modifier.offset(x = anchorX, y = anchorY),
             ) {
-                ActionChip(field = field, onClick = { onFieldAction(field) })
-            }
-        }
-    }
-}
-
-/**
- * The chip of a PGP field.
- *
- * The colour of the chip tells what the action does: the amber encrypts, the
- * teal of the brand decrypts and the mint handles the keys.
- *
- * @param field the field the chip belongs to.
- * @param onClick the user tapped the chip.
- */
-@Composable
-private fun ActionChip(field: PgpFieldState, onClick: () -> Unit) {
-    val kind = when (field.kind) {
-        "pgp_message" -> ChipKind.Decrypt
-        "pgp_public_key" -> ChipKind.Key
-        else -> ChipKind.Encrypt
-    }
-    val icon = when (kind) {
-        ChipKind.Encrypt -> R.drawable.ic_ov_encrypt
-        ChipKind.Decrypt -> R.drawable.ic_ov_decrypt
-        ChipKind.Key -> R.drawable.ic_ov_keys
-    }
-    OvActionChip(
-        text = field.label,
-        onClick = onClick,
-        icon = painterResource(icon),
-        kind = kind,
-    )
-}
-
-/**
- * The sheet with the decrypted message.
- *
- * The plaintext is shown in the native UI and not in the page: a hostile
- * hidden service could read it back through CSS.
- *
- * @param plaintext the decrypted message.
- * @param onInsert the user wants the plaintext in the page.
- */
-@Composable
-private fun PlaintextSheet(plaintext: PgpPlaintextState, onInsert: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(OnionPalette.SurfaceRaised)
-            .padding(12.dp),
-    ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = plaintext.title,
-                    color = OnionPalette.TextPrimary,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f),
-                )
-                SignatureBadge(plaintext)
-            }
-            Spacer(Modifier.height(8.dp))
-            Box(
-                modifier = Modifier
-                    .height(120.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(OnionPalette.Surface)
-                    .padding(8.dp)
-                    .verticalScroll(rememberScrollState()),
-            ) {
-                Text(
-                    text = plaintext.body,
-                    color = OnionPalette.TextPrimary,
-                    fontSize = 14.sp,
-                    fontFamily = FontFamily.Monospace,
-                )
-            }
-            Spacer(Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
-            ) {
-                OvSecondaryButton(
-                    text = "Insert into the page",
-                    onClick = onInsert,
-                    icon = painterResource(R.drawable.ic_ov_insert),
-                )
-            }
-        }
-    }
-}
-
-/**
- * The badge that shows the state of the signature.
- *
- * @param plaintext the decrypted message.
- */
-@Composable
-private fun SignatureBadge(plaintext: PgpPlaintextState) {
-    val verified = plaintext.signatureVerified
-    OvBadge(
-        text = if (verified) {
-            "good signature · ${plaintext.signerFingerprint.orEmpty().takeLast(16)}"
-        } else {
-            "signature not verified"
-        },
-        accent = if (verified) OnionPalette.Good else OnionPalette.Warn,
-        container = if (verified) {
-            OnionPalette.Good.copy(alpha = 0.14f)
-        } else {
-            OnionPalette.Warn.copy(alpha = 0.14f)
-        },
-    )
-}
-
-/**
- * The overview of the tabs of the browser.
- *
- * The browser carries one tab: the page that is open.  The overview is the
- * sheet of the board that tells how many tabs are open and which page they
- * show.
- *
- * @param state the state of the browser.
- * @param onDismiss the user closed the overview.
- */
-@Composable
-private fun TabsDialog(
-    state: BrowserUiState,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = OnionPalette.SurfaceRaised,
-        titleContentColor = OnionPalette.TextPrimary,
-        textContentColor = OnionPalette.TextMuted,
-        title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Image(
-                    painter = painterResource(R.drawable.ic_neon_new_partial_tab),
-                    contentDescription = null,
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.size(26.dp),
-                )
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    text = "The tabs of Trap",
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
-        },
-        text = {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(OnionPalette.Surface)
-                        .border(1.dp, OnionPalette.TealDeep, RoundedCornerShape(10.dp))
-                        .padding(10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Image(
-                        painter = painterResource(R.drawable.ic_neon_new_tab),
-                        contentDescription = null,
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier.size(24.dp),
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = state.title.ifEmpty { "Trap" },
-                            color = OnionPalette.TextPrimary,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            text = state.url.ifEmpty { "the start page of Trap" },
-                            color = OnionPalette.TextMuted,
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    OvBadge(
-                        text = state.tabCount.toString(),
-                        accent = OnionPalette.Mint,
-                        container = OnionPalette.Teal.copy(alpha = 0.14f),
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Close", color = OnionPalette.TextMuted)
-            }
-        },
-    )
-}
-
-/**
- * The manager of the keys of the keyring.
- *
- * @param keys the keys of the keyring.
- * @param onCreate the user wants a new key.
- * @param onExport the user wants the public key of a certificate.
- * @param onDismiss the user closed the manager.
- */
-@Composable
-private fun KeyManagerDialog(
-    keys: List<KeyInfo>,
-    onCreate: () -> Unit,
-    onExport: (String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = OnionPalette.SurfaceRaised,
-        titleContentColor = OnionPalette.TextPrimary,
-        textContentColor = OnionPalette.TextMuted,
-        title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Image(
-                    painter = painterResource(R.drawable.ov_trap_mark),
-                    contentDescription = null,
-                    modifier = Modifier.size(26.dp),
-                )
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    text = "The keys of Trap",
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
-        },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 320.dp)
-                    .verticalScroll(rememberScrollState()),
-            ) {
-                if (keys.isEmpty()) {
-                    Text(
-                        text = "There is no key yet. A key is needed to decrypt a " +
-                            "message and to sign what is sent.",
-                        fontSize = 13.sp,
-                    )
-                }
-                keys.forEach { key ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = key.userId.ifEmpty { "the key of Trap" },
-                                color = OnionPalette.TextPrimary,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium,
+                when (field.kind) {
+                    "pgp_textarea", "textarea", "text_input", "editable" -> {
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            OvPgpPill(
+                                text = "Encrypt Field",
+                                kind = PgpPillKind.EncryptField,
+                                onClick = { onFieldAction(field) },
                             )
-                            Text(
-                                text = key.fingerprint,
-                                color = OnionPalette.TextMuted,
-                                fontSize = 10.sp,
-                                fontFamily = FontFamily.Monospace,
+                            OvPgpPill(
+                                text = "Insert My PubKey",
+                                kind = PgpPillKind.InsertPubKey,
+                                onClick = { onInsertMyPubKey(field) },
                             )
                         }
-                        Spacer(Modifier.width(8.dp))
-                        OvBadge(
-                            text = if (key.hasSecret) "secret" else "public",
-                            accent = if (key.hasSecret) OnionPalette.Good else OnionPalette.Amber,
+                    }
+
+                    "pgp_message" -> {
+                        OvPgpPill(
+                            text = "Decrypt Block",
+                            kind = PgpPillKind.DecryptBlock,
+                            onClick = { onFieldAction(field) },
                         )
-                        Spacer(Modifier.width(6.dp))
-                        OvIconButton(
-                            icon = painterResource(R.drawable.ic_ov_keys),
-                            contentDescription = "The public key of ${key.userId}",
-                            onClick = { onExport(key.fingerprint) },
-                            tint = OnionPalette.Teal,
-                            size = 32.dp,
-                        )
+                    }
+
+                    "pgp_public_key" -> {
+                        if (field.isEditablePubKeyTarget()) {
+                            OvPgpPill(
+                                text = "Insert My PubKey",
+                                kind = PgpPillKind.InsertPubKey,
+                                onClick = { onInsertMyPubKey(field) },
+                            )
+                        } else {
+                            OvPgpPill(
+                                text = "Import Key",
+                                kind = PgpPillKind.ImportKey,
+                                onClick = { onFieldAction(field) },
+                            )
+                        }
                     }
                 }
             }
-        },
-        confirmButton = {
-            OvPrimaryButton(
-                text = "New key",
-                onClick = onCreate,
-                icon = painterResource(R.drawable.ic_ov_new_key),
-            )
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Close", color = OnionPalette.TextMuted)
-            }
-        },
-    )
+        }
+    }
+}
+
+private val EDITABLE_FIELD_KINDS = setOf("pgp_textarea", "textarea", "text_input", "editable")
+
+private fun PgpFieldState.isEditablePubKeyTarget(): Boolean =
+    kind == "pgp_public_key" && label.equals("Insert My PubKey", ignoreCase = true)
+
+private fun PgpFieldState.isEditableTarget(): Boolean =
+    kind in EDITABLE_FIELD_KINDS || isEditablePubKeyTarget()
+
+private fun formatDisplayHost(url: String): String = try {
+    URI(url).host?.takeIf { it.isNotBlank() } ?: url
+} catch (_: Throwable) {
+    url
 }

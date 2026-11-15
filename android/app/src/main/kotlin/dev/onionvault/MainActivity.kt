@@ -3,125 +3,122 @@ package dev.onionvault
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
-import android.view.Choreographer
+import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.compose.setContent
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.biometric.BiometricManager
-import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.lifecycleScope
 import dev.onionvault.ui.BackPreviewState
 import dev.onionvault.ui.BrowserScreen
-import dev.onionvault.ui.OvCrashScreen
 import dev.onionvault.ui.BrowserUiState
-import dev.onionvault.ui.CircuitHop
-import dev.onionvault.ui.CircuitState
+import dev.onionvault.ui.ContextMenuUiState
+import dev.onionvault.ui.DecryptPassphraseRequestState
+import dev.onionvault.ui.EncryptRequestState
 import dev.onionvault.ui.KeyInfo
-import dev.onionvault.ui.OnionBackStackManager
+import dev.onionvault.ui.NormalizedBounds
+import dev.onionvault.ui.OvCrashScreen
 import dev.onionvault.ui.PgpFieldState
-import dev.onionvault.ui.PgpOverlayState
 import dev.onionvault.ui.PgpPlaintextState
+import dev.onionvault.ui.SelectionPgpUiState
+import dev.onionvault.ui.TabItemState
 import dev.onionvault.ui.TorBootstrapState
-import dev.onionvault.ui.parseFields
+import dev.onionvault.ui.TrapPreferences
+import dev.onionvault.ui.TrapTheme
+import dev.onionvault.ui.TrapThemeFamily
+import dev.onionvault.ui.TrapThemeMode
+import dev.onionvault.ui.isBlankOrStartUrl
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
 
 /**
- * The user interface of Trap.
+ * Primary browser activity for Trap.
  *
- * The activity owns
- *
- *   * the off-screen rendered page (a [OvSurfaceView] inside the Compose
- *     hierarchy),
- *   * the message pump of CEF (a [Choreographer] callback), and
- *   * the state of the screen, which is a pure value that the Compose
- *     screen renders.
- *
- * The back stack of the browser keeps the rendered frame and the state of
- * every visited page, so that the predictive back gesture does not have to
- * wait for the hidden service.
+ * Binds [BrowserScreen] and [OvCrashScreen] to:
+ *   1. [TabSessionManager] (ephemeral `CefriumProfile.incognito()` multi-tab sessions),
+ *   2. [CdpDomPgpController] (100% zero-JavaScript in-process CDP DOM OpenPGP scanner & mutator),
+ *   3. [OnionBackStackManager] (PixelCopy snapshot stack powering predictive-back gestures),
+ *   4. [OvNative] (Arti Tor SOCKS5/isolation client + Sequoia Keystore OpenPGP engine), and
+ *   5. [TrapPreferences] (persisted `SharedPreferences` backing every user setting).
  */
-class MainActivity : FragmentActivity(), OvBridge.Listener {
+class MainActivity : FragmentActivity() {
 
     private companion object {
         const val TAG = "Trap"
         const val STATE_URL = "url"
+        const val ZOOM_STEP_PERCENT = 15
 
-        /** One notch of the zoom of the browser. */
-        const val ZOOM_STEP = 0.25f
+        @Volatile
+        var nativeRuntimeInitialized: Boolean = false
 
-        /** The smallest zoom of the browser. */
-        const val MIN_ZOOM = -1.0f
-
-        /** The biggest zoom of the browser. */
-        const val MAX_ZOOM = 3.0f
+        fun isJvmUnitTestRuntime(): Boolean =
+            Build.FINGERPRINT.equals("robolectric", ignoreCase = true)
     }
 
-    /** The off-screen rendered page. */
-    private lateinit var surface: OvSurfaceView
+    private lateinit var prefs: TrapPreferences
+    private val backStackManager = OnionBackStackManager()
+    private lateinit var cdpController: CdpDomPgpController
+    private lateinit var tabSessionManager: TabSessionManager
+    private var controllersReady: Boolean = false
 
-    /** The back stack of the browser. */
-    private val backStack = OnionBackStackManager()
+    private var torPollingJob: Job? = null
+    private var stateSyncJob: Job? = null
 
-    /** The state of the screen. */
+    /** Navigation queued while Arti is still binding its local 127.0.0.1 SOCKS5 port. */
+    private var deferredNavigationUntilSocks: Pair<String, String>? = null
+
+    /** Cached snapshot actively displayed after back navigation until live reload completes. */
+    private var activeSnapshotView: BackPreviewState? = null
+
     private var uiState by mutableStateOf(BrowserUiState())
-
-    /**
-     * The trace of the crash that stopped the application, if there is one.
-     *
-     * The trace is shown instead of the browser; the user can copy it or
-     * try again.
-     */
     private var crashReport by mutableStateOf<String?>(null)
-
-    /** The message pump of CEF. */
-    private val frameCallback: Choreographer.FrameCallback = Choreographer.FrameCallback {
-        OvNative.nativeDoMessageLoopWork()
-        if (!isFinishing) {
-            Choreographer.getInstance().postFrameCallback(frameCallback)
-        }
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        OvBridge.setListener(this)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
 
-        // The native library has to be in the process before any of its
-        // functions is called; the loader throws an `UnsatisfiedLinkError`
-        // otherwise.  The load is inside the guard, so that a failure to
-        // load it is reported like any other error: the trace is shown on
-        // the next start instead of the application dying silently.
-        try {
-            OvNative.load()
-        } catch (error: Throwable) {
-            Log.e(TAG, "the native library of Trap could not be loaded", error)
-            CrashGuard.record(this, error)
-            crashReport = CrashGuard.pending(this)
-        }
+        prefs = TrapPreferences(this)
+        applySystemBarsAppearance(prefs.themeMode)
 
-        // The trace of the crash that stopped the application last time.
+        uiState = BrowserUiState(
+            hiddenServiceOnly = prefs.hiddenServiceOnly,
+            requireBiometric = prefs.requireBiometric,
+            zoomPercent = prefs.defaultZoomPercent,
+            defaultZoomPercent = prefs.defaultZoomPercent,
+            defaultKeyFingerprint = prefs.defaultKeyFingerprint,
+            themeFamily = prefs.themeFamily,
+            themeMode = prefs.themeMode,
+        )
+
+        crashReport = CrashReporter.pendingReport(this)
         if (crashReport == null) {
-            crashReport = CrashGuard.pending(this)
-        }
-
-        if (crashReport == null) {
-            startEngine()
+            val initialUrl = resolveInitialUrl(savedInstanceState, intent)
+            startEngineAndSessions(initialUrl)
         }
 
         setContent {
-            // The licences that travel with the application are shown by the
-            // button of the licences.  They are measured on a worker thread:
-            // the notice of the engine is 2.2 MiB long.
             LaunchedEffect(Unit) {
                 val documents = withContext(Dispatchers.IO) {
                     LegalNotices.list(this@MainActivity)
@@ -131,131 +128,158 @@ class MainActivity : FragmentActivity(), OvBridge.Listener {
 
             val report = crashReport
             if (report != null) {
-                OvCrashScreen(
-                    report = report,
-                    onCopy = { copyToClipboard(report) },
-                    onRetry = { retry() },
-                )
+                TrapTheme(
+                    family = uiState.themeFamily,
+                    mode = uiState.themeMode,
+                ) {
+                    OvCrashScreen(
+                        report = report,
+                        onCopy = {
+                            copyToClipboard(
+                                label = "Trap Crash Trace",
+                                text = report,
+                                toastMessage = getString(R.string.crash_copied),
+                            )
+                        },
+                        onRetry = { retryAfterCrash() },
+                    )
+                }
                 return@setContent
             }
 
             BrowserScreen(
                 state = uiState,
                 onNavigate = { navigate(it) },
-                onFieldAction = { onFieldAction(it) },
-                onInsertPlaintext = { insertPlaintext(it) },
+                onFieldAction = { handleFieldAction(it) },
+                onInsertMyPubKey = { insertOwnPublicKey(it) },
+                onConfirmEncrypt = { request, plaintext, recipientFp, signerFp, passphrase ->
+                    confirmEncrypt(request, plaintext, recipientFp, signerFp, passphrase)
+                },
+                onDismissEncrypt = {
+                    uiState = uiState.copy(
+                        pgp = uiState.pgp.copy(encryptRequest = null, error = null),
+                    )
+                },
+                onSubmitDecryptPassphrase = { request, passphrase ->
+                    attemptDecrypt(
+                        armoredCiphertext = request.armoredCiphertext,
+                        passphrase = passphrase,
+                        nodeId = request.nodeId,
+                        cdpNodeId = request.cdpNodeId,
+                        backendNodeId = request.backendNodeId,
+                        targetEditable = request.targetEditable,
+                    )
+                },
+                onDismissDecryptPassphrase = {
+                    uiState = uiState.copy(
+                        pgp = uiState.pgp.copy(decryptPassphraseRequest = null, error = null),
+                    )
+                },
+                onCopyPlaintext = { body ->
+                    copyToClipboard(
+                        label = "Decrypted Plaintext",
+                        text = body,
+                        toastMessage = "Plaintext copied to clipboard",
+                    )
+                },
+                onInsertPlaintext = { insertPlaintextIntoField(it) },
+                onDismissPlaintext = {
+                    uiState = uiState.copy(
+                        pgp = uiState.pgp.copy(plaintext = null),
+                    )
+                },
                 onReloadLive = { reloadLive() },
                 onBack = { goBack() },
                 onForward = { goForward() },
-                onReload = { reloadLive() },
-                onNewTab = { newTab() },
-                onHome = { home() },
-                onCreateKey = { createKey() },
-                onExportKey = { exportKey(it) },
-                onToggleRouting = { toggleRouting(it) },
-                onZoomIn = { zoom(1) },
-                onZoomOut = { zoom(-1) },
-                onLoadLegalLines = { name -> LegalNotices.read(this, name) },
-                surface = {
-                    AndroidView(
-                        factory = { context ->
-                            OvSurfaceView(context).also { view -> surface = view }
-                        },
-                        modifier = Modifier.fillMaxSize(),
+                onReload = { reloadCurrentOrStop() },
+                onNewTab = { createNewTab() },
+                onSelectTab = { selectTab(it) },
+                onCloseTab = { closeTab(it) },
+                onHome = { goHome() },
+                onGenerateKey = { userId, passphrase -> generateKey(userId, passphrase) },
+                onImportKey = { armored, passphrase -> importKey(armored, passphrase) },
+                onExportKey = { fp -> exportPublicKey(fp) },
+                onSetDefaultKey = { fp -> setDefaultKey(fp) },
+                onDeleteKey = { fp -> deleteKey(fp) },
+                onToggleRouting = { enabled -> toggleHiddenServiceOnly(enabled) },
+                onToggleRequireBiometric = { required -> toggleRequireBiometric(required) },
+                onResetTorIsolation = { resetTorIsolationAndIdentity() },
+                onSelectThemeFamily = { family -> updateThemeFamily(family) },
+                onSelectThemeMode = { mode -> updateThemeMode(mode) },
+                onSelectDefaultZoom = { zoomPct -> updateDefaultZoom(zoomPct) },
+                onClearSession = { clearEphemeralSession() },
+                onZoomIn = { stepZoom(ZOOM_STEP_PERCENT) },
+                onZoomOut = { stepZoom(-ZOOM_STEP_PERCENT) },
+                onDismissStatus = { clearStatusAndPgpError() },
+                onContextMenuOpenNewTab = { targetUrl ->
+                    dismissContextMenu()
+                    createNewTab(targetUrl)
+                },
+                onContextMenuOpenCurrentTab = { targetUrl ->
+                    dismissContextMenu()
+                    navigate(targetUrl)
+                },
+                onCopyText = { text ->
+                    copyToClipboard(
+                        label = "Trap Copy",
+                        text = text,
+                        toastMessage = "Copied to clipboard",
                     )
+                },
+                onDecryptArmoredText = { armored ->
+                    dismissContextMenu()
+                    dismissSelectionPgp()
+                    attemptDecrypt(
+                        armoredCiphertext = armored,
+                        passphrase = "",
+                        nodeId = "selection",
+                        cdpNodeId = 0,
+                        backendNodeId = 0,
+                        targetEditable = false,
+                    )
+                },
+                onEncryptSelectedText = { selected ->
+                    dismissContextMenu()
+                    dismissSelectionPgp()
+                    uiState = uiState.copy(
+                        pgp = uiState.pgp.copy(
+                            encryptRequest = EncryptRequestState(
+                                nodeId = "selection",
+                                cdpNodeId = 0,
+                                backendNodeId = 0,
+                                initialText = selected,
+                                writeBackToField = false,
+                            ),
+                            error = null,
+                        ),
+                    )
+                },
+                onDismissContextMenu = { dismissContextMenu() },
+                onDismissSelectionPgp = { dismissSelectionPgp() },
+                onOverlayOpenChanged = { open ->
+                    if (controllersReady) {
+                        tabSessionManager.setTouchSuppressed(open)
+                    }
+                },
+                onLoadLegalLines = { name ->
+                    withContext(Dispatchers.IO) {
+                        LegalNotices.read(this@MainActivity, name)
+                    }
+                },
+                surface = {
+                    ActiveBrowserSurfaceHost(activeTabId = uiState.activeTabId)
                 },
             )
         }
+    }
 
-        // The page that was shown before the activity was destroyed.
-        val start = savedInstanceState?.getString(STATE_URL)
-        if (start != null) {
-            navigate(start)
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val viewUrl = intent.takeIf { it.action == Intent.ACTION_VIEW }?.dataString?.trim()
+        if (!viewUrl.isNullOrEmpty() && crashReport == null && controllersReady) {
+            createNewTab(viewUrl)
         }
-    }
-
-    /**
-     * Start the engine of the browser.
-     *
-     * The Java half of the engine (the Chromium base of Android) has to be
-     * ready before the native half is initialized; the resources of the
-     * engine are unpacked from the assets of the APK.
-     *
-     * When anything goes wrong the error is written into the private
-     * directory of the application and the screen of the crash is shown:
-     * the application never dies silently.
-     */
-    private fun startEngine() {
-        try {
-            // The engine has to be ready before the native side is
-            // initialized.  The application object already did that when it
-            // was created; the call here makes the order explicit and covers
-            // the case where the activity is the first thing that runs.
-            if (!CefRuntime.prepare(this)) {
-                throw IllegalStateException("the engine refused to start")
-            }
-
-            // The resource files of the engine live inside the APK, where
-            // the bundle put them; Chromium maps them from there.
-
-            val started = OvNative.nativeInit(
-                filesDir.absolutePath,
-                cacheDir.absolutePath,
-                hiddenServiceOnlyMode(),
-                requireUserAuthentication(),
-            )
-            if (!started) {
-                throw IllegalStateException("the engine of the browser refused to start")
-            }
-        } catch (error: Throwable) {
-            Log.e(TAG, "the engine of the browser could not be started", error)
-            CrashGuard.record(this, error)
-            crashReport = CrashGuard.pending(this)
-            return
-        }
-
-        onEngineStarted()
-    }
-
-    /** The interface is shown once the engine is running. */
-    private fun onEngineStarted() {
-        // The keys of the keyring are shown by the key manager.
-        refreshKeys()
-
-        // The traffic policy of the browser is the one of the preferences.
-        uiState = uiState.copy(hiddenServiceOnly = hiddenServiceOnlyMode())
-
-        // The first page: the start page of the application.
-        navigate(getString(R.string.start_url))
-    }
-
-    /**
-     * Forget the crash and start the browser again.
-     *
-     * The report is deleted, so that a crash that happens again is written
-     * anew.
-     */
-    private fun retry() {
-        CrashGuard.clear(this)
-        crashReport = null
-        startEngine()
-    }
-
-    /** Copy the trace of the crash into the clipboard. */
-    private fun copyToClipboard(report: String) {
-        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-        clipboard?.setPrimaryClip(ClipData.newPlainText("Trap", report))
-        Toast.makeText(this, R.string.crash_copied, Toast.LENGTH_SHORT).show()
-    }
-
-    override fun onResume() {
-        super.onResume()
-        Choreographer.getInstance().postFrameCallback(frameCallback)
-    }
-
-    override fun onPause() {
-        Choreographer.getInstance().removeFrameCallback(frameCallback)
-        super.onPause()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -264,354 +288,1135 @@ class MainActivity : FragmentActivity(), OvBridge.Listener {
     }
 
     override fun onDestroy() {
-        OvBridge.setListener(null)
-        OvNative.nativeShutdown()
+        torPollingJob?.cancel()
+        stateSyncJob?.cancel()
+        if (controllersReady) {
+            tabSessionManager.destroyAll()
+        }
+        if (isFinishing && OvNative.isLoaded && nativeRuntimeInitialized) {
+            nativeRuntimeInitialized = false
+            runCatching { OvNative.nativeShutdown() }
+        }
         super.onDestroy()
     }
 
-    /** Navigate to `url`. */
-    private fun navigate(url: String) {
-        val target = url.trim()
-        if (target.isEmpty()) {
-            return
-        }
-        // A bare host name is a hidden service.
-        val normalized = if (target.contains("://")) target else "http://$target"
-        OvNative.nativeLoadUrl(normalized)
-    }
-
-    /** Fetch the page again over Tor. */
-    private fun reloadLive() {
-        val url = uiState.url
-        if (url.isNotEmpty()) {
-            OvNative.nativeLoadUrl(url)
-        }
-    }
-
-    /**
-     * Go back to the previous page.
-     *
-     * The frame of the previous page is already on the screen (the gesture
-     * showed it), so the latency of the hidden service is hidden behind the
-     * preview.
-     */
-    private fun goBack() {
-        OvNative.nativeGoBack()
-        backStack.refresh()
-        uiState = uiState.copy(
-            canGoBack = backStack.canGoBack,
-            backPreview = backStack.previewState(),
+    @Composable
+    private fun ActiveBrowserSurfaceHost(activeTabId: String) {
+        AndroidView(
+            factory = { ctx ->
+                FrameLayout(ctx).apply {
+                    layoutParams = ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    )
+                }
+            },
+            update = { hostFrame ->
+                val targetSurface = if (controllersReady) {
+                    tabSessionManager.surfaceContainerFor(activeTabId)
+                } else {
+                    null
+                }
+                val currentChild = if (hostFrame.childCount > 0) hostFrame.getChildAt(0) else null
+                if (currentChild !== targetSurface) {
+                    hostFrame.removeAllViews()
+                    if (targetSurface != null) {
+                        (targetSurface.parent as? ViewGroup)?.removeView(targetSurface)
+                        hostFrame.addView(
+                            targetSurface,
+                            FrameLayout.LayoutParams(
+                                FrameLayout.LayoutParams.MATCH_PARENT,
+                                FrameLayout.LayoutParams.MATCH_PARENT,
+                            ),
+                        )
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxSize(),
         )
     }
 
-    /** Go forward to the next page of the history. */
-    private fun goForward() {
-        if (OvNative.nativeGoForward()) {
-            backStack.refresh()
+    private fun startEngineAndSessions(initialUrl: String) {
+        if (!isJvmUnitTestRuntime()) {
+            try {
+                OvNative.load()
+                TrapApplication.nativeLoadError?.let { loadErr ->
+                    throw IllegalStateException(loadErr)
+                }
+                TrapApplication.engineInitError?.let { engineErr ->
+                    throw IllegalStateException(engineErr)
+                }
+                if (!nativeRuntimeInitialized) {
+                    val started = OvNative.nativeInit(
+                        filesDir.absolutePath,
+                        cacheDir.absolutePath,
+                        prefs.hiddenServiceOnly,
+                    )
+                    if (!started) {
+                        val reason = runCatching { OvNative.nativeLastInitError() }
+                            .getOrNull()
+                            ?.takeIf { it.isNotBlank() }
+                            ?: "Native runtime initialization failed"
+                        throw IllegalStateException(reason)
+                    }
+                    nativeRuntimeInitialized = true
+                }
+                val bioApplied = OvNative.nativeSetRequireBiometric(prefs.requireBiometric)
+                if (!bioApplied && prefs.requireBiometric) {
+                    prefs.requireBiometric = false
+                    uiState = uiState.copy(requireBiometric = false)
+                } else {
+                    val actualBio = runCatching { OvNative.nativeGetRequireBiometric() }
+                        .getOrDefault(prefs.requireBiometric)
+                    uiState = uiState.copy(requireBiometric = actualBio)
+                }
+            } catch (error: Throwable) {
+                Log.e(TAG, "Trap startup failed", error)
+                CrashReporter.record(this, error)
+                crashReport = CrashReporter.pendingReport(this) ?: error.stackTraceToString()
+                return
+            }
+        }
+
+        ensureControllersInitialized(initialUrl)
+        refreshKeys()
+        startTorPolling()
+    }
+
+    private fun ensureControllersInitialized(initialUrl: String) {
+        if (!controllersReady) {
+            cdpController = CdpDomPgpController(
+                onNodesDetected = { tabId, _, domHtml, _ ->
+                    if (controllersReady) {
+                        tabSessionManager.recordTabDomHtml(tabId, domHtml)
+                    }
+                },
+            )
+            tabSessionManager = TabSessionManager(
+                context = this,
+                cdpController = cdpController,
+                backStackManager = backStackManager,
+                initialHiddenServiceOnly = prefs.hiddenServiceOnly,
+                onContextMenu = { target -> handleContextMenu(target) },
+                onSelectionPgpAction = { action -> handleSelectionPgpAction(action) },
+                onUrlBlocked = { _, blockedUrl, reason ->
+                    showStatus("$reason ($blockedUrl)", blocked = true)
+                },
+                onSecurityNotice = { notice ->
+                    showStatus(notice, blocked = false)
+                },
+            )
+            controllersReady = true
+            startControllerStateSync()
+        }
+
+        if (OvNative.isLoaded) {
+            val initialSocks = runCatching { OvNative.nativeSocksProxy() }.getOrDefault("").trim()
+            if (initialSocks.isNotBlank()) {
+                tabSessionManager.updateTorSocksProxy(initialSocks)
+            }
+        }
+
+        val startTarget = initialUrl.trim().ifEmpty { getString(R.string.start_url) }
+        val tabId = tabSessionManager.ensureInitialTab(
+            if (isBlankOrStartUrl(startTarget)) "about:blank" else "about:blank",
+        )
+        if (prefs.defaultZoomPercent != 100) {
+            tabSessionManager.setZoomPercent(prefs.defaultZoomPercent, tabId)
+        }
+        if (!isBlankOrStartUrl(startTarget)) {
+            navigate(startTarget, tabId)
+        }
+    }
+
+    private fun startControllerStateSync() {
+        stateSyncJob?.cancel()
+        stateSyncJob = lifecycleScope.launch {
+            combine(
+                tabSessionManager.tabs,
+                tabSessionManager.activeTabId,
+                cdpController.activeNodes,
+                backStackManager.revision,
+            ) { tabs, activeId, nodesByTab, _ ->
+                ControllerSnapshot(
+                    tabs = tabs,
+                    activeTabId = activeId,
+                    nodesByTab = nodesByTab,
+                )
+            }.collect { snapshot ->
+                val activeTab = snapshot.tabs.firstOrNull { it.id == snapshot.activeTabId }
+                    ?: snapshot.tabs.firstOrNull()
+                val effectiveActiveId = activeTab?.id ?: uiState.activeTabId
+
+                val tabItems = if (snapshot.tabs.isEmpty()) {
+                    listOf(
+                        TabItemState(
+                            id = effectiveActiveId,
+                            title = "Trap Start",
+                            url = "about:blank",
+                            isActive = true,
+                        ),
+                    )
+                } else {
+                    snapshot.tabs.map { tab ->
+                        TabItemState(
+                            id = tab.id,
+                            title = tab.title.ifBlank {
+                                if (isBlankOrStartUrl(tab.url)) "Trap Start" else tab.url
+                            },
+                            url = tab.url,
+                            isActive = tab.id == effectiveActiveId,
+                            isLoading = tab.isLoading,
+                            isOnion = tab.isOnion,
+                        )
+                    }
+                }
+
+                val liveNodes = if (activeTab != null) {
+                    snapshot.nodesByTab[activeTab.id].orEmpty().map { it.toPgpFieldState() }
+                } else {
+                    emptyList()
+                }
+
+                // Clear cached snapshot overlay once live navigation finishes loading.
+                if (activeSnapshotView != null && activeTab != null && !activeTab.isLoading) {
+                    activeSnapshotView = null
+                }
+
+                val previousEntry = if (activeTab != null) {
+                    backStackManager.previousForUrl(activeTab.id, activeTab.url)
+                } else {
+                    null
+                }
+                val computedPreview = activeSnapshotView ?: previousEntry?.toBackPreviewState()
+                val canNavigateBack = (activeTab?.canGoBack == true) || (previousEntry != null)
+
+                uiState = uiState.copy(
+                    url = activeTab?.url ?: "about:blank",
+                    title = activeTab?.title.orEmpty(),
+                    isLoading = activeTab?.isLoading == true,
+                    loadProgress = activeTab?.loadProgress ?: 0,
+                    canGoBack = canNavigateBack,
+                    canGoForward = activeTab?.canGoForward == true,
+                    viewingSnapshot = activeSnapshotView != null,
+                    backPreview = computedPreview,
+                    tabs = tabItems,
+                    activeTabId = effectiveActiveId,
+                    zoomPercent = activeTab?.zoomPercent ?: prefs.defaultZoomPercent,
+                    pgp = uiState.pgp.copy(fields = liveNodes),
+                )
+            }
+        }
+    }
+
+    private fun startTorPolling() {
+        torPollingJob?.cancel()
+        if (!OvNative.isLoaded) return
+        torPollingJob = lifecycleScope.launch {
+            while (isActive) {
+                pollTorStatusOnce()
+                val readyWithSocks = uiState.tor.ready && uiState.tor.socksAddr.isNotBlank()
+                delay(if (readyWithSocks) 2_000L else 600L)
+            }
+        }
+    }
+
+    private fun refreshTorStatusNow() {
+        if (!OvNative.isLoaded) return
+        lifecycleScope.launch {
+            pollTorStatusOnce()
+        }
+    }
+
+    private suspend fun pollTorStatusOnce() {
+        if (!OvNative.isLoaded) return
+        val currentUrl = uiState.url
+        val snapshot = withContext(Dispatchers.IO) {
+            val json = runCatching { OvNative.nativeTorStatusJson(currentUrl) }.getOrDefault("")
+            val parsed = OvNative.parseTorStatus(json)
+            val resolvedSocks = if (parsed.socksAddr.isBlank()) {
+                runCatching { OvNative.nativeSocksProxy() }.getOrDefault("")
+            } else {
+                parsed.socksAddr
+            }
+            parsed.copy(socksAddr = resolvedSocks.trim())
+        }
+
+        if (snapshot.socksAddr.isNotBlank() && controllersReady) {
+            tabSessionManager.updateTorSocksProxy(snapshot.socksAddr)
+            val queued = deferredNavigationUntilSocks
+            if (queued != null) {
+                deferredNavigationUntilSocks = null
+                val decision = tabSessionManager.loadUrl(queued.second, queued.first)
+                if (decision.allowed) {
+                    clearStatusAndPgpError()
+                }
+            }
+        }
+
+        uiState = uiState.copy(
+            tor = TorBootstrapState(
+                percent = snapshot.bootstrapPercent.coerceIn(0, 100),
+                stage = snapshot.bootstrapSummary,
+                ready = snapshot.bootstrapped,
+                socksAddr = snapshot.socksAddr,
+                isolationToken = snapshot.isolationToken.takeIf { it.isNotBlank() },
+                isolatedGroupCount = snapshot.isolatedGroupCount.coerceAtLeast(0),
+            ),
+            hiddenServiceOnly = snapshot.hiddenServiceOnly,
+        )
+    }
+
+    private fun retryAfterCrash() {
+        CrashReporter.clear(this)
+        crashReport = null
+        startEngineAndSessions(getString(R.string.start_url))
+    }
+
+    private fun navigate(rawInput: String, targetTabId: String? = null) {
+        if (!controllersReady) return
+        val trimmed = rawInput.trim()
+        if (trimmed.isEmpty()) return
+
+        activeSnapshotView = null
+        clearStatusAndPgpError()
+
+        val effectiveTabId = targetTabId ?: tabSessionManager.activeTabId.value
+            ?: tabSessionManager.ensureInitialTab()
+        val decision = tabSessionManager.loadUrl(trimmed, effectiveTabId)
+        if (!decision.allowed &&
+            decision.normalizedUrl.isNotBlank() &&
+            decision.normalizedUrl != "about:blank" &&
+            tabSessionManager.activeSocksAddr.value.isBlank()
+        ) {
+            deferredNavigationUntilSocks = effectiveTabId to decision.normalizedUrl
+        }
+        refreshTorStatusNow()
+    }
+
+    private fun reloadCurrentOrStop() {
+        if (!controllersReady) return
+        val active = tabSessionManager.activeTab() ?: return
+        if (active.isLoading) {
+            tabSessionManager.stopLoading(active.id)
+        } else {
+            reloadLive()
+        }
+    }
+
+    private fun reloadLive() {
+        if (!controllersReady) return
+        val active = tabSessionManager.activeTab() ?: return
+        val snapshotTarget = activeSnapshotView?.url
+        activeSnapshotView = null
+        uiState = uiState.copy(viewingSnapshot = false)
+        if (!snapshotTarget.isNullOrBlank() && snapshotTarget != active.url) {
+            navigate(snapshotTarget, active.id)
+        } else if (!isBlankOrStartUrl(active.url)) {
+            tabSessionManager.reload(active.id)
+            refreshTorStatusNow()
+        }
+    }
+
+    private fun goBack() {
+        if (!controllersReady) return
+        val active = tabSessionManager.activeTab() ?: return
+        val cachedPrev = backStackManager.previousForUrl(active.id, active.url)
+        val navigated = tabSessionManager.goBack(active.id)
+        if (navigated) {
+            if (cachedPrev != null) {
+                activeSnapshotView = cachedPrev.toBackPreviewState()
+                uiState = uiState.copy(
+                    viewingSnapshot = true,
+                    backPreview = activeSnapshotView,
+                )
+            }
+            refreshTorStatusNow()
+        } else if (cachedPrev != null) {
+            backStackManager.popNewest(active.id)
+            activeSnapshotView = cachedPrev.toBackPreviewState()
             uiState = uiState.copy(
-                canGoBack = backStack.canGoBack,
-                backPreview = backStack.previewState(),
+                url = cachedPrev.url,
+                title = cachedPrev.title,
+                viewingSnapshot = true,
+                backPreview = activeSnapshotView,
             )
         }
     }
 
-    /** Open the start page in a new tab. */
-    private fun newTab() {
-        navigate(getString(R.string.start_url))
+    private fun goForward() {
+        if (!controllersReady) return
+        activeSnapshotView = null
+        if (tabSessionManager.goForward()) {
+            refreshTorStatusNow()
+        }
     }
 
-    /** Go back to the start page of the browser. */
-    private fun home() {
-        navigate(getString(R.string.start_url))
+    private fun createNewTab(initialUrl: String = "about:blank") {
+        if (!controllersReady) return
+        activeSnapshotView = null
+        val tabId = tabSessionManager.createTab(initialUrl = "about:blank", select = true)
+        if (prefs.defaultZoomPercent != 100) {
+            tabSessionManager.setZoomPercent(prefs.defaultZoomPercent, tabId)
+        }
+        if (!isBlankOrStartUrl(initialUrl)) {
+            navigate(initialUrl, tabId)
+        }
     }
 
-    /**
-     * Change the traffic policy of the browser.
-     *
-     * The policy is shared with the request handlers and with the SOCKS5
-     * listener of the Tor client, so the change is effective at once: the
-     * next request of the page is checked against the new policy.
-     */
-    private fun toggleRouting(hiddenServiceOnly: Boolean) {
-        OvNative.nativeSetHiddenServiceOnly(hiddenServiceOnly)
-        getPreferences(MODE_PRIVATE)
-            .edit()
-            .putBoolean("hidden_service_only", hiddenServiceOnly)
-            .apply()
-        uiState = uiState.copy(hiddenServiceOnly = hiddenServiceOnly)
-        Toast.makeText(
-            this,
-            if (hiddenServiceOnly) {
+    private fun selectTab(tabId: String) {
+        if (!controllersReady) return
+        activeSnapshotView = null
+        tabSessionManager.selectTab(tabId)
+        refreshTorStatusNow()
+    }
+
+    private fun closeTab(tabId: String) {
+        if (!controllersReady) return
+        activeSnapshotView = null
+        tabSessionManager.closeTab(tabId)
+        refreshTorStatusNow()
+    }
+
+    private fun goHome() {
+        navigate("about:blank")
+    }
+
+    private fun stepZoom(deltaPercent: Int) {
+        if (!controllersReady) return
+        val updated = tabSessionManager.stepZoom(deltaPercent)
+        uiState = uiState.copy(zoomPercent = updated)
+    }
+
+    private fun toggleHiddenServiceOnly(enabled: Boolean) {
+        prefs.hiddenServiceOnly = enabled
+        if (controllersReady) {
+            tabSessionManager.setHiddenServiceOnly(enabled)
+        } else if (OvNative.isLoaded) {
+            runCatching { OvNative.nativeSetHiddenServiceOnly(enabled) }
+        }
+        uiState = uiState.copy(
+            hiddenServiceOnly = enabled,
+            blocked = false,
+            status = if (enabled) {
                 getString(R.string.hidden_service_only_on)
             } else {
                 getString(R.string.hidden_service_only_off)
             },
-            Toast.LENGTH_SHORT,
-        ).show()
-    }
-
-    /**
-     * Change the zoom of the page.
-     *
-     * The level is the one of CEF: every notch is a quarter of a step, and
-     * the level of the browser is kept between two pages.
-     *
-     * @param direction `1` zooms in, `-1` zooms out.
-     */
-    private fun zoom(direction: Int) {
-        val level = (uiState.zoomLevel + direction * ZOOM_STEP).coerceIn(MIN_ZOOM, MAX_ZOOM)
-        OvNative.nativeSetZoom(level.toDouble())
-        uiState = uiState.copy(zoomLevel = level)
-    }
-
-    /**
-     * Create a new key pair in the keyring.
-     *
-     * The user id carries a short suffix, so that two keys of the same
-     * device can be told apart.
-     */
-    private fun createKey() {
-        if (requireUserAuthentication()) {
-            confirmWithBiometrics(getString(R.string.authenticate_for_key)) {
-                generateKey()
-            }
-            return
-        }
-        generateKey()
-    }
-
-    /** Generate the key and tell the user its fingerprint. */
-    private fun generateKey() {
-        val suffix = java.util.UUID.randomUUID().toString().take(8)
-        val fingerprint = OvNative.nativeGenerateKey("Trap <$suffix@example.onion>")
-        if (fingerprint.isNullOrEmpty()) {
-            showError(getString(R.string.key_failed))
-            return
-        }
-        refreshKeys()
-        Toast.makeText(
-            this,
-            getString(R.string.key_created, fingerprint.takeLast(16)),
-            Toast.LENGTH_LONG,
-        ).show()
-    }
-
-    /** Copy the public key of a certificate into the clipboard. */
-    private fun exportKey(fingerprint: String) {
-        val armored = OvNative.nativeExportPublicKey(fingerprint)
-        if (armored.isNullOrEmpty()) {
-            showError(getString(R.string.key_failed))
-            return
-        }
-        val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
-        clipboard.setPrimaryClip(
-            android.content.ClipData.newPlainText("Trap public key", armored),
         )
-        Toast.makeText(this, getString(R.string.key_copied), Toast.LENGTH_SHORT).show()
+        refreshTorStatusNow()
     }
 
-    /** Read the keys of the keyring into the state of the screen. */
-    private fun refreshKeys() {
-        val json = OvNative.nativeListKeys() ?: return
-        val keys = try {
-            val array = JSONObject(json).optJSONArray("keys") ?: return
-            (0 until array.length()).mapNotNull { index ->
-                val entry = array.optJSONObject(index) ?: return@mapNotNull null
-                KeyInfo(
-                    fingerprint = entry.optString("fingerprint", ""),
-                    userId = entry.optString("userId", ""),
-                    hasSecret = entry.optBoolean("hasSecret", false),
+    private fun toggleRequireBiometric(required: Boolean) {
+        if (!OvNative.isLoaded) {
+            prefs.requireBiometric = required
+            uiState = uiState.copy(requireBiometric = required)
+            return
+        }
+
+        val applyNativeToggle = {
+            lifecycleScope.launch {
+                val (ok, actual) = withContext(Dispatchers.IO) {
+                    val setOk = runCatching { OvNative.nativeSetRequireBiometric(required) }.getOrDefault(false)
+                    val current = runCatching { OvNative.nativeGetRequireBiometric() }.getOrDefault(false)
+                    setOk to current
+                }
+                prefs.requireBiometric = actual
+                uiState = uiState.copy(
+                    requireBiometric = actual,
+                    status = if (!ok && required) {
+                        "Hardware biometric key lock could not be enabled on this device."
+                    } else if (actual) {
+                        "Biometric / device unlock required for secret-key operations."
+                    } else {
+                        "Biometric / device unlock requirement disabled."
+                    },
+                    blocked = false,
                 )
             }
-        } catch (error: Throwable) {
-            Log.w(TAG, "cannot read the key list", error)
-            return
         }
-        uiState = uiState.copy(keys = keys)
+
+        if (!isJvmUnitTestRuntime() && (required || uiState.requireBiometric)) {
+            val authenticators = BiometricManager.Authenticators.BIOMETRIC_STRONG or
+                BiometricManager.Authenticators.DEVICE_CREDENTIAL
+            val authStatus = BiometricManager.from(this).canAuthenticate(authenticators)
+            if (authStatus != BiometricManager.BIOMETRIC_SUCCESS) {
+                showStatus(
+                    "Configure a screen lock or biometric credential in Android Settings first.",
+                    blocked = false,
+                )
+                return
+            }
+
+            val prompt = BiometricPrompt(
+                this,
+                ContextCompat.getMainExecutor(this),
+                object : BiometricPrompt.AuthenticationCallback() {
+                    override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                        applyNativeToggle()
+                    }
+
+                    override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                        showStatus(errString.toString(), blocked = false)
+                    }
+                },
+            )
+            val promptInfo = BiometricPrompt.PromptInfo.Builder()
+                .setTitle(getString(R.string.authenticate_for_key))
+                .setSubtitle(
+                    if (required) {
+                        "Authenticate to wrap secret keys with biometric protection"
+                    } else {
+                        "Authenticate to unlock secret keys and disable biometric lock"
+                    },
+                )
+                .setAllowedAuthenticators(authenticators)
+                .build()
+            prompt.authenticate(promptInfo)
+        } else {
+            applyNativeToggle()
+        }
     }
 
-    /** The user tapped a PGP action chip. */
-    private fun onFieldAction(field: PgpFieldState) {
-        // The complete armored text is needed to decrypt a message or to
-        // import a key; the engine sends it with the field.
-        val armored = field.armored.orEmpty()
-        when (field.kind) {
-            "pgp_message" -> {
-                if (armored.isEmpty()) {
-                    showError(getString(R.string.no_message))
-                    return
+    private fun resetTorIsolationAndIdentity() {
+        if (!controllersReady) return
+        activeSnapshotView = null
+        deferredNavigationUntilSocks = null
+        val clearedGroups = tabSessionManager.resetAllSessionsAndIdentity("about:blank")
+        val activeId = tabSessionManager.activeTabId.value
+        if (activeId != null && prefs.defaultZoomPercent != 100) {
+            tabSessionManager.setZoomPercent(prefs.defaultZoomPercent, activeId)
+        }
+        showStatus(
+            if (clearedGroups > 0) {
+                "Rotated Tor identity ($clearedGroups isolated circuit group(s) cleared)."
+            } else {
+                "Rotated Tor identity and reset ephemeral browser profile."
+            },
+            blocked = false,
+        )
+        refreshTorStatusNow()
+    }
+
+    private fun clearEphemeralSession() {
+        resetTorIsolationAndIdentity()
+    }
+
+    private fun updateThemeFamily(family: TrapThemeFamily) {
+        prefs.themeFamily = family
+        uiState = uiState.copy(themeFamily = family)
+    }
+
+    private fun updateThemeMode(mode: TrapThemeMode) {
+        prefs.themeMode = mode
+        applySystemBarsAppearance(mode)
+        uiState = uiState.copy(themeMode = mode)
+    }
+
+    private fun updateDefaultZoom(zoomPercent: Int) {
+        val clamped = zoomPercent.coerceIn(TrapPreferences.ZOOM_MIN, TrapPreferences.ZOOM_MAX)
+        prefs.defaultZoomPercent = clamped
+        if (controllersReady) {
+            tabSessionManager.setZoomPercent(clamped)
+        }
+        uiState = uiState.copy(
+            defaultZoomPercent = clamped,
+            zoomPercent = clamped,
+        )
+    }
+
+    private fun applySystemBarsAppearance(mode: TrapThemeMode) {
+        val lightBars = mode == TrapThemeMode.Light
+        runCatching {
+            val controller = WindowCompat.getInsetsController(window, window.decorView)
+            controller.isAppearanceLightStatusBars = lightBars
+            controller.isAppearanceLightNavigationBars = lightBars
+        }
+    }
+
+    // --- OpenPGP Keyring & Zero-JS CDP DOM Actions ---
+
+    private fun refreshKeys() {
+        if (!OvNative.isLoaded) return
+        lifecycleScope.launch {
+            val entries = withContext(Dispatchers.IO) {
+                val json = runCatching { OvNative.nativeListKeysJson() }.getOrDefault("")
+                OvNative.parseKeys(json)
+            }
+            val mapped = entries.map { entry ->
+                KeyInfo(
+                    fingerprint = entry.fingerprint,
+                    userId = entry.userId,
+                    hasSecret = entry.hasSecret,
+                    createdEpochSecs = entry.createdEpochSecs,
+                    canSign = entry.canSign,
+                    canEncrypt = entry.canEncrypt,
+                    isOwnKey = entry.isOwnKey,
+                )
+            }
+            val storedDefault = prefs.defaultKeyFingerprint
+            val resolvedDefault = when {
+                mapped.any { it.fingerprint == storedDefault && it.hasSecret } -> storedDefault
+                else -> mapped.firstOrNull { it.hasSecret }?.fingerprint.orEmpty().also {
+                    prefs.defaultKeyFingerprint = it
                 }
-                if (requireUserAuthentication()) {
-                    confirmWithBiometrics(getString(R.string.authenticate_for_key)) {
-                        OvNative.nativeDecryptNode(field.nodeId, armored)
+            }
+            uiState = uiState.copy(
+                keys = mapped,
+                defaultKeyFingerprint = resolvedDefault,
+            )
+        }
+    }
+
+    private fun generateKey(userId: String, passphrase: String) {
+        if (!OvNative.isLoaded) {
+            setPgpError("Native OpenPGP keyring is unavailable.")
+            return
+        }
+        val cleanUserId = userId.trim()
+        if (cleanUserId.isEmpty()) {
+            setPgpError("Enter a User ID before generating a key.")
+            return
+        }
+        withSecretKeyAuth(subtitle = "Unlock Keystore to wrap new OpenPGP secret key") {
+            lifecycleScope.launch {
+                val result = withContext(Dispatchers.IO) {
+                    val json = runCatching {
+                        OvNative.nativeGenerateKey(cleanUserId, passphrase)
+                    }.getOrDefault("")
+                    OvNative.parseGenerateKey(json)
+                }
+                if (result.ok && result.fingerprint.isNotBlank()) {
+                    if (prefs.defaultKeyFingerprint.isBlank()) {
+                        prefs.defaultKeyFingerprint = result.fingerprint
                     }
-                    return
+                    refreshKeys()
+                    showStatus("Generated OpenPGP key ${result.fingerprint.takeLast(8)}", blocked = false)
+                } else {
+                    setPgpError(result.error.ifBlank { "OpenPGP key generation failed." })
                 }
-                OvNative.nativeDecryptNode(field.nodeId, armored)
+            }
+        }
+    }
+
+    private fun importKey(armored: String, passphrase: String) {
+        if (!OvNative.isLoaded) {
+            setPgpError("Native OpenPGP keyring is unavailable.")
+            return
+        }
+        val trimmed = armored.trim()
+        if (trimmed.isEmpty()) {
+            setPgpError("Paste an ASCII-armored OpenPGP key block first.")
+            return
+        }
+        val executeImport = {
+            lifecycleScope.launch {
+                val result = withContext(Dispatchers.IO) {
+                    val json = runCatching {
+                        OvNative.nativeImportKey(trimmed, passphrase)
+                    }.getOrDefault("")
+                    OvNative.parseImportKey(json)
+                }
+                if (result.ok && result.fingerprint.isNotBlank()) {
+                    if (result.hasSecret && prefs.defaultKeyFingerprint.isBlank()) {
+                        prefs.defaultKeyFingerprint = result.fingerprint
+                    }
+                    refreshKeys()
+                    val label = result.userId.ifBlank { result.fingerprint.takeLast(8) }
+                    showStatus("Imported OpenPGP key ($label)", blocked = false)
+                } else {
+                    setPgpError(result.error.ifBlank { "OpenPGP key import failed." })
+                }
+            }
+        }
+
+        if (trimmed.contains("PRIVATE KEY", ignoreCase = true)) {
+            withSecretKeyAuth(subtitle = "Unlock Keystore to import OpenPGP secret key") {
+                executeImport()
+            }
+        } else {
+            executeImport()
+        }
+    }
+
+    private fun exportPublicKey(fingerprint: String) {
+        if (!OvNative.isLoaded) {
+            setPgpError("Native OpenPGP keyring is unavailable.")
+            return
+        }
+        lifecycleScope.launch {
+            val armored = withContext(Dispatchers.IO) {
+                runCatching { OvNative.nativeExportPublicKey(fingerprint) }.getOrDefault("")
+            }
+            if (armored.isNotBlank()) {
+                copyToClipboard(
+                    label = "OpenPGP Public Key",
+                    text = armored,
+                    toastMessage = getString(R.string.key_copied),
+                )
+            } else {
+                setPgpError("Could not export public key for ${fingerprint.takeLast(8)}.")
+            }
+        }
+    }
+
+    private fun setDefaultKey(fingerprint: String) {
+        prefs.defaultKeyFingerprint = fingerprint
+        uiState = uiState.copy(
+            defaultKeyFingerprint = fingerprint,
+            status = "Default key set to ${fingerprint.takeLast(8)}",
+            blocked = false,
+        )
+    }
+
+    private fun deleteKey(fingerprint: String) {
+        if (!OvNative.isLoaded) return
+        lifecycleScope.launch {
+            val deleted = withContext(Dispatchers.IO) {
+                runCatching { OvNative.nativeDeleteKey(fingerprint) }.getOrDefault(false)
+            }
+            if (deleted) {
+                if (prefs.defaultKeyFingerprint == fingerprint) {
+                    prefs.defaultKeyFingerprint = ""
+                }
+                refreshKeys()
+                showStatus("Deleted key ${fingerprint.takeLast(8)}", blocked = false)
+            } else {
+                setPgpError("Could not delete key ${fingerprint.takeLast(8)}.")
+            }
+        }
+    }
+
+    private fun handleFieldAction(field: PgpFieldState) {
+        when (field.kind) {
+            "pgp_textarea", "textarea", "text_input", "editable" -> {
+                uiState = uiState.copy(
+                    pgp = uiState.pgp.copy(
+                        encryptRequest = EncryptRequestState(
+                            nodeId = field.nodeId,
+                            cdpNodeId = field.cdpNodeId,
+                            backendNodeId = field.backendNodeId,
+                            initialText = field.armored ?: field.preview,
+                            writeBackToField = true,
+                        ),
+                        error = null,
+                    ),
+                )
+            }
+
+            "pgp_message" -> {
+                val ciphertext = field.armored?.takeIf { it.isNotBlank() } ?: field.preview
+                attemptDecrypt(
+                    armoredCiphertext = ciphertext,
+                    passphrase = "",
+                    nodeId = field.nodeId,
+                    cdpNodeId = field.cdpNodeId,
+                    backendNodeId = field.backendNodeId,
+                    targetEditable = false,
+                )
             }
 
             "pgp_public_key" -> {
-                if (armored.isEmpty()) {
-                    showError(getString(R.string.no_key))
-                    return
+                if (field.label.equals("Insert My PubKey", ignoreCase = true)) {
+                    insertOwnPublicKey(field)
+                } else {
+                    val keyBlock = field.armored?.takeIf { it.isNotBlank() } ?: field.preview
+                    importKey(keyBlock, "")
                 }
-                OvNative.nativeImportKey(armored)
             }
+        }
+    }
 
-            "textarea", "text_input" -> {
-                // The recipients are the own keys of the keyring; the native
-                // side fills them in.
-                if (requireUserAuthentication()) {
-                    confirmWithBiometrics(getString(R.string.authenticate_for_key)) {
-                        OvNative.nativeEncryptField(field.nodeId, emptyArray())
-                    }
-                    return
+    private fun insertOwnPublicKey(field: PgpFieldState) {
+        if (!OvNative.isLoaded) {
+            setPgpError("Native OpenPGP keyring is unavailable.")
+            return
+        }
+        val ownFp = uiState.defaultKeyFingerprint.ifBlank {
+            uiState.keys.firstOrNull { it.hasSecret }?.fingerprint.orEmpty()
+        }
+        lifecycleScope.launch {
+            val armored = withContext(Dispatchers.IO) {
+                runCatching { OvNative.nativeExportPublicKey(ownFp) }.getOrDefault("")
+            }
+            if (armored.isBlank()) {
+                setPgpError("Generate or import an own OpenPGP key before inserting.")
+                return@launch
+            }
+            writeValueIntoActiveTabField(
+                cdpNodeId = field.cdpNodeId,
+                backendNodeId = field.backendNodeId,
+                newValue = armored,
+                successNotice = "Inserted public key and verified DOM field",
+            )
+        }
+    }
+
+    private fun confirmEncrypt(
+        request: EncryptRequestState,
+        plaintext: String,
+        recipientFingerprint: String,
+        signerFingerprintOrEmpty: String,
+        passphrase: String,
+    ) {
+        if (!OvNative.isLoaded) {
+            setPgpError("Native OpenPGP engine is unavailable.")
+            return
+        }
+        if (plaintext.isBlank()) {
+            setPgpError("Enter message text before encrypting.")
+            return
+        }
+        if (recipientFingerprint.isBlank()) {
+            setPgpError("Select a recipient public key first.")
+            return
+        }
+
+        val executeEncrypt = {
+            lifecycleScope.launch {
+                val result = withContext(Dispatchers.IO) {
+                    val json = runCatching {
+                        OvNative.nativeEncrypt(
+                            plaintext,
+                            recipientFingerprint,
+                            signerFingerprintOrEmpty,
+                            passphrase,
+                        )
+                    }.getOrDefault("")
+                    OvNative.parseEncrypt(json)
                 }
-                OvNative.nativeEncryptField(field.nodeId, emptyArray())
+                if (!result.ok || result.ciphertext.isBlank()) {
+                    setPgpError(result.error.ifBlank { "OpenPGP encryption failed." })
+                    return@launch
+                }
+
+                uiState = uiState.copy(
+                    pgp = uiState.pgp.copy(encryptRequest = null, error = null),
+                )
+
+                if (request.writeBackToField && (request.cdpNodeId > 0 || request.backendNodeId > 0)) {
+                    writeValueIntoActiveTabField(
+                        cdpNodeId = request.cdpNodeId,
+                        backendNodeId = request.backendNodeId,
+                        newValue = result.ciphertext,
+                        successNotice = if (result.signed) {
+                            "Signed, encrypted, and verified ciphertext in field"
+                        } else {
+                            "Encrypted and verified ciphertext in field"
+                        },
+                    )
+                } else {
+                    copyToClipboard(
+                        label = "OpenPGP Ciphertext",
+                        text = result.ciphertext,
+                        toastMessage = "Encrypted OpenPGP message copied to clipboard",
+                    )
+                    showStatus("Encrypted OpenPGP message copied to clipboard", blocked = false)
+                }
             }
-
-            else -> showError(getString(R.string.unknown_field))
+            Unit
         }
-    }
 
-    /** Write the plaintext of a decrypted message into the page. */
-    private fun insertPlaintext(nodeId: String) {
-        val plaintext = uiState.pgp.plaintext ?: return
-        OvNative.nativeInsertPlaintext(nodeId, plaintext.body)
-        uiState = uiState.copy(pgp = uiState.pgp.copy(plaintext = null))
-    }
-
-    // --- the callbacks of the native engine --------------------------------
-
-    override fun onDomScan(json: String) {
-        val report = try {
-            JSONObject(json)
-        } catch (error: Throwable) {
-            Log.w(TAG, "cannot read the DOM scan report", error)
-            return
-        }
-        val width = if (::surface.isInitialized) surface.width else 0
-        val height = if (::surface.isInitialized) surface.height else 0
-        val fields = parseFields(report.optJSONArray("fields"), width, height)
-        uiState = uiState.copy(pgp = uiState.pgp.copy(fields = fields))
-    }
-
-    override fun onNavigation(json: String) {
-        val info = try {
-            JSONObject(json)
-        } catch (error: Throwable) {
-            Log.w(TAG, "cannot read the navigation report", error)
-            return
-        }
-        val url = info.optString("url", "")
-        uiState = uiState.copy(
-            url = url.ifEmpty { uiState.url },
-            title = info.optString("title", uiState.title),
-            blocked = info.optBoolean("blocked", false),
-            status = if (info.optBoolean("blocked", false)) {
-                getString(R.string.blocked)
-            } else {
-                uiState.status
-            },
-        )
-    }
-
-    override fun showPlaintext(nodeId: String, title: String, body: String, verified: Boolean) {
-        uiState = uiState.copy(
-            pgp = uiState.pgp.copy(
-                plaintext = PgpPlaintextState(
-                    nodeId = nodeId,
-                    title = title,
-                    body = body,
-                    signatureVerified = verified,
-                ),
-            ),
-        )
-    }
-
-    override fun onMutationResult(json: String) {
-        val outcome = try {
-            JSONObject(json)
-        } catch (error: Throwable) {
-            Log.w(TAG, "cannot read the mutation result", error)
-            return
-        }
-        val applied = outcome.optBoolean("applied", false)
-        val reason = outcome.optString("reason", "")
-        val message = if (applied) {
-            getString(R.string.mutation_applied)
+        if (signerFingerprintOrEmpty.isNotBlank()) {
+            withSecretKeyAuth(
+                subtitle = "Unlock secret key to sign OpenPGP message",
+                onAuthorized = executeEncrypt,
+            )
         } else {
-            val detail = reason.ifEmpty { getString(R.string.mutation_stale) }
-            getString(R.string.mutation_failed, detail)
+            executeEncrypt()
         }
-        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
     }
 
-    override fun showError(message: String) {
-        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+    private fun attemptDecrypt(
+        armoredCiphertext: String,
+        passphrase: String,
+        nodeId: String,
+        cdpNodeId: Int,
+        backendNodeId: Int,
+        targetEditable: Boolean,
+    ) {
+        if (!OvNative.isLoaded) {
+            setPgpError("Native OpenPGP engine is unavailable.")
+            return
+        }
+        val cleanArmor = armoredCiphertext.trim()
+        if (cleanArmor.isEmpty()) {
+            setPgpError("No OpenPGP message block found to decrypt.")
+            return
+        }
+
+        withSecretKeyAuth(
+            subtitle = "Unlock secret key to decrypt OpenPGP message",
+        ) {
+            lifecycleScope.launch {
+                val result = withContext(Dispatchers.IO) {
+                    val json = runCatching {
+                        OvNative.nativeDecrypt(cleanArmor, passphrase)
+                    }.getOrDefault("")
+                    OvNative.parseDecrypt(json)
+                }
+                when {
+                    result.needsPassphrase -> {
+                        uiState = uiState.copy(
+                            pgp = uiState.pgp.copy(
+                                decryptPassphraseRequest = DecryptPassphraseRequestState(
+                                    nodeId = nodeId,
+                                    cdpNodeId = cdpNodeId,
+                                    backendNodeId = backendNodeId,
+                                    armoredCiphertext = cleanArmor,
+                                    targetEditable = targetEditable,
+                                    error = if (passphrase.isNotEmpty()) {
+                                        result.error.ifBlank { "Incorrect passphrase." }
+                                    } else {
+                                        null
+                                    },
+                                ),
+                                error = null,
+                            ),
+                        )
+                    }
+
+                    result.ok -> {
+                        uiState = uiState.copy(
+                            pgp = uiState.pgp.copy(
+                                decryptPassphraseRequest = null,
+                                plaintext = PgpPlaintextState(
+                                    nodeId = nodeId,
+                                    title = "Decrypted Message",
+                                    body = result.plaintext,
+                                    signatureVerified = result.signatureStatus == "good",
+                                    signatureStatus = result.signatureStatus.ifBlank { "unsigned" },
+                                    signerFingerprint = result.signerFingerprint.takeIf { it.isNotBlank() },
+                                    signerUserId = result.signerUserId.takeIf { it.isNotBlank() },
+                                    cdpNodeId = cdpNodeId,
+                                    backendNodeId = backendNodeId,
+                                    targetEditable = targetEditable,
+                                ),
+                                error = null,
+                            ),
+                        )
+                    }
+
+                    else -> {
+                        val message = result.error.ifBlank { "OpenPGP decryption failed." }
+                        val existingPrompt = uiState.pgp.decryptPassphraseRequest
+                        if (existingPrompt != null) {
+                            uiState = uiState.copy(
+                                pgp = uiState.pgp.copy(
+                                    decryptPassphraseRequest = existingPrompt.copy(error = message),
+                                ),
+                            )
+                        } else {
+                            setPgpError(message)
+                        }
+                    }
+                }
+            }
+        }
     }
 
-    override fun onTorProgress(percent: Int, stage: String) {
+    private fun insertPlaintextIntoField(plaintextState: PgpPlaintextState) {
         uiState = uiState.copy(
-            tor = uiState.tor.copy(
-                percent = percent,
-                stage = stage,
-                ready = percent >= 100,
-                circuit = uiState.tor.circuit ?: defaultCircuit(),
+            pgp = uiState.pgp.copy(plaintext = null),
+        )
+        if (!plaintextState.targetEditable ||
+            (plaintextState.cdpNodeId <= 0 && plaintextState.backendNodeId <= 0)
+        ) {
+            return
+        }
+        writeValueIntoActiveTabField(
+            cdpNodeId = plaintextState.cdpNodeId,
+            backendNodeId = plaintextState.backendNodeId,
+            newValue = plaintextState.body,
+            successNotice = "Inserted plaintext and verified DOM field",
+        )
+    }
+
+    private fun writeValueIntoActiveTabField(
+        cdpNodeId: Int,
+        backendNodeId: Int,
+        newValue: String,
+        successNotice: String,
+    ) {
+        if (!controllersReady) return
+        val activeTabId = tabSessionManager.activeTabId.value
+        val browser = tabSessionManager.activeBrowser()
+        if (browser == null) {
+            copyToClipboard(
+                label = "OpenPGP Output",
+                text = newValue,
+                toastMessage = "No active page surface; copied output to clipboard",
+            )
+            return
+        }
+        cdpController.writeFieldValue(
+            browser = browser,
+            nodeId = cdpNodeId,
+            backendNodeId = backendNodeId,
+            newValue = newValue,
+            tabId = activeTabId,
+        ) { outcome ->
+            if (outcome.ok && outcome.verified) {
+                showStatus(successNotice, blocked = false)
+            } else {
+                copyToClipboard(
+                    label = "OpenPGP Output",
+                    text = newValue,
+                    toastMessage = "Field verification failed; copied output to clipboard",
+                )
+                val detail = outcome.error.ifBlank { "DOM read-back did not match" }
+                setPgpError("Could not verify page field write ($detail); output copied to clipboard.")
+            }
+        }
+    }
+
+    private fun handleContextMenu(target: TabSessionManager.ContextMenuTarget) {
+        uiState = uiState.copy(
+            contextMenu = ContextMenuUiState(
+                tabId = target.tabId,
+                linkUrl = target.linkUrl,
+                mediaUrl = target.mediaUrl,
+                selectedText = target.selectedText,
+                classificationKind = target.textClassification?.kind ?: "plain",
+                armoredPayload = target.textClassification?.armored.orEmpty(),
             ),
         )
     }
 
-    override fun onPageSnapshot(url: String) {
-        backStack.refresh()
+    private fun handleSelectionPgpAction(action: TabSessionManager.SelectionPgpAction) {
         uiState = uiState.copy(
-            canGoBack = backStack.canGoBack,
-            backPreview = backStack.previewState(),
+            selectionPgp = SelectionPgpUiState(
+                tabId = action.tabId,
+                selectedText = action.selectedText,
+                kind = action.classification.kind,
+                actionLabel = action.classification.actionLabel,
+                armored = action.classification.armored,
+                fingerprintHint = action.classification.fingerprintHint,
+            ),
         )
     }
 
-    /** The circuit that is shown while the client bootstraps. */
-    private fun defaultCircuit(): CircuitState = CircuitState(
-        hops = listOf(
-            CircuitHop("Guard", 0),
-            CircuitHop("Middle", 0),
-            CircuitHop("Exit", 0),
-            CircuitHop("Rendezvous", 0),
-        ),
-    )
+    private fun dismissContextMenu() {
+        if (uiState.contextMenu != null) {
+            uiState = uiState.copy(contextMenu = null)
+        }
+    }
 
-    /** `true` when the browser must refuse every clearnet request. */
-    private fun hiddenServiceOnlyMode(): Boolean =
-        getPreferences(MODE_PRIVATE).getBoolean("hidden_service_only", true)
+    private fun dismissSelectionPgp() {
+        if (uiState.selectionPgp != null) {
+            uiState = uiState.copy(selectionPgp = null)
+        }
+    }
 
-    /** `true` when the master key demands a biometric confirmation. */
-    private fun requireUserAuthentication(): Boolean =
-        getPreferences(MODE_PRIVATE).getBoolean("require_user_authentication", false)
+    private fun withSecretKeyAuth(
+        subtitle: String,
+        onAuthorized: () -> Unit,
+    ) {
+        if (!uiState.requireBiometric || isJvmUnitTestRuntime()) {
+            onAuthorized()
+            return
+        }
 
-    /** Show the biometric prompt for the hardware confirmation. */
-    private fun confirmWithBiometrics(title: String, onConfirmed: () -> Unit) {
-        val executor = ContextCompat.getMainExecutor(this)
+        val authenticators = BiometricManager.Authenticators.BIOMETRIC_STRONG or
+            BiometricManager.Authenticators.DEVICE_CREDENTIAL
+        val canAuth = BiometricManager.from(this).canAuthenticate(authenticators)
+        if (canAuth != BiometricManager.BIOMETRIC_SUCCESS) {
+            setPgpError("Device authentication is required for secret keys, but no lock screen is enrolled.")
+            return
+        }
+
         val prompt = BiometricPrompt(
             this,
-            executor,
+            ContextCompat.getMainExecutor(this),
             object : BiometricPrompt.AuthenticationCallback() {
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                    onConfirmed()
+                    onAuthorized()
                 }
 
-                override fun onAuthenticationError(code: Int, message: CharSequence) {
-                    Log.w(TAG, "the confirmation failed: $message")
-                    showError(getString(R.string.authentication_failed))
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                    setPgpError(errString.toString())
                 }
             },
         )
-        val info = BiometricPrompt.PromptInfo.Builder()
-            .setTitle(title)
-            .setAllowedAuthenticators(
-                BiometricManager.Authenticators.BIOMETRIC_STRONG or
-                    BiometricManager.Authenticators.DEVICE_CREDENTIAL,
-            )
+        val promptInfo = BiometricPrompt.PromptInfo.Builder()
+            .setTitle(getString(R.string.authenticate_for_key))
+            .setSubtitle(subtitle)
+            .setAllowedAuthenticators(authenticators)
             .build()
-        prompt.authenticate(info)
+        prompt.authenticate(promptInfo)
     }
+
+    private fun resolveInitialUrl(savedInstanceState: Bundle?, launchIntent: Intent?): String {
+        val restored = savedInstanceState?.getString(STATE_URL)?.trim()
+        if (!restored.isNullOrEmpty()) return restored
+        val actionViewUrl = launchIntent
+            ?.takeIf { it.action == Intent.ACTION_VIEW }
+            ?.dataString
+            ?.trim()
+        if (!actionViewUrl.isNullOrEmpty()) return actionViewUrl
+        return getString(R.string.start_url)
+    }
+
+    private fun showStatus(message: String, blocked: Boolean) {
+        uiState = uiState.copy(
+            status = message,
+            blocked = blocked,
+            pgp = uiState.pgp.copy(error = null),
+        )
+    }
+
+    private fun setPgpError(message: String) {
+        uiState = uiState.copy(
+            pgp = uiState.pgp.copy(error = message),
+        )
+    }
+
+    private fun clearStatusAndPgpError() {
+        if (uiState.status.isNotEmpty() || uiState.blocked || uiState.pgp.error != null) {
+            uiState = uiState.copy(
+                status = "",
+                blocked = false,
+                pgp = uiState.pgp.copy(error = null),
+            )
+        }
+    }
+
+    private fun copyToClipboard(label: String, text: String, toastMessage: String) {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        clipboard?.setPrimaryClip(ClipData.newPlainText(label, text))
+        Toast.makeText(this, toastMessage, Toast.LENGTH_SHORT).show()
+    }
+
+    private data class ControllerSnapshot(
+        val tabs: List<TabSessionManager.TabState>,
+        val activeTabId: String?,
+        val nodesByTab: Map<String, List<CdpDomPgpController.DetectedPgpNode>>,
+    )
 }
+
+private fun CdpDomPgpController.DetectedPgpNode.toPgpFieldState(): PgpFieldState =
+    PgpFieldState(
+        nodeId = key,
+        kind = kind,
+        label = actionLabel,
+        bounds = NormalizedBounds(
+            left = normalizedLeft,
+            top = normalizedTop,
+            right = normalizedRight,
+            bottom = normalizedBottom,
+        ),
+        preview = text.take(240),
+        armored = text,
+        cdpNodeId = nodeId,
+        backendNodeId = backendNodeId,
+        fingerprintHint = fingerprintHint,
+    )
+
+private fun OnionBackStackManager.BackSnapshotEntry.toBackPreviewState(): BackPreviewState =
+    BackPreviewState(
+        url = url,
+        title = title,
+        scrollOffset = IntOffset(0, scrollOffsetY),
+        fields = nodes.map { it.toPgpFieldState() },
+        frameSnapshot = imageBitmap,
+    )
