@@ -315,17 +315,9 @@ impl PgDomVisitor {
                 let value = content_of(node);
                 // A PGP block is reported with its complete text: the
                 // native UI decrypts the message or imports the key.
-                let armored = match kinds[0] {
-                    FieldKind::PgpMessage | FieldKind::PgpPublicKey => {
-                        let text = value.trim();
-                        if text.is_empty() {
-                            None
-                        } else {
-                            Some(text.to_string())
-                        }
-                    }
-                    _ => None,
-                };
+                let armored = crate::dom_model::extract_armored_for_kinds(&value, &kinds);
+                let id_attr = non_empty(attribute(node, "id"));
+                let name_attr = non_empty(attribute(node, "name"));
                 found.push(DomFieldMetadata {
                     node_id,
                     kind: kinds[0],
@@ -338,6 +330,9 @@ impl PgDomVisitor {
                     },
                     value_preview: preview(&value),
                     armored,
+                    css_selector: None,
+                    id_attr,
+                    name_attr,
                 });
             }
         }
@@ -668,15 +663,19 @@ pub fn is_pgp_container(tag: &str) -> bool {
 /// Set the inline style of a node, keeping the styles the page brought along.
 pub fn set_style(node: &Domnode, style: &str) {
     let existing = attribute(node, "style");
-    let combined = if existing.trim().is_empty() {
-        style.to_string()
-    } else {
-        format!("{} {}", existing.trim_end_matches(';'), style)
-    };
+    let combined = crate::dom_model::merge_inline_style(&existing, style);
     node.set_element_attribute(
         Some(&CefString::from("style")),
         Some(&CefString::from(combined.as_str())),
     );
+}
+
+fn non_empty(value: String) -> Option<String> {
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
 }
 
 /// Mark a node as the focused one.

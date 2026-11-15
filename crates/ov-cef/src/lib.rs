@@ -1,43 +1,62 @@
-//! The CEF integration of Trap.
+//! The DOM PGP classifier, snapshot ring, and optional CEF bindings of Trap.
 //!
-//! The crate implements
+//! By default (`default = []`), this crate compiles completely standalone with
+//! **zero `libcef.so` linkage**, exposing:
 //!
-//!   * the CEF application object, which locks down the command line of
-//!     every CEF process (proxy, DNS rules, no WebRTC, in memory caches),
-//!   * the browser process client, which owns the render, load and request
-//!     handlers,
-//!   * the render process handler, which scans the DOM for PGP relevant
-//!     nodes without ever executing JavaScript, and
-//!   * the off-screen render handler, which hands the rendered pixels to the
-//!     platform.
+//!   * [`dom_model`] — standalone HTML parser, PGP textarea/input/message/key
+//!     classifier, deterministic synthetic node IDs, and unique CSS selectors
+//!     for browser-process `DOM.*` anchoring (`DOM.getOuterHTML` +
+//!     `DOM.querySelector` + `DOM.getBoxModel`),
+//!   * [`config`] — Tor SOCKS5 proxy endpoint and hidden-service-only URL
+//!     leak-prevention policy,
+//!   * [`ipc`] — JSON-serializable DOM field metadata, scan reports, and
+//!     encrypt/decrypt/mutation request/response types,
+//!   * [`snapshot`] — bounded back-stack snapshot collector and RGBA/BGRA
+//!     frame downsampler, and
+//!   * [`frame_sink`] / [`bridge_types`] — platform surface and bridge traits.
+//!
+//! Enabling the `cef-runtime` feature additionally compiles the legacy C-API
+//! `cef-rs` wrappers (`app`, `dom_pgp`, `handlers`, `keyboard`).
 
+#[cfg(feature = "cef-runtime")]
 pub mod app;
+pub mod bridge_types;
 pub mod config;
 pub mod dom_model;
+#[cfg(feature = "cef-runtime")]
 pub mod dom_pgp;
 pub mod frame_sink;
+#[cfg(feature = "cef-runtime")]
 pub mod handlers;
 pub mod ipc;
+#[cfg(feature = "cef-runtime")]
 pub mod keyboard;
 pub mod snapshot;
 
+#[cfg(feature = "cef-runtime")]
 use std::{
     path::Path,
     sync::{Arc, Mutex},
 };
 
+#[cfg(feature = "cef-runtime")]
 use cef::{
     App, BrowserSettings, CefString, Client, CommandLine, ImplCommandLine, LogSeverity, Rect,
     RuntimeStyle, Settings, State, WindowInfo,
 };
 
+#[cfg(feature = "cef-runtime")]
 pub use app::{OvApp, OvRenderProcessHandler};
+pub use bridge_types::{pending_actions, BrowserBridge, NullBridge, PendingActions};
 pub use config::{is_allowed_url, is_svg_url, OvConfig};
-pub use frame_sink::{FrameSink, PaintBuffer, PixelFormat};
-pub use handlers::{
-    pending_actions, BrowserBridge, BrowserSlot, NullBridge, OvClient, OvRenderHandler,
-    PendingActions,
+pub use dom_model::{
+    analyze_document, analyze_html, classify, css_escape_ident, decode_html_entities,
+    document_title, extract_armored_block, merge_inline_style, parse_html, query_selector, scan,
+    scan_html, synthetic_id, DetectedField, HtmlNode, WriteTarget,
 };
+pub use frame_sink::{FrameSink, PaintBuffer, PixelFormat};
+#[cfg(feature = "cef-runtime")]
+pub use handlers::{BrowserSlot, OvClient, OvRenderHandler};
 pub use ipc::{
     DecryptRequest, DecryptResponse, DomFieldMetadata, DomScanReport, FieldAction, FieldKind,
     FieldValue, MutationRequest, MutationResult, NavigationInfo, NodeRect,
@@ -49,33 +68,24 @@ pub use snapshot::{FrameSnapshot, PageSnapshot, SnapshotCollector, MAX_DEPTH};
 /// JavaScript is switched off in *every* browser instance; the remaining
 /// switches remove the features that a hidden service could abuse to
 /// fingerprint the device or to open a path around the Tor tunnel.
+#[cfg(feature = "cef-runtime")]
 pub fn browser_settings() -> BrowserSettings {
     BrowserSettings {
-        // --- the zero JavaScript guarantee -------------------------------
         javascript: State::DISABLED,
         javascript_close_windows: State::DISABLED,
         javascript_access_clipboard: State::DISABLED,
         javascript_dom_paste: State::DISABLED,
-
-        // --- features that would leak or that are not needed --------------
         databases_deprecated: State::DISABLED,
         webgl: State::DISABLED,
         local_storage: State::DISABLED,
-        // Remote fonts would tell the hidden service which fonts the
-        // device has.
         remote_fonts: State::DISABLED,
-
-        // Images are needed, the pages of hidden services are mostly images.
         image_loading: State::ENABLED,
-
         ..Default::default()
     }
 }
 
 /// The CEF settings of Trap.
-///
-/// Windowless rendering is mandatory on Android: CEF expects a desktop
-/// windowing system (Aura) that Android does not provide.
+#[cfg(feature = "cef-runtime")]
 pub fn cef_settings(
     resources_dir: Option<&Path>,
     locales_dir: Option<&Path>,
@@ -83,14 +93,8 @@ pub fn cef_settings(
     external_message_pump: bool,
 ) -> Settings {
     let mut settings = Settings {
-        // Off-screen rendering: CEF paints into a memory buffer.
         windowless_rendering_enabled: 1,
-        // Trap runs its own Tokio runtime; CEF must not install a
-        // message pump of its own.
         multi_threaded_message_loop: 0,
-        // On Android the message loop of the platform is driven by the
-        // native UI (see `MainActivity.kt`), CEF must not install one of its
-        // own.
         external_message_pump: if external_message_pump { 1 } else { 0 },
         log_severity: LogSeverity::WARNING,
         ..Default::default()
@@ -110,6 +114,7 @@ pub fn cef_settings(
 }
 
 /// The window information of a windowless browser.
+#[cfg(feature = "cef-runtime")]
 pub fn window_info(width: i32, height: i32) -> WindowInfo {
     WindowInfo {
         windowless_rendering_enabled: 1,
@@ -119,14 +124,13 @@ pub fn window_info(width: i32, height: i32) -> WindowInfo {
             width,
             height,
         },
-        // "Alloy" does not draw the browser chrome, which the native UI
-        // draws itself.
         runtime_style: RuntimeStyle::ALLOY,
         ..Default::default()
     }
 }
 
 /// Build the CEF application and the browser client.
+#[cfg(feature = "cef-runtime")]
 pub fn build_engine(
     config: Arc<OvConfig>,
     bridge: Arc<dyn BrowserBridge>,
@@ -135,13 +139,9 @@ pub fn build_engine(
     pending: PendingActions,
     collector: Arc<SnapshotCollector>,
 ) -> (App, Client) {
-    // The changes that the browser process made through the input path of
-    // the browser and that the render process still has to confirm.
     let verifications = Arc::new(Mutex::new(std::collections::HashMap::new()));
     let fields = Arc::new(Mutex::new(Vec::new()));
 
-    // The `new` constructor of the wrapper macros already returns the CEF
-    // object, so the handlers must not be wrapped a second time.
     let render_handler = handlers::OvRenderHandler::new(sink, collector.clone());
     let browser_load_handler =
         handlers::OvBrowserLoadHandler::new(bridge.clone(), config.clone(), collector.clone());
@@ -160,8 +160,6 @@ pub fn build_engine(
         collector,
     );
 
-    // The id of the focused form control; it is shared between the scan and
-    // the mutation of the render process.
     let focused = Arc::new(Mutex::new(None));
     let render_process_handler = OvRenderProcessHandler::new(fields, focused);
     let app = OvApp::new(config, render_process_handler);
@@ -170,11 +168,7 @@ pub fn build_engine(
 }
 
 /// Append the Trap switches to a command line.
-///
-/// The child processes of the engine (the renderer, the GPU and the utility
-/// process) are started by the engine itself, through the services that its
-/// own manifest declares; Chromium passes them the command line of the
-/// browser process, so the switches of Trap are already there.
+#[cfg(feature = "cef-runtime")]
 pub fn apply_command_line(command_line: &mut CommandLine, config: &OvConfig) {
     command_line.append_switch_with_value(
         Some(&CefString::from("proxy-server")),
@@ -197,6 +191,7 @@ pub fn apply_command_line(command_line: &mut CommandLine, config: &OvConfig) {
 }
 
 /// Convert a path into the string representation that CEF expects.
+#[cfg(feature = "cef-runtime")]
 fn path_to_str(path: &Path) -> &str {
     path.to_str().unwrap_or("")
 }

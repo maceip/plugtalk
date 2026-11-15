@@ -43,6 +43,11 @@ fn main() {
     println!("cargo::rerun-if-env-changed=CEF_PATH");
     println!("cargo::rerun-if-env-changed=ONIONVAULT_CEF_CHECK_ONLY");
 
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if target_os != "android" && env::var_os("CEF_PATH").is_none() {
+        return;
+    }
+
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let assets_dir = manifest_dir.join("android/app/src/main/assets/cef");
 

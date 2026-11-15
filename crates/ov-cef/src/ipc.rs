@@ -1,25 +1,18 @@
-//! The IPC between the CEF render process and the CEF browser process.
+//! The IPC schema and messages for DOM PGP scanning, anchoring, and mutation.
 //!
-//! Trap does not use JavaScript, so the two processes talk through
-//! `CefProcessMessage`s:
-//!
-//! | message                | direction        | payload                    |
-//! |------------------------|------------------|----------------------------|
-//! | `OV_DOM_FIELDS`        | render → browser | the detected DOM fields    |
-//! | `OV_REQ_DECRYPT`       | render → browser | an armored PGP message     |
-//! | `OV_MUTATE_DOM_NODE`   | browser → render | a replacement for a node   |
-//! | `OV_MUTATION_RESULT`   | render → browser | the outcome of a mutation  |
-//! | `OV_DECRYPT_RESULT`    | browser → render | the decrypted plaintext    |
-//! | `OV_NAVIGATION`        | browser → native | the current address        |
-//!
-//! The payload of a message is a JSON document in the first argument of the
-//! message; the JSON schema is described by the types in this module.
+//! Trap does not use JavaScript, so DOM scan reports, field metadata, and
+//! cryptographic requests are represented by pure Rust/JSON data structures
+//! defined in this module.  When the optional `cef-runtime` feature is
+//! enabled, helpers for `CefProcessMessage` transport are also compiled.
 
+#[cfg(feature = "cef-runtime")]
 use cef::{
     process_message_create, CefString, Frame, ImplFrame, ImplListValue, ImplProcessMessage,
     ProcessId, ProcessMessage,
 };
-use serde::{de::DeserializeOwned, Serialize};
+#[cfg(feature = "cef-runtime")]
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 
 /// The render process reports the fields it found.
 pub const MSG_DOM_FIELDS: &str = "OV_DOM_FIELDS";
@@ -84,7 +77,7 @@ pub struct FieldValue {
 }
 
 /// The role of a detected DOM node.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FieldKind {
     /// A `<textarea>` that can hold a PGP message.
@@ -125,7 +118,7 @@ impl FieldKind {
 }
 
 /// A rectangle in device independent pixels.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct NodeRect {
     /// The left edge.
     pub x: i32,
@@ -137,12 +130,13 @@ pub struct NodeRect {
     pub height: i32,
 }
 
-/// Everything the native UI needs to know about a detected node.
+/// Everything the native UI and browser-process DOM anchor engine need to know
+/// about a detected node.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct DomFieldMetadata {
     /// The synthetic id of the node (`data-ov-node-id`).
     pub node_id: String,
-    /// The role of the node.
+    /// The primary role of the node.
     pub kind: FieldKind,
     /// The tag name of the node.
     pub tag: String,
@@ -157,10 +151,20 @@ pub struct DomFieldMetadata {
     /// text to decrypt the message or to import the key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub armored: Option<String>,
+    /// Deterministic CSS selector that uniquely targets this element via
+    /// browser-process `DOM.querySelector` without JavaScript.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub css_selector: Option<String>,
+    /// The HTML `id` attribute of the node, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id_attr: Option<String>,
+    /// The HTML `name` attribute of the node, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_attr: Option<String>,
 }
 
-/// The result of a DOM scan in the render process.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+/// The result of a DOM scan.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct DomScanReport {
     /// The title of the document.
     pub title: String,
@@ -226,8 +230,11 @@ pub struct DecryptResponse {
     pub plaintext: String,
     /// `true` when a signature of the message could be verified.
     pub signature_verified: bool,
-    /// The fingerprint of the signer, when the signature was verified.
+    /// The primary certificate fingerprint of the verified signer, when present.
     pub signer: Option<String>,
+    /// Policy-valid User IDs of the verified signer, when present.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub signer_user_ids: Vec<String>,
 }
 
 /// A navigation that the browser process reports to the native UI.
@@ -242,6 +249,7 @@ pub struct NavigationInfo {
 }
 
 /// Send a JSON payload to the browser process.
+#[cfg(feature = "cef-runtime")]
 pub fn send_json<T: Serialize>(frame: &Frame, name: &str, payload: &T) -> bool {
     let text = match serde_json::to_string(payload) {
         Ok(text) => text,
@@ -254,6 +262,7 @@ pub fn send_json<T: Serialize>(frame: &Frame, name: &str, payload: &T) -> bool {
 }
 
 /// Send a JSON payload to the render process.
+#[cfg(feature = "cef-runtime")]
 pub fn send_json_to_renderer<T: Serialize>(frame: &Frame, name: &str, payload: &T) -> bool {
     let text = match serde_json::to_string(payload) {
         Ok(text) => text,
@@ -266,11 +275,13 @@ pub fn send_json_to_renderer<T: Serialize>(frame: &Frame, name: &str, payload: &
 }
 
 /// Send a plain text payload to the browser process.
+#[cfg(feature = "cef-runtime")]
 pub fn send_text(frame: &Frame, name: &str, text: &str) -> bool {
     send_text_to(frame, name, text, ProcessId::BROWSER)
 }
 
 /// Send a plain text payload to the given process.
+#[cfg(feature = "cef-runtime")]
 pub fn send_text_to(frame: &Frame, name: &str, text: &str, target: ProcessId) -> bool {
     let Some(mut message) = process_message_create(Some(&CefString::from(name))) else {
         log::error!("cannot create the process message {name}");
@@ -287,6 +298,7 @@ pub fn send_text_to(frame: &Frame, name: &str, text: &str, target: ProcessId) ->
 }
 
 /// Read a JSON payload from a process message.
+#[cfg(feature = "cef-runtime")]
 pub fn read_json<T: DeserializeOwned>(message: &mut ProcessMessage) -> Option<T> {
     let text = read_text(message)?;
     match serde_json::from_str(&text) {
@@ -299,6 +311,7 @@ pub fn read_json<T: DeserializeOwned>(message: &mut ProcessMessage) -> Option<T>
 }
 
 /// Read the first argument of a process message as text.
+#[cfg(feature = "cef-runtime")]
 pub fn read_text(message: &mut ProcessMessage) -> Option<String> {
     let list = message.argument_list()?;
     if list.size() == 0 {
@@ -309,6 +322,7 @@ pub fn read_text(message: &mut ProcessMessage) -> Option<String> {
 }
 
 /// The name of a process message.
+#[cfg(feature = "cef-runtime")]
 pub fn message_name(message: &mut ProcessMessage) -> String {
     crate::dom_pgp::userfree_to_string(&message.name())
 }

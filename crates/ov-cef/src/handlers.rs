@@ -39,75 +39,7 @@ use crate::{
     snapshot::{PageSnapshot, SnapshotCollector},
 };
 
-/// The bridge between CEF and the rest of the application.
-///
-/// The browser process uses it to report the detected DOM fields, to request
-/// a decryption and to report navigations.  `ov-core` implements it on top of
-/// the OpenPGP key manager and the JNI bridge to the native Android UI.
-pub trait BrowserBridge: Send + Sync {
-    /// The render process found new DOM fields.
-    fn on_dom_scan(&self, report: DomScanReport);
-    /// The render process asks for the decryption of an armored message.
-    ///
-    /// The response is sent back to the render process; when the plaintext
-    /// must not be written into the page, the implementation shows it in the
-    /// native sheet instead and returns `None`.
-    fn on_decrypt_request(&self, request: ipc::DecryptRequest) -> Option<ipc::DecryptResponse>;
-    /// The render process sent the value of a node.
-    ///
-    /// The implementation performs the requested action and returns the text
-    /// that has to replace the value of the node.
-    fn on_field_value(
-        &self,
-        value: ipc::FieldValue,
-        action: ipc::FieldAction,
-        recipients: &[String],
-    ) -> Option<String>;
-    /// The render process reported the outcome of a mutation.
-    ///
-    /// The implementation tells the user whether the page carries the new
-    /// content: a field that still holds the old text would send it.
-    fn on_mutation_result(&self, result: ipc::MutationResult);
-    /// A page was left and its snapshot is complete.
-    ///
-    /// The implementation tells the native UI that the back stack changed.
-    fn on_snapshot(&self, snapshot: PageSnapshot);
-    /// The browser navigated to a new document.
-    fn on_navigation(&self, info: NavigationInfo);
-}
-
-/// A bridge that does nothing; used when CEF runs without the native UI.
-pub struct NullBridge;
-
-impl BrowserBridge for NullBridge {
-    fn on_dom_scan(&self, _report: DomScanReport) {}
-    fn on_decrypt_request(&self, _request: ipc::DecryptRequest) -> Option<ipc::DecryptResponse> {
-        None
-    }
-    fn on_field_value(
-        &self,
-        _value: ipc::FieldValue,
-        _action: ipc::FieldAction,
-        _recipients: &[String],
-    ) -> Option<String> {
-        None
-    }
-    fn on_mutation_result(&self, _result: ipc::MutationResult) {}
-    fn on_snapshot(&self, _snapshot: PageSnapshot) {}
-    fn on_navigation(&self, _info: NavigationInfo) {}
-}
-
-/// The registry of the field actions that the native UI requested.
-///
-/// The native UI asks the render process for the value of a node; the
-/// answer arrives asynchronously, so the browser process has to remember
-/// what it wanted to do with the value.
-pub type PendingActions = Arc<Mutex<HashMap<String, (ipc::FieldAction, Vec<String>)>>>;
-
-/// Create an empty registry of pending field actions.
-pub fn pending_actions() -> PendingActions {
-    Arc::new(Mutex::new(HashMap::new()))
-}
+pub use crate::bridge_types::{pending_actions, BrowserBridge, NullBridge, PendingActions};
 
 /// The slot that holds the browser once CEF created it.
 ///

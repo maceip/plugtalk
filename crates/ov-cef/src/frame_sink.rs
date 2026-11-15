@@ -15,7 +15,11 @@ pub struct PaintBuffer<'a> {
     /// The number of bytes per row.
     pub stride: usize,
     /// The rectangles that have to be repainted.
+    #[cfg(feature = "cef-runtime")]
     pub dirty_rects: &'a [cef::Rect],
+    /// The rectangles that have to be repainted (standalone host mode).
+    #[cfg(not(feature = "cef-runtime"))]
+    pub dirty_rects: &'a [crate::ipc::NodeRect],
 }
 
 /// The pixel format of the off-screen buffer.

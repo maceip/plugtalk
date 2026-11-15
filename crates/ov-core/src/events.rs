@@ -5,6 +5,7 @@
 //! screens and a `CefKeyEvent` with a *Windows* virtual key code.  Android
 //! uses its own key codes, so they have to be translated.
 
+#[cfg(not(target_os = "macos"))]
 use cef::{
     KeyEvent, KeyEventType, MouseButtonType, MouseEvent, PointerType, TouchEvent, TouchEventType,
 };

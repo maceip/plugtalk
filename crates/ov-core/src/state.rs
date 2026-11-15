@@ -2,8 +2,11 @@
 
 use std::sync::Arc;
 
+#[cfg(not(target_os = "macos"))]
 use cef::Browser;
-use ov_cef::{BrowserSlot, OvConfig, SnapshotCollector};
+#[cfg(not(target_os = "macos"))]
+use ov_cef::BrowserSlot;
+use ov_cef::{OvConfig, SnapshotCollector};
 use ov_pgp::Keyring;
 use ov_tor::TorService;
 
@@ -12,6 +15,7 @@ use crate::surface::SurfaceRenderer;
 /// Everything that the JNI layer, the CEF handlers and the Tor client share.
 pub struct EngineState {
     /// The browser, once CEF created it.
+    #[cfg(not(target_os = "macos"))]
     pub slot: Arc<BrowserSlot>,
     /// The OpenPGP key manager.
     pub keyring: Arc<Keyring>,
@@ -32,6 +36,7 @@ pub struct EngineState {
 
 impl EngineState {
     /// The browser, if CEF created it already.
+    #[cfg(not(target_os = "macos"))]
     pub fn browser(&self) -> Option<Browser> {
         self.slot.get()
     }
