@@ -1,246 +1,133 @@
 package dev.onionvault.ui
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Icon
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.painter.Painter
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.onionvault.R
 
 /**
- * The controls of Trap.
- *
- * The iconography is the neon system of the design board: every glyph is cut
- * out of the board itself, with its own colour, and it is drawn on a plate
- * whose border carries the teal of the brand.  The controls are never the
- * stock icons of the material library: the board is the style of the
- * application.
- *
- * ## The catalogue of the controls
- *
- * | control | what it is | used by |
- * |---|---|---|
- * | `OvMenuRow` | a line of the menu: a glyph, a name and, when the action has a state, that state at the right | the menu of the browser |
- * | `OvGlassButton` | a round plate of glass that floats above the page | the row of the buttons, the button that clears the address |
- * | `OvAddressPlate` | the rounded plate of the field of the address | the field of the address |
- * | `OvIconButton` | a small round plate with a thin outline | the export of a public key |
- * | `OvPrimaryButton` | the amber of the board, full of paint | the key manager |
- * | `OvSecondaryButton` | an outlined plate with the teal of the brand | "Insert into the page", the close of a licence |
- * | `OvActionChip` | the mark of the spray can that says what the action does | the overlay of the PGP fields |
- * | `OvBadge` | a small number or a small word on a plate | the tabs, the state of a key, the state of a signature |
- * | `OvProgressBar` | the paint that fills up while the client bootstraps | the line of the transport |
- * | `OvBrandMark` | the wordmark of the board and the two onions | **nothing** — it is dead |
- * | `OvTabBadge` | the number of the tabs of the old top bar | **nothing** — it is dead |
- *
- * The two dead controls are the remains of the top bar of the first
- * generation of the chrome, the one that the board had and that Safari on
- * iOS does not have.  They are kept here because their artwork is part of
- * the identity of the board, and they are the natural place to start when
- * the brand has to be shown again somewhere.
- */
-
-/**
- * A row of the menu of the browser.
- *
- * @param icon the glyph of the row.
- * @param label the name of the action.
- * @param onClick the user tapped the row.
- * @param modifier the modifier of the row.
- * @param enabled `false` dims the row and stops the taps.
- * @param trailing the text that is shown at the end of the row.
+ * 44dp circular navigation button matching `Securedrop+Browser+Chrome+Fixed` (`App.tsx:26-41`),
+ * adapting cleanly between `SecureDrop` and `NeonGraffiti` (Dark & Light).
  */
 @Composable
-fun OvMenuRow(
-    icon: Painter,
-    label: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    enabled: Boolean = true,
-    trailing: String? = null,
-) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Image(
-            painter = icon,
-            contentDescription = null,
-            contentScale = ContentScale.Fit,
-            modifier = Modifier
-                .size(26.dp)
-                .alpha(if (enabled) 1f else 0.4f),
-        )
-        Spacer(Modifier.width(14.dp))
-        Text(
-            text = label,
-            color = if (enabled) OnionPalette.TextPrimary else OnionPalette.TextMuted,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Medium,
-            modifier = Modifier.weight(1f),
-        )
-        if (trailing != null) {
-            Text(
-                text = trailing,
-                color = OnionPalette.Teal,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-        }
-    }
-}
-
-/**
- * The brand mark of Trap: the wordmark of the board and the two onions.
- *
- * @param modifier the modifier of the mark.
- * @param wordmark the size of the wordmark.
- */
-@Composable
-fun OvBrandMark(
-    modifier: Modifier = Modifier,
-    wordmark: Dp = 88.dp,
-) {
-    Row(
-        modifier = modifier,
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Image(
-            painter = painterResource(R.drawable.ic_neon_trap_logo),
-            contentDescription = "Trap",
-            contentScale = ContentScale.Fit,
-            modifier = Modifier
-                .width(wordmark)
-                .height(wordmark * 0.5f),
-        )
-        Image(
-            painter = painterResource(R.drawable.ic_neon_onion_twins),
-            contentDescription = null,
-            contentScale = ContentScale.Fit,
-            modifier = Modifier
-                .width(wordmark * 0.5f)
-                .height(wordmark * 0.35f),
-        )
-    }
-}
-
-/**
- * A button of the chrome in the style of Safari on iOS.
- *
- * The button is a round plate of glass that floats above the page: a
- * translucent fill, a thin line around it and a soft shadow.  The glyph is
- * the one of the icon system of the design board and keeps its own colour.
- *
- * @param icon the glyph of the button.
- * @param contentDescription the description of the button.
- * @param onClick the user tapped the button.
- * @param modifier the modifier of the button.
- * @param enabled `false` dims the button and stops the taps.
- * @param accent the colour of the border of the plate.
- * @param size the size of the plate of the button.
- * @param glyph the size of the glyph.
- * @param elevation the shadow under the plate.
- * @param badge the number that the button carries; it is `0` when there is
- * no badge.
- */
-@Composable
-fun OvGlassButton(
-    icon: Painter,
+fun OvNavCircleButton(
+    glyph: TrapGlyph,
     contentDescription: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
-    accent: Color = OnionPalette.Hairline,
+    accent: Color = TrapTheme.colors.teal,
     size: Dp = 44.dp,
-    glyph: Dp = 26.dp,
-    elevation: Dp = 8.dp,
     badge: Int = 0,
+    rotationDegrees: Float = 0f,
+    testTag: String? = null,
 ) {
+    val colors = TrapTheme.colors
     val shape = CircleShape
+    val borderColor = if (enabled) colors.border else colors.border.copy(alpha = 0.45f)
+
     Box(
-        modifier = modifier.size(size),
+        modifier = modifier
+            .size(size)
+            .then(if (testTag != null) Modifier.testTag(testTag) else Modifier),
         contentAlignment = Alignment.Center,
     ) {
         Box(
             modifier = Modifier
                 .size(size)
-                .shadow(
-                    elevation = elevation,
-                    shape = shape,
-                    ambientColor = Color.Black.copy(alpha = 0.55f),
-                    spotColor = Color.Black.copy(alpha = 0.55f),
-                )
                 .clip(shape)
-                .background(OnionPalette.SurfaceRaised.copy(alpha = 0.86f))
-                .border(1.dp, accent.copy(alpha = 0.9f), shape)
-                .clickable(enabled = enabled, onClick = onClick)
+                .background(colors.control)
+                .border(1.dp, borderColor, shape)
+                .clickable(
+                    enabled = enabled,
+                    role = Role.Button,
+                    onClick = onClick,
+                )
                 .semantics { this.contentDescription = contentDescription },
             contentAlignment = Alignment.Center,
         ) {
-            Image(
-                painter = icon,
-                contentDescription = null,
-                contentScale = ContentScale.Fit,
-                modifier = Modifier
-                    .size(glyph)
-                    .alpha(if (enabled) 1f else 0.3f),
+            TrapIcon(
+                glyph = glyph,
+                tint = accent,
+                size = if (colors.useNeonSprites && glyph.neonRes != null) 24.dp else 20.dp,
+                enabled = enabled,
+                modifier = if (rotationDegrees != 0f) {
+                    Modifier.graphicsLayer { rotationZ = rotationDegrees }
+                } else {
+                    Modifier
+                },
             )
         }
+
         if (badge > 0) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .offset(x = 3.dp, y = (-3).dp)
-                    .size(15.dp)
+                    .offset(x = 2.dp, y = (-2).dp)
                     .clip(CircleShape)
-                    .background(OnionPalette.Mint)
-                    .border(1.5.dp, OnionPalette.SurfaceRaised, CircleShape),
+                    .background(colors.teal)
+                    .border(1.5.dp, colors.surface, CircleShape)
+                    .padding(horizontal = 4.5.dp, vertical = 1.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     text = badge.toString(),
-                    color = OnionPalette.OnTeal,
+                    color = colors.onTealFill,
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
-                    lineHeight = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    lineHeight = 11.sp,
                 )
             }
         }
@@ -248,291 +135,583 @@ fun OvGlassButton(
 }
 
 /**
- * The plate of the address of the browser.
- *
- * The plate is the field of Safari: a rounded field that floats above the
- * bottom of the screen, with a translucent fill and a thin line around it.
- *
- * @param content the content of the field.
- * @param modifier the modifier of the plate.
- * @param border the colour of the line around the plate.
+ * Unified 44dp `[Shield · .onion Input · Clear ✕ | Go]` capsule (`0dp` internal seam,
+ * `#E8A33D` `Go` fill, `#1A1510` bold ink, honest `.onion` URL hint, `about:blank` preserved).
  */
 @Composable
-fun OvAddressPlate(
+fun OvUnifiedAddressCapsule(
+    address: String,
+    onAddressChange: (String) -> Unit,
+    onGo: () -> Unit,
+    onClear: () -> Unit,
+    onSecurityClick: () -> Unit,
+    blocked: Boolean,
+    hiddenServiceOnly: Boolean,
+    hint: String,
     modifier: Modifier = Modifier,
-    border: Color = OnionPalette.Hairline,
-    content: @Composable () -> Unit,
 ) {
-    val shape = RoundedCornerShape(16.dp)
-    Box(
+    val colors = TrapTheme.colors
+    val focusManager = LocalFocusManager.current
+    var isFocused by remember { mutableStateOf(false) }
+
+    val leftShape = RoundedCornerShape(
+        topStart = 22.dp,
+        bottomStart = 22.dp,
+        topEnd = 0.dp,
+        bottomEnd = 0.dp,
+    )
+    val rightShape = RoundedCornerShape(
+        topStart = 0.dp,
+        bottomStart = 0.dp,
+        topEnd = 22.dp,
+        bottomEnd = 22.dp,
+    )
+    val leftBorder = when {
+        blocked -> colors.danger
+        isFocused -> colors.teal
+        else -> colors.border
+    }
+
+    Row(
         modifier = modifier
-            .shadow(
-                elevation = 10.dp,
-                shape = shape,
-                ambientColor = Color.Black.copy(alpha = 0.55f),
-                spotColor = Color.Black.copy(alpha = 0.55f),
-            )
-            .clip(shape)
-            .background(OnionPalette.SurfaceRaised.copy(alpha = 0.92f))
-            .border(1.dp, border, shape),
-        contentAlignment = Alignment.CenterStart,
+            .height(44.dp)
+            .testTag("address_capsule"),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        content()
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .clip(leftShape)
+                .background(colors.control)
+                .border(1.dp, leftBorder, leftShape)
+                .padding(start = 10.dp, end = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .clickable(
+                        role = Role.Button,
+                        onClick = onSecurityClick,
+                    )
+                    .semantics { contentDescription = "Tor security status" },
+                contentAlignment = Alignment.Center,
+            ) {
+                TrapIcon(
+                    glyph = TrapGlyph.Shield,
+                    tint = if (hiddenServiceOnly) colors.teal else colors.amber,
+                    size = 17.dp,
+                )
+            }
+
+            Spacer(Modifier.width(6.dp))
+
+            BasicTextField(
+                value = address,
+                onValueChange = onAddressChange,
+                modifier = Modifier
+                    .weight(1f)
+                    .onFocusChanged { isFocused = it.isFocused }
+                    .testTag("address_input"),
+                singleLine = true,
+                textStyle = TextStyle(
+                    color = colors.textPrimary,
+                    fontSize = 14.sp,
+                    fontFamily = FontFamily.Monospace,
+                ),
+                cursorBrush = SolidColor(colors.teal),
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrectEnabled = false,
+                    keyboardType = KeyboardType.Uri,
+                    imeAction = ImeAction.Go,
+                ),
+                keyboardActions = KeyboardActions(
+                    onGo = {
+                        focusManager.clearFocus()
+                        onGo()
+                    },
+                ),
+                decorationBox = { innerTextField ->
+                    Box(contentAlignment = Alignment.CenterStart) {
+                        if (address.isEmpty()) {
+                            Text(
+                                text = hint,
+                                color = colors.textMuted,
+                                fontSize = 13.5.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        innerTextField()
+                    }
+                },
+            )
+
+            if (address.isNotEmpty()) {
+                Spacer(Modifier.width(4.dp))
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .clickable(
+                            role = Role.Button,
+                            onClick = onClear,
+                        )
+                        .semantics { contentDescription = "Clear address" }
+                        .testTag("address_clear"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    TrapIcon(
+                        glyph = TrapGlyph.Close,
+                        tint = colors.textMuted,
+                        size = 15.dp,
+                    )
+                }
+            }
+        }
+
+        // Seamless 0dp-joined Go button (#E8A33D fill, #1A1510 dark bold text)
+        Box(
+            modifier = Modifier
+                .fillMaxHeight()
+                .clip(rightShape)
+                .background(colors.goFill)
+                .border(1.dp, colors.goFill, rightShape)
+                .clickable(
+                    role = Role.Button,
+                    onClick = {
+                        focusManager.clearFocus()
+                        onGo()
+                    },
+                )
+                .padding(horizontal = 18.dp)
+                .semantics { contentDescription = "Go" }
+                .testTag("address_go"),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "Go",
+                color = colors.onGoFill,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+            )
+        }
     }
 }
 
-/** The icon button of the browser: a round plate with a thin outline. */
+/**
+ * Menu row with strictly <= 2:1 label density (1 primary label + at most 1 trailing token).
+ */
+@Composable
+fun OvMenuRow(
+    glyph: TrapGlyph,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    trailing: String? = null,
+    tint: Color = TrapTheme.colors.teal,
+    testTag: String? = null,
+) {
+    val colors = TrapTheme.colors
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .then(if (testTag != null) Modifier.testTag(testTag) else Modifier),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TrapIcon(
+            glyph = glyph,
+            tint = tint,
+            size = 22.dp,
+            enabled = enabled,
+        )
+        Spacer(Modifier.width(14.dp))
+        Text(
+            text = label,
+            color = if (enabled) colors.textPrimary else colors.textMuted,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (!trailing.isNullOrEmpty()) {
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = trailing,
+                color = colors.teal,
+                fontSize = 12.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
 @Composable
 fun OvIconButton(
-    icon: Painter,
+    glyph: TrapGlyph,
     contentDescription: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    tint: Color = OnionPalette.Teal,
+    tint: Color = TrapTheme.colors.teal,
+    containerColor: Color = TrapTheme.colors.control,
+    borderColor: Color = TrapTheme.colors.border,
     enabled: Boolean = true,
     size: Dp = 38.dp,
+    forceVector: Boolean = false,
 ) {
     val shape = CircleShape
     Box(
         modifier = modifier
             .size(size)
             .clip(shape)
-            .background(if (enabled) OnionPalette.SurfaceHigh else OnionPalette.SurfaceRaised)
-            .border(1.dp, if (enabled) OnionPalette.Hairline else OnionPalette.SurfaceRaised, shape)
-            .clickable(enabled = enabled, onClick = onClick)
+            .background(containerColor)
+            .border(1.dp, borderColor, shape)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             .semantics { this.contentDescription = contentDescription },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(
-            painter = icon,
-            contentDescription = null,
-            tint = if (enabled) tint else OnionPalette.TextMuted.copy(alpha = 0.4f),
-            modifier = Modifier.size(size * 0.55f),
+        TrapIcon(
+            glyph = glyph,
+            tint = tint,
+            size = size * 0.50f,
+            enabled = enabled,
+            forceVector = forceVector,
         )
     }
 }
 
-/**
- * The primary button of the browser: the amber of the board.
- *
- * @param icon the icon of the button; it may be `null`.
- */
 @Composable
 fun OvPrimaryButton(
     text: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    icon: Painter? = null,
+    glyph: TrapGlyph? = null,
     enabled: Boolean = true,
 ) {
-    OvTextButton(
+    val colors = TrapTheme.colors
+    OvButtonBase(
         text = text,
         onClick = onClick,
         modifier = modifier,
-        icon = icon,
+        glyph = glyph,
         enabled = enabled,
-        container = OnionPalette.Amber,
-        content = OnionPalette.OnAmber,
+        container = colors.goFill,
+        content = colors.onGoFill,
         border = null,
+        forceVector = true,
     )
 }
 
-/**
- * The secondary button of the browser: an outlined plate with the teal of
- * the brand.
- *
- * @param icon the icon of the button; it may be `null`.
- */
 @Composable
 fun OvSecondaryButton(
     text: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    icon: Painter? = null,
+    glyph: TrapGlyph? = null,
     enabled: Boolean = true,
+    accent: Color = TrapTheme.colors.teal,
 ) {
-    OvTextButton(
+    val colors = TrapTheme.colors
+    OvButtonBase(
         text = text,
         onClick = onClick,
         modifier = modifier,
-        icon = icon,
+        glyph = glyph,
         enabled = enabled,
-        container = OnionPalette.SurfaceHigh,
-        content = OnionPalette.Teal,
-        border = BorderStroke(1.dp, OnionPalette.TealDeep),
+        container = colors.control,
+        content = accent,
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.75f)),
+        forceVector = true,
     )
 }
 
-/** The button that carries a text and, optionally, an icon. */
 @Composable
-private fun OvTextButton(
+private fun OvButtonBase(
     text: String,
     onClick: () -> Unit,
     modifier: Modifier,
-    icon: Painter?,
+    glyph: TrapGlyph?,
     enabled: Boolean,
     container: Color,
     content: Color,
     border: BorderStroke?,
+    forceVector: Boolean,
 ) {
+    val colors = TrapTheme.colors
     val shape = RoundedCornerShape(10.dp)
     Row(
         modifier = modifier
+            .heightIn(min = 40.dp)
             .clip(shape)
-            .background(if (enabled) container else OnionPalette.SurfaceRaised)
-            .then(if (border != null) Modifier.border(border, shape) else Modifier)
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .background(if (enabled) container else colors.surface)
+            .then(if (border != null && enabled) Modifier.border(border, shape) else Modifier)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
     ) {
-        if (icon != null) {
-            Image(
-                painter = icon,
-                contentDescription = null,
-                contentScale = ContentScale.Fit,
-                modifier = Modifier.size(17.dp),
+        if (glyph != null) {
+            TrapIcon(
+                glyph = glyph,
+                tint = if (enabled) content else colors.textMuted,
+                size = 16.dp,
+                enabled = enabled,
+                forceVector = forceVector,
             )
             Spacer(Modifier.width(6.dp))
         }
         Text(
             text = text,
-            color = if (enabled) content else OnionPalette.TextMuted,
+            color = if (enabled) content else colors.textMuted,
             fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+        )
+    }
+}
+
+enum class PgpPillKind {
+    EncryptField,
+    DecryptBlock,
+    InsertPubKey,
+    ImportKey,
+}
+
+/**
+ * Anchored PGP overlay pill using exact `App.tsx` tokens:
+ * - `Encrypt Field`: `#E8A33D` fill, `#1A1510` ink
+ * - `Decrypt Block`: `#2EC4B0` fill, `#062A26` ink
+ * - `Insert My PubKey`: `#3ECF6A` fill, `#0B2A16` ink
+ * - `Import Key`: `#2EC4B0` / `#00E4C1` fill, `#062A26` ink
+ */
+@Composable
+fun OvPgpPill(
+    text: String,
+    kind: PgpPillKind,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = TrapTheme.colors
+    val (fill, ink, glyph) = when (kind) {
+        PgpPillKind.EncryptField -> Triple(colors.pgpEncryptFill, colors.pgpEncryptInk, TrapGlyph.Encrypt)
+        PgpPillKind.DecryptBlock -> Triple(colors.pgpDecryptFill, colors.pgpDecryptInk, TrapGlyph.Decrypt)
+        PgpPillKind.InsertPubKey -> Triple(colors.pgpPubKeyFill, colors.pgpPubKeyInk, TrapGlyph.Key)
+        PgpPillKind.ImportKey -> Triple(colors.pgpDecryptFill, colors.pgpDecryptInk, TrapGlyph.Import)
+    }
+    val shape = RoundedCornerShape(50)
+    Row(
+        modifier = modifier
+            .shadow(4.dp, shape)
+            .clip(shape)
+            .background(fill)
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TrapIcon(
+            glyph = glyph,
+            tint = ink,
+            size = 14.dp,
+            forceVector = true,
+        )
+        Spacer(Modifier.width(5.dp))
+        Text(
+            text = text,
+            color = ink,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+fun OvBadge(
+    text: String,
+    modifier: Modifier = Modifier,
+    accent: Color = TrapTheme.colors.textMuted,
+    container: Color = TrapTheme.colors.control,
+    border: Color? = null,
+) {
+    val shape = RoundedCornerShape(6.dp)
+    Box(
+        modifier = modifier
+            .clip(shape)
+            .background(container)
+            .then(if (border != null) Modifier.border(1.dp, border, shape) else Modifier)
+            .padding(horizontal = 7.dp, vertical = 2.5.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = text,
+            color = accent,
+            fontSize = 10.5.sp,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
         )
     }
 }
 
-/**
- * The chip of a PGP action.
- *
- * The colour of the chip tells what the action does: the amber encrypts, the
- * teal decrypts and the mint of the board handles the keys.
- */
-@Composable
-fun OvActionChip(
-    text: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    icon: Painter? = null,
-    kind: ChipKind = ChipKind.Decrypt,
-) {
-    val accent = when (kind) {
-        ChipKind.Encrypt -> OnionPalette.Amber
-        ChipKind.Decrypt -> OnionPalette.Teal
-        ChipKind.Key -> OnionPalette.Mint
-    }
-    val shape = RoundedCornerShape(8.dp)
-    Row(
-        modifier = modifier
-            .clip(shape)
-            .background(OnionPalette.SurfaceHigh)
-            .border(1.dp, accent, shape)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (icon != null) {
-            Image(
-                painter = icon,
-                contentDescription = null,
-                contentScale = ContentScale.Fit,
-                modifier = Modifier.size(13.dp),
-            )
-            Spacer(Modifier.width(4.dp))
-        }
-        Text(
-            text = text,
-            color = accent,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Medium,
-            maxLines = 1,
-        )
-    }
-}
-
-/** The kinds of the action chips. */
-enum class ChipKind { Encrypt, Decrypt, Key }
-
-/** The plate that holds a label, used for the state of the transport. */
-@Composable
-fun OvBadge(
-    text: String,
-    modifier: Modifier = Modifier,
-    accent: Color = OnionPalette.TextMuted,
-    container: Color = OnionPalette.SurfaceHigh,
-) {
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(5.dp))
-            .background(container)
-            .padding(horizontal = 6.dp, vertical = 2.dp),
-    ) {
-        Text(
-            text = text,
-            color = accent,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.Medium,
-            maxLines = 1,
-        )
-    }
-}
-
-/**
- * The progress bar of the bootstrap.
- *
- * The bar is painted with the gradient of the brand, so that it looks like
- * the neon of the board fills up while the client bootstraps.
- */
 @Composable
 fun OvProgressBar(
     progress: Float,
     modifier: Modifier = Modifier,
-    height: Dp = 4.dp,
+    height: Dp = 3.dp,
 ) {
+    val colors = TrapTheme.colors
     val fraction = progress.coerceIn(0f, 1f)
     Box(
         modifier = modifier
             .height(height)
             .clip(RoundedCornerShape(height / 2))
-            .background(OnionPalette.SurfaceHigh),
+            .background(colors.control),
     ) {
         Box(
             modifier = Modifier
                 .height(height)
                 .fillMaxWidth(fraction)
                 .clip(RoundedCornerShape(height / 2))
-                .background(
-                    Brush.horizontalGradient(
-                        listOf(OnionPalette.Teal, OnionPalette.Mint),
-                    ),
-                ),
+                .background(colors.teal),
         )
     }
 }
 
 /**
- * The tab badge of the top bar.
- *
- * @param count the number of the tabs of the browser.
+ * Clean 2-option or N-option segmented selector backed by caller state.
  */
 @Composable
-fun OvTabBadge(count: Int, modifier: Modifier = Modifier) {
+fun <T> OvSegmentedRow(
+    options: List<Pair<T, String>>,
+    selected: T,
+    onSelect: (T) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = TrapTheme.colors
+    val outerShape = RoundedCornerShape(10.dp)
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(outerShape)
+            .background(colors.surface2)
+            .border(1.dp, colors.border, outerShape)
+            .padding(3.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        options.forEach { (value, label) ->
+            val isSelected = value == selected
+            val itemShape = RoundedCornerShape(8.dp)
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 36.dp)
+                    .clip(itemShape)
+                    .background(if (isSelected) colors.control else Color.Transparent)
+                    .then(
+                        if (isSelected) {
+                            Modifier.border(1.dp, colors.teal, itemShape)
+                        } else {
+                            Modifier
+                        },
+                    )
+                    .clickable(role = Role.RadioButton, onClick = { onSelect(value) })
+                    .padding(horizontal = 8.dp, vertical = 7.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = label,
+                    color = if (isSelected) colors.textPrimary else colors.textMuted,
+                    fontSize = 12.5.sp,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Shared bottom-anchored modal sheet container with scrim, system-bar insets,
+ * non-propagating inner tap handling, and header close control.
+ */
+@Composable
+fun OvBottomSheet(
+    title: String,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+    headerAction: (@Composable () -> Unit)? = null,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val colors = TrapTheme.colors
+    val sheetShape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
+
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(OnionPalette.Teal.copy(alpha = 0.14f))
-            .border(1.dp, OnionPalette.Teal.copy(alpha = 0.8f), RoundedCornerShape(8.dp))
-            .padding(horizontal = 7.dp, vertical = 3.dp),
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.56f))
+            .clickable(onClick = onDismiss)
+            .statusBarsPadding(),
+        contentAlignment = Alignment.BottomCenter,
     ) {
-        Text(
-            text = count.toString(),
-            color = OnionPalette.Mint,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold,
-            fontFamily = FontFamily.Monospace,
-        )
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(sheetShape)
+                .background(colors.surface)
+                .border(1.dp, colors.border, sheetShape)
+                .clickable(enabled = false, onClick = {})
+                .navigationBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterHorizontally)
+                    .padding(bottom = 10.dp)
+                    .width(36.dp)
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(colors.border),
+            )
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = title,
+                    color = colors.textPrimary,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (headerAction != null) {
+                    headerAction()
+                    Spacer(Modifier.width(8.dp))
+                }
+                OvIconButton(
+                    glyph = TrapGlyph.Close,
+                    contentDescription = "Close $title",
+                    onClick = onDismiss,
+                    tint = colors.textMuted,
+                    size = 34.dp,
+                )
+            }
+
+            content()
+        }
     }
 }
