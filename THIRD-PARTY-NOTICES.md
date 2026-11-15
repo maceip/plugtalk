@@ -1,71 +1,42 @@
-# Third party notices
+# Third-Party Notices
 
-Trap links against the following third party software. The licences
-apply to those parts, not to the code of Trap itself, which is dual
-licensed under Apache-2.0 OR MIT.
+Trap is dual-licensed under **Apache-2.0 OR MIT** ([`LICENSE-APACHE`](LICENSE-APACHE), [`LICENSE-MIT`](LICENSE-MIT)). Trap links against or packages the following third-party open-source software, each governed by its own license.
 
-## Vendored in this repository
+## Runtime Components
 
-| component | origin | licence |
+| Component | Version / Artifact | Origin | License |
+|---|---|---|---|
+| **Cefrium** (Android port of Chromium Embedded Framework / Chromium 156) | `com.cefrium:cefrium-sdk:0.19.0` (`com.cefrium` Gradle plugin `0.19.0`) | `https://maven.cefrium.com` · upstream [Chromium Embedded Framework](https://github.com/chromiumembedded/cef) | `LGPL-3.0-or-later` (Cefrium runtime), `BSD-3-Clause` (upstream CEF & Chromium) |
+| **sequoia-openpgp** | `1.22` | [sequoia-pgp/sequoia-openpgp](https://gitlab.com/sequoia-pgp/sequoia-openpgp) | `LGPL-2.0-or-later` |
+| **arti-client**, **tor-rtcompat** | `0.47` | [Tor Project Arti](https://gitlab.torproject.org/tpo/core/arti) | `MIT OR Apache-2.0` |
+| **rustls** (`ring` provider) | `0.23` | [rustls/rustls](https://github.com/rustls/rustls) | `Apache-2.0 OR ISC OR MIT` |
+| **aes-gcm** | `0.10` | [RustCrypto/AEADs](https://github.com/RustCrypto/AEADs) | `Apache-2.0 OR MIT` |
+| **rusqlite** (`bundled` SQLite) | `0.37` | [rusqlite/rusqlite](https://github.com/rusqlite/rusqlite) | `MIT` (SQLite: Public Domain) |
+| **jni** | `0.21` | [jni-rs/jni-rs](https://github.com/jni-rs/jni-rs) | `MIT OR Apache-2.0` |
+| **tokio**, **serde**, **serde_json**, **anyhow**, **thiserror** | Workspace pins (`Cargo.lock`) | [crates.io](https://crates.io) | `MIT OR Apache-2.0` |
+| **AndroidX & Jetpack Compose** (`activity-compose`, `compose-bom`, `appcompat`, `biometric`, `browser`, `core-ktx`, `mediarouter`, `kotlinx-coroutines-android`) | `2024.10.01` BOM / `1.x` | [Android Open Source Project](https://source.android.com) / [JetBrains](https://github.com/Kotlin/kotlinx.coroutines) | `Apache-2.0` |
+
+## LGPL Dynamic & Source Relinking Notes
+
+1. **Browser Engine (`LGPL-3.0-or-later` / `BSD-3-Clause`)**:
+   - Trap's native Rust library (`libonion_vault.so`) does **not** link against `libcef.so` (`DT_NEEDED` imports only Android Bionic system libraries: `libc.so`, `libdl.so`, `liblog.so`, and `libm.so`).
+   - Cefrium packages `libcef.so` and its Chromium resource bundle into the APK at build time via `com.cefrium:cefrium-sdk:0.19.0`, and loads `libcef.so` dynamically as a replaceable shared library at runtime (`useLegacyPackaging = true`).
+
+2. **OpenPGP Engine (`sequoia-openpgp`, `LGPL-2.0-or-later`)**:
+   - `sequoia-openpgp` is compiled into `libonion_vault.so`. The complete corresponding source code of Trap (`Cargo.toml`, `Cargo.lock`, `build.rs`, `src/`, and `crates/`) is provided in this repository so any recipient can modify `sequoia-openpgp`, rebuild `libonion_vault.so` via `cargo ndk`, and repackage the APK.
+
+## Bundled License Texts
+
+Full verbatim license texts live in [`licenses/`](licenses/) and are copied by Gradle (`copyLegalNotices`) into `assets/licenses/` inside the APK:
+
+| File | Applies To | SPDX Identifier |
 |---|---|---|
-| `third_party/cef` | [tauri-apps/cef-rs](https://github.com/tauri-apps/cef-rs) 156.4.0+156.0.26, patched for `aarch64-linux-android` | Apache-2.0 OR MIT |
-| `third_party/cef-dll-sys` | [tauri-apps/cef-rs](https://github.com/tauri-apps/cef-rs) 156.4.0+156.0.26, patched for `aarch64-linux-android` | Apache-2.0 OR MIT |
+| [`licenses/LGPL-3.0.txt`](licenses/LGPL-3.0.txt) | Cefrium browser engine (`libcef.so`) | `LGPL-3.0-or-later` |
+| [`licenses/GPL-3.0.txt`](licenses/GPL-3.0.txt) | GNU GPL v3.0 incorporated by reference in LGPL-3.0 | `GPL-3.0-or-later` |
+| [`licenses/LGPL-2.1.txt`](licenses/LGPL-2.1.txt) | `sequoia-openpgp` | `LGPL-2.0-or-later` |
 
-The patches of the vendored crates are limited to the build script (the
-Android API level, the location of the CEF distribution) and to the aliases
-of the Android target. The original licence headers of the sources are
-untouched.
+Within the running Android application, open **Menu (`☰`) → Open-Source Licences** (or **Settings → Licences**) to browse and read every bundled license file offline.
 
-## Used at runtime
+## Artwork & Design Assets
 
-| component | origin | licence |
-|---|---|---|
-| Chromium Embedded Framework | [Chromium Embedded Framework](https://github.com/chromiumembedded/cef) 156.0.30, built from its own sources for `aarch64-linux-android` by the bundling service of this repository (Chromium 156.0.8078.96) | LGPL-3.0-or-later (CEF), BSD-3-Clause (Chromium) |
-| sequoia-openpgp | [sequoia-pgp/sequoia-openpgp](https://gitlab.com/sequoia-pgp/sequoia-openpgp) 1.22 | LGPL-2.0-or-later |
-| arti-client, tor-rtcompat | [artifacts.gitlab.torproject.org/tpo/core/arti](https://gitlab.torproject.org/tpo/core/arti) 0.47 | MIT OR Apache-2.0 |
-| rustls | [rustls/rustls](https://github.com/rustls/rustls) | Apache-2.0 OR ISC OR MIT |
-| rusqlite | [rusqlite/rusqlite](https://github.com/rusqlite/rusqlite) | MIT |
-| ndk, jni | [rust-android/ndk](https://github.com/rust-android/ndk), [rust-jni/jni](https://github.com/rust-jni/jni) | MIT OR Apache-2.0 |
-
-The CEF engine is **not** redistributed in this repository: the continuous
-integration downloads it, links against it and packages it into the APK. The
-sources of `sequoia-openpgp` and of the other dependencies are published by
-their authors under the licences above; the complete corresponding source of
-the LGPL component is available from its repository and from the crates.io
-release that the lock file pins.
-
-`sequoia-openpgp` is LGPL-2.0-or-later and is linked into the native library
-of the application.  The complete corresponding source of it is the content
-of this repository together with the crates that the lock file pins, so that
-the native library can be rebuilt and relinked; the build script of the
-application (`build.rs` and the crates of `crates/`) is part of it.
-
-The engine of the browser (LGPL-3.0-or-later) is loaded as a shared library
-at run time and can be replaced by the user of the application.  It is CEF,
-the Chromium Embedded Framework, built from its own sources for
-`aarch64-linux-android` by the bundling service of this repository
-(`crates/cefpack`); the sources are published at
-<https://github.com/chromiumembedded/cef>, the revision that was built is
-pinned in `crates/cefpack/manifest/cef-android.toml`, and the licence of the
-engine travels with the release as `CEF-LICENSE.txt`.
-
-## The licence texts
-
-The full text of every licence that applies to a component is in the
-[`licenses/`](licenses/) directory of this repository:
-
-| file | component | licence |
-|---|---|---|
-| `LGPL-3.0.txt` | the CEF engine of the browser | LGPL-3.0-or-later |
-| `GPL-3.0.txt` | the GNU GPL that the LGPL-3.0 incorporates | GPL-3.0-or-later |
-| `LGPL-2.1.txt` | sequoia-openpgp | LGPL-2.0-or-later |
-
-The texts are inside the APK as well, under `assets/licenses/`, where the
-application shows them, and they are attached to every GitHub Release next to
-the APK.  The notice of the engine, which carries the licences of the
-Chromium sources and of the libraries they are built from, is downloaded by
-the continuous integration together with the engine and is put into the APK
-next to these texts.
-
-The artwork of the launcher icon and of the interface was made for Trap
-and is covered by the licence of this repository.
+Trap's launcher icons, adaptive/monochrome layers, SecureDrop chrome vectors (`res/drawable/ic_ov_*.xml`), and Neon Graffiti artwork (`design/icons/`) were created for this repository and are covered by the repository's `Apache-2.0 OR MIT` license.
