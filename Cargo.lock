@@ -2751,7 +2751,7 @@ dependencies = [
 
 [[package]]
 name = "onion-vault"
-version = "0.1.32"
+version = "0.1.33"
 dependencies = [
  "anyhow",
  "jni",
@@ -2794,7 +2794,7 @@ dependencies = [
 
 [[package]]
 name = "ov-cef"
-version = "0.1.32"
+version = "0.1.33"
 dependencies = [
  "log",
  "ov-tor",
@@ -2804,7 +2804,7 @@ dependencies = [
 
 [[package]]
 name = "ov-core"
-version = "0.1.32"
+version = "0.1.33"
 dependencies = [
  "android_logger",
  "anyhow",
@@ -2822,7 +2822,7 @@ dependencies = [
 
 [[package]]
 name = "ov-pgp"
-version = "0.1.32"
+version = "0.1.33"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2840,7 +2840,7 @@ dependencies = [
 
 [[package]]
 name = "ov-tor"
-version = "0.1.32"
+version = "0.1.33"
 dependencies = [
  "anyhow",
  "arti-client",
