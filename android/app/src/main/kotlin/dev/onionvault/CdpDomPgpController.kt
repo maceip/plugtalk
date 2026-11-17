@@ -13,14 +13,14 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * 100% Zero-JavaScript DOM OpenPGP scanner, highlighter, and form-field mutator
- * powered by Cefrium's in-process Chrome DevTools Protocol (`executeDevToolsMethod`).
+ * 100% Zero-JavaScript DOM OpenPGP scanner and form-field mutator powered by
+ * Cefrium's in-process Chrome DevTools Protocol (`executeDevToolsMethod`).
  *
  * Operates exclusively through Chromium's C++ `InspectorDOMAgent`, `InspectorPageAgent`,
  * and `InspectorInputAgent` (`DOM.getDocument`, `DOM.getOuterHTML`, `DOM.getBoxModel`,
- * `DOM.setAttributeValue`, `DOM.focus`, `Input.dispatchKeyEvent`, `Input.insertText`)
- * while `setJavaScriptEnabled(false)` and `Emulation.setScriptExecutionDisabled(true)`
- * remain enforced on every browser instance.
+ * `DOM.focus`, `Input.dispatchKeyEvent`, `Input.insertText`) while leaving webpage
+ * DOM styling untouched and enforcing `setJavaScriptEnabled(false)` and
+ * `Emulation.setScriptExecutionDisabled(true)` on every browser instance.
  */
 class CdpDomPgpController(
     private val onNodesDetected: (
@@ -44,6 +44,18 @@ class CdpDomPgpController(
         val normalizedTop: Float,
         val normalizedRight: Float,
         val normalizedBottom: Float,
+        val isSearchLike: Boolean = false,
+    )
+
+    internal data class ClassifiedNodeEntry(
+        val nodeId: Int,
+        val backendNodeId: Int,
+        val tag: String,
+        val kind: String,
+        val actionLabel: String,
+        val text: String,
+        val fingerprintHint: String,
+        val isSearchLike: Boolean,
     )
 
     data class FieldMutationOutcome(
@@ -61,9 +73,45 @@ class CdpDomPgpController(
         val height: Double,
     )
 
-    private companion object {
-        const val TAG = "CdpDomPgp"
-        const val HIGHLIGHT_MARKER = "/*trap-pgp*/"
+    internal companion object {
+        private const val TAG = "CdpDomPgp"
+
+        /**
+         * Parses the JSON array returned by `OvNative.nativeClassifyCdpDom`, excluding
+         * passive search-box inputs (`isSearchLike == true`) from editable PGP compose
+         * candidates unless [includeSearchFields] is explicitly requested.
+         */
+        internal fun parseClassifiedDomEntries(
+            json: String,
+            includeSearchFields: Boolean = false,
+        ): List<ClassifiedNodeEntry> {
+            if (json.isBlank()) return emptyList()
+            return runCatching {
+                val arr = JSONArray(json)
+                buildList(arr.length()) {
+                    for (i in 0 until arr.length()) {
+                        val obj = arr.optJSONObject(i) ?: continue
+                        val nodeId = obj.optInt("nodeId", 0)
+                        val backendNodeId = obj.optInt("backendNodeId", 0)
+                        if (nodeId <= 0 && backendNodeId <= 0) continue
+                        val isSearchLike = obj.optBoolean("isSearchLike", false)
+                        if (isSearchLike && !includeSearchFields) continue
+                        add(
+                            ClassifiedNodeEntry(
+                                nodeId = nodeId,
+                                backendNodeId = backendNodeId,
+                                tag = obj.optString("tag", ""),
+                                kind = obj.optString("kind", ""),
+                                actionLabel = obj.optString("actionLabel", ""),
+                                text = obj.optString("text", ""),
+                                fingerprintHint = obj.optString("fingerprintHint", ""),
+                                isSearchLike = isSearchLike,
+                            ),
+                        )
+                    }
+                }
+            }.getOrElse { emptyList() }
+        }
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -72,8 +120,7 @@ class CdpDomPgpController(
 
     private val attachedBrowsers = ConcurrentHashMap<String, CefriumBrowser>()
     private val lastUrlByTab = ConcurrentHashMap<String, String>()
-    private val lastClassifiedByTab = ConcurrentHashMap<String, List<OvNative.ClassifiedDomNode>>()
-    private val lastAttrMapByTab = ConcurrentHashMap<String, Map<Int, Map<String, String>>>()
+    private val lastClassifiedByTab = ConcurrentHashMap<String, List<ClassifiedNodeEntry>>()
     private val scanGenerationByTab = ConcurrentHashMap<String, AtomicInteger>()
 
     fun nodesForTab(tabId: String): List<DetectedPgpNode> =
@@ -166,7 +213,6 @@ class CdpDomPgpController(
         attachedBrowsers.remove(tabId)
         lastUrlByTab.remove(tabId)
         lastClassifiedByTab.remove(tabId)
-        lastAttrMapByTab.remove(tabId)
         scanGenerationByTab.remove(tabId)
         val updated = _activeNodes.value.toMutableMap()
         updated.remove(tabId)
@@ -177,7 +223,6 @@ class CdpDomPgpController(
         attachedBrowsers.clear()
         lastUrlByTab.clear()
         lastClassifiedByTab.clear()
-        lastAttrMapByTab.clear()
         scanGenerationByTab.clear()
         _activeNodes.value = emptyMap()
     }
@@ -252,16 +297,9 @@ class CdpDomPgpController(
 
             val rootObj = runCatching { JSONObject(docJson).optJSONObject("root") }.getOrNull()
             val rootNodeId = rootObj?.optInt("nodeId", 0) ?: 0
-            val attrMap = HashMap<Int, Map<String, String>>()
-            if (rootObj != null) {
-                collectAttributeMap(rootObj, attrMap)
-            }
-            lastAttrMapByTab[tabId] = attrMap
 
             val classified = classifyDomTree(docJson)
             lastClassifiedByTab[tabId] = classified
-
-            applyZeroJsHighlights(browser, classified, attrMap)
 
             fetchOuterHtml(browser, rootNodeId) { domHtml ->
                 if (generation != currentGeneration(tabId)) return@fetchOuterHtml
@@ -296,7 +334,7 @@ class CdpDomPgpController(
 
     private fun classifyDomTree(
         rawDocJson: String,
-    ): List<OvNative.ClassifiedDomNode> {
+    ): List<ClassifiedNodeEntry> {
         if (!OvNative.isLoaded) {
             return emptyList()
         }
@@ -305,40 +343,7 @@ class CdpDomPgpController(
         }.onFailure {
             Log.w(TAG, "nativeClassifyCdpDom failed", it)
         }.getOrDefault("[]")
-        return OvNative.parseClassifiedDom(classifiedJson)
-    }
-
-    private fun applyZeroJsHighlights(
-        browser: CefriumBrowser,
-        classified: List<OvNative.ClassifiedDomNode>,
-        attrMap: Map<Int, Map<String, String>>,
-    ) {
-        for (node in classified) {
-            if (node.nodeId <= 0) continue
-            val existingStyle = attrMap[node.nodeId]?.get("style").orEmpty()
-            if (existingStyle.contains(HIGHLIGHT_MARKER)) continue
-            val outlineCss = when (node.kind) {
-                "pgp_textarea" -> "outline: 1.5px solid rgba(232,163,61,0.80); outline-offset: 2px;"
-                "pgp_message" -> "outline: 1.5px solid rgba(46,196,176,0.80); outline-offset: 2px;"
-                "pgp_public_key" -> "outline: 1.5px solid rgba(62,207,106,0.80); outline-offset: 2px;"
-                else -> continue
-            }
-            val mergedStyle = buildString {
-                if (existingStyle.isNotBlank()) {
-                    append(existingStyle.trimEnd().trimEnd(';'))
-                    append("; ")
-                }
-                append(outlineCss)
-                append(' ')
-                append(HIGHLIGHT_MARKER)
-            }
-            val params = JSONObject()
-                .put("nodeId", node.nodeId)
-                .put("name", "style")
-                .put("value", mergedStyle)
-                .toString()
-            browser.executeDevToolsMethod("DOM.setAttributeValue", params, null)
-        }
+        return parseClassifiedDomEntries(classifiedJson, includeSearchFields = false)
     }
 
     private fun fetchOuterHtml(
@@ -392,7 +397,7 @@ class CdpDomPgpController(
     private fun resolveAllNodeBounds(
         tabId: String,
         browser: CefriumBrowser,
-        classified: List<OvNative.ClassifiedDomNode>,
+        classified: List<ClassifiedNodeEntry>,
         metrics: ViewportMetrics,
         generation: Int,
         onComplete: (List<DetectedPgpNode>) -> Unit,
@@ -427,7 +432,7 @@ class CdpDomPgpController(
 
     private fun parseBoxModelToDetectedNode(
         tabId: String,
-        node: OvNative.ClassifiedDomNode,
+        node: ClassifiedNodeEntry,
         boxJson: String,
         metrics: ViewportMetrics,
     ): DetectedPgpNode? {
@@ -476,6 +481,7 @@ class CdpDomPgpController(
                 normalizedTop = normTop.coerceIn(0.0f, 1.0f),
                 normalizedRight = normRight.coerceIn(0.0f, 1.0f),
                 normalizedBottom = normBottom.coerceIn(0.0f, 1.0f),
+                isSearchLike = node.isSearchLike,
             )
         }.getOrNull()
     }
@@ -757,31 +763,6 @@ class CdpDomPgpController(
         for (i in 0 until children.length()) {
             val child = children.optJSONObject(i) ?: continue
             appendVisibleText(child, out)
-        }
-    }
-
-    private fun collectAttributeMap(
-        node: JSONObject,
-        out: MutableMap<Int, Map<String, String>>,
-    ) {
-        val nodeId = node.optInt("nodeId", 0)
-        if (nodeId > 0) {
-            val attrs = parseAttributesList(node.optJSONArray("attributes"))
-            if (attrs.isNotEmpty()) {
-                out[nodeId] = attrs
-            }
-        }
-        node.optJSONArray("children")?.let { children ->
-            for (i in 0 until children.length()) {
-                val child = children.optJSONObject(i) ?: continue
-                collectAttributeMap(child, out)
-            }
-        }
-        node.optJSONArray("shadowRoots")?.let { shadows ->
-            for (i in 0 until shadows.length()) {
-                val shadow = shadows.optJSONObject(i) ?: continue
-                collectAttributeMap(shadow, out)
-            }
         }
     }
 
