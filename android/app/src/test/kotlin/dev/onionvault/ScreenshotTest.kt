@@ -214,11 +214,13 @@ class ScreenshotTest {
         compose.onNodeWithTag("start_open_settings").assertDoesNotExist()
         compose.onNodeWithText("Launch").assertDoesNotExist()
 
-        // 2. Minimal StartPage renders centered "Trap" + tappable live Tor status.
+        // 2. Street-zine StartPage renders "TRAP" lockup, live Tor status, CRT search, and trusted .onion directory.
         compose.onNodeWithTag("start_page").assertIsDisplayed()
-        compose.onNodeWithText("Trap").assertIsDisplayed()
+        compose.onNodeWithText("TRAP").assertIsDisplayed()
         compose.onNodeWithTag("start_tor_status").assertIsDisplayed()
         compose.onNodeWithText("Tor ready").assertIsDisplayed()
+        compose.onNodeWithTag("start_search_box").assertIsDisplayed()
+        compose.onNodeWithTag("trusted_onion_directory").assertIsDisplayed()
 
         compose.onNodeWithTag("start_tor_status").performClick()
         compose.onNodeWithTag("security_circuit_sheet").assertIsDisplayed()
