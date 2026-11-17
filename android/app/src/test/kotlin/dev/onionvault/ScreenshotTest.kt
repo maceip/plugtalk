@@ -44,6 +44,7 @@ import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.height
 import androidx.compose.ui.unit.width
 import dev.onionvault.ui.BackPreviewState
 import dev.onionvault.ui.BrowserScreen
@@ -215,6 +216,9 @@ class ScreenshotTest {
                     navigatedUrl = target
                     state = state.copy(url = target)
                 },
+                onHome = {
+                    state = state.copy(url = "about:blank", canGoBack = false)
+                },
                 surface = {
                     Box(
                         modifier = Modifier
@@ -238,15 +242,17 @@ class ScreenshotTest {
         compose.onNodeWithTag("transport_footer").assertDoesNotExist()
         compose.onNodeWithTag("top_tor_pill").assertDoesNotExist()
 
-        // 2. MetaToolsBrowserShell + floating islands + street-zine StartPage + TrustedOnionDirectory.
+        // 2. MetaToolsBrowserShell + 1.5x floating KPT islands + TRAP street-zine StartPage + TrustedOnionDirectory.
         compose.onNodeWithTag("metatools_browser_shell").assertIsDisplayed()
         compose.onNodeWithTag("perimeter_steel_rails").assertIsDisplayed()
+        compose.onNodeWithTag("kpt_back_pod").assertIsDisplayed()
         compose.onNodeWithTag("tor_orb_pod").assertIsDisplayed()
         compose.onNodeWithTag("crt_address_pod").assertIsDisplayed()
         compose.onNodeWithTag("pgp_rocker_pod").assertIsDisplayed()
         compose.onNodeWithTag("side_remote_pod").assertIsDisplayed()
 
         compose.onNodeWithTag("start_page").assertIsDisplayed()
+        compose.onNodeWithTag("start_zine_wallpaper", useUnmergedTree = true).assertIsDisplayed()
         compose.onNodeWithText("TRAP").assertIsDisplayed()
         compose.onNodeWithTag("start_tor_status").assertIsDisplayed()
         compose.onNodeWithText("Tor ready").assertIsDisplayed()
@@ -263,12 +269,15 @@ class ScreenshotTest {
         compose.waitForIdle()
         compose.onNodeWithTag("remote_tor_circuit").assertDoesNotExist()
 
-        // 4. Verify >= 10dp open gaps between floating Tri-Pod islands.
-        val orbBounds = compose.onNodeWithTag("tor_orb_pod").getUnclippedBoundsInRoot()
+        // 4. Verify 1.5x pod bounds & open webpage gaps across [ Back (74dp) ] -> [ CRT (74dp tall) ] -> [ Tor Orb (86dp) ].
+        val backBounds = compose.onNodeWithTag("kpt_back_pod").getUnclippedBoundsInRoot()
         val crtBounds = compose.onNodeWithTag("crt_address_pod").getUnclippedBoundsInRoot()
-        val pgpBounds = compose.onNodeWithTag("pgp_rocker_pod").getUnclippedBoundsInRoot()
-        assertTrue(crtBounds.left - orbBounds.right >= 10.dp)
-        assertTrue(pgpBounds.left - crtBounds.right >= 10.dp)
+        val orbBounds = compose.onNodeWithTag("tor_orb_pod").getUnclippedBoundsInRoot()
+        assertTrue(backBounds.width >= 72.dp && backBounds.height >= 72.dp)
+        assertTrue(crtBounds.height >= 70.dp)
+        assertTrue(orbBounds.width >= 84.dp && orbBounds.height >= 84.dp)
+        assertTrue(crtBounds.left - backBounds.right >= 7.5.dp)
+        assertTrue(orbBounds.left - crtBounds.right >= 7.5.dp)
 
         // 5. Submitting a search query on start_search_box routes directly to DuckDuckGo v3 .onion!
         compose.onNodeWithTag("start_search_box").performTextInput("securedrop")
@@ -281,11 +290,11 @@ class ScreenshotTest {
         compose.onNodeWithTag("start_page").assertDoesNotExist()
         compose.onNodeWithText("duckduck…zczad.onion").assertIsDisplayed()
 
-        // 6. Hit-test passthrough on live webpage through open gap between Tor Orb and CRT pod!
-        val liveOrbBounds = compose.onNodeWithTag("tor_orb_pod").getUnclippedBoundsInRoot()
+        // 6. Hit-test passthrough on live webpage through open gap between KptBackButtonPod and CRT pod!
+        val liveBackBounds = compose.onNodeWithTag("kpt_back_pod").getUnclippedBoundsInRoot()
         val liveCrtBounds = compose.onNodeWithTag("crt_address_pod").getUnclippedBoundsInRoot()
-        assertTrue(liveCrtBounds.left - liveOrbBounds.right >= 10.dp)
-        val gapX = ((liveOrbBounds.right.value + liveCrtBounds.left.value) / 2f).dp
+        assertTrue(liveCrtBounds.left - liveBackBounds.right >= 7.5.dp)
+        val gapX = ((liveBackBounds.right.value + liveCrtBounds.left.value) / 2f).dp
         val gapY = ((liveCrtBounds.top.value + liveCrtBounds.bottom.value) / 2f).dp
         compose.onNodeWithTag("metatools_browser_shell").performTouchInput {
             click(Offset(gapX.toPx(), gapY.toPx()))
@@ -293,21 +302,28 @@ class ScreenshotTest {
         compose.waitForIdle()
         assertEquals("Open gap between pods must pass touch straight to webpage", 1, webpageTaps)
 
-        // 7. Focusing crt_address_pod expands >= 94% width (~360dp+), hides Orb/Rocker/Remote, BackHandler collapses!
+        // 6b. First-hop KptBackButtonPod tap returns cleanly from directory/search page to StartPage!
+        compose.onNodeWithTag("kpt_back_pod").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("start_page").assertIsDisplayed()
+
+        // 7. Focusing crt_address_pod expands >= 95% width (~380dp+), hides Back/Orb/Rocker/Remote, Go submits!
         compose.onNodeWithTag("crt_address_pod").performClick()
         compose.waitForIdle()
+        compose.onNodeWithTag("kpt_back_pod").assertDoesNotExist()
         compose.onNodeWithTag("tor_orb_pod").assertDoesNotExist()
         compose.onNodeWithTag("pgp_rocker_pod").assertDoesNotExist()
         compose.onNodeWithTag("side_remote_pod").assertDoesNotExist()
 
         val focusedCrtWidth = compose.onNodeWithTag("crt_address_pod").getUnclippedBoundsInRoot().width
-        assertTrue("Expected focused CRT >= 360dp on 411dp screen, got $focusedCrtWidth", focusedCrtWidth >= 360.dp)
+        assertTrue("Expected focused CRT >= 380dp on 411dp screen, got $focusedCrtWidth", focusedCrtWidth >= 380.dp)
 
         compose.onNodeWithTag("crt_clear_button").performClick()
         compose.onNodeWithTag("crt_address_input").performTextInput(DUCKDUCKGO_ONION_URL)
         compose.onNodeWithTag("crt_address_input").performImeAction()
         compose.waitForIdle()
         assertEquals(DUCKDUCKGO_ONION_URL, navigatedUrl)
+        compose.onNodeWithTag("kpt_back_pod").assertIsDisplayed()
         compose.onNodeWithTag("tor_orb_pod").assertIsDisplayed()
     }
 
@@ -326,6 +342,7 @@ class ScreenshotTest {
         }
 
         compose.onNodeWithTag("bottom_control_dock").assertDoesNotExist()
+        compose.onNodeWithTag("kpt_back_pod").assertIsDisplayed()
         compose.onNodeWithTag("tor_orb_pod").assertIsDisplayed()
         compose.onNodeWithTag("crt_address_pod").assertIsDisplayed()
         compose.onNodeWithTag("pgp_rocker_pod").assertIsDisplayed()

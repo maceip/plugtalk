@@ -46,14 +46,15 @@ import kotlin.math.sin
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * `58.dp x 58.dp` Left Floating Hardware Island — Cast-Pewter Knurled Tor Orb (`tor_orb_pod`).
+ * `86.dp x 86.dp` (`1.5x` Scaled) Bottom-Right Primary Hardware Island —
+ * Cast-Pewter Knurled Tor Orb (`tor_orb_pod`) with `68.dp` 3D Raytraced Acrylic Sphere.
  *
  * Visual & Tactile Spec:
- * - Cast-pewter circular collar (`#7D838C`) with procedural radial `1.dp` knurled rim ridges +
- *   concave `#111317` crater + `46.dp` 3D raytraced sphere.
+ * - Cast-pewter circular collar (`#7D838C`) with deep `1.5.dp` radial knurled rim ridges +
+ *   bright machined steel inner chamfer ring + concave `#111317` crater + `68.dp` 3D sphere.
  * - Connected ([torReady] == `true`): ultraviolet-purple radial gradient
  *   (`#B565FF` at `(30%, 28%)` -> `#7B2CBF` -> `#240046`), crisp white 10-o'clock pinprick
- *   specular highlight, debossed concentric onion vector glyph.
+ *   specular highlight, debossed concentric onion vector emblem.
  * - Bootstrapping ([torReady] == `false`): safety amber (`#FFD000` -> `#7A5200`) with specular
  *   highlight rotating in discrete `30deg` ticks at `6fps` (`166ms` step).
  * - Touch-down depresses sphere `3.dp` (`75ms` linear `tween(75, LinearEasing)` + haptic tick);
@@ -111,8 +112,8 @@ fun TorKnurledOrbPod(
 
     Box(
         modifier = modifier
-            .size(58.dp)
-            .metaToolsDropShadow(cornerRadius = 29.dp, isCircle = true)
+            .size(86.dp)
+            .metaToolsDropShadow(cornerRadius = 43.dp, isCircle = true)
             .clip(CircleShape)
             .semantics {
                 role = Role.Button
@@ -166,14 +167,14 @@ fun TorKnurledOrbPod(
         Canvas(modifier = Modifier.fillMaxSize()) {
             val outerRadius = size.minDimension / 2f
             val collarCenter = center
-            val oneDp = 1.dp.toPx()
+            val ridgeStrokePx = 1.5.dp.toPx()
 
             // 1. Cast-Pewter Circular Collar (#7D838C + directional bevel + 3% grain)
             drawCircle(
                 brush = Brush.linearGradient(
                     0.0f to MetaToolsTokens.PewterHighlightBevel,
-                    0.35f to MetaToolsTokens.PewterBase,
-                    0.75f to MetaToolsTokens.PewterMidDark,
+                    0.34f to MetaToolsTokens.PewterBase,
+                    0.74f to MetaToolsTokens.PewterMidDark,
                     1.0f to MetaToolsTokens.PewterShadowBevel,
                     start = Offset.Zero,
                     end = Offset(size.width, size.height),
@@ -187,18 +188,18 @@ fun TorKnurledOrbPod(
                 center = collarCenter,
             )
 
-            // 2. Procedural Radial 1.dp Knurled Rim Ridges (56 machined ticks around outer bezel)
-            val knurlCount = 56
-            val knurlOuterR = outerRadius - 0.6.dp.toPx()
-            val knurlInnerR = outerRadius - 4.4.dp.toPx()
+            // 2. Deep 1.5.dp Radial Knurled Rim Ridges (72 machined ticks around 86.dp outer bezel)
+            val knurlCount = 72
+            val knurlOuterR = outerRadius - 0.8.dp.toPx()
+            val knurlInnerR = outerRadius - 6.6.dp.toPx()
             for (i in 0 until knurlCount) {
                 val theta = (2.0 * PI * i) / knurlCount
                 val cosT = cos(theta).toFloat()
                 val sinT = sin(theta).toFloat()
                 val ridgeColor = if (i % 2 == 0) {
-                    Color(0x99D6DEE6)
+                    Color(0xA8DCE5EE)
                 } else {
-                    Color(0xAA23272D)
+                    Color(0xB81E2228)
                 }
                 drawLine(
                     color = ridgeColor,
@@ -210,45 +211,42 @@ fun TorKnurledOrbPod(
                         collarCenter.x + cosT * knurlOuterR,
                         collarCenter.y + sinT * knurlOuterR,
                     ),
-                    strokeWidth = oneDp,
+                    strokeWidth = ridgeStrokePx,
                     cap = StrokeCap.Butt,
                 )
             }
 
             // Machined inner bright steel chamfer ring
-            val chamferRadius = outerRadius - 4.8.dp.toPx()
+            val chamferRadius = outerRadius - 7.3.dp.toPx()
             drawCircle(
                 brush = Brush.linearGradient(
-                    0.0f to Color(0xFFDCE4EC),
+                    0.0f to Color(0xFFE4ECF4),
                     0.5f to Color(0xFF6B727B),
-                    1.0f to Color(0xFF2B3036),
-                    start = Offset(0f, 0f),
+                    1.0f to Color(0xFF262B31),
+                    start = Offset.Zero,
                     end = Offset(size.width, size.height),
                 ),
                 radius = chamferRadius,
                 center = collarCenter,
-                style = Stroke(width = 1.4.dp.toPx()),
+                style = Stroke(width = 2.0.dp.toPx()),
             )
 
-            // 3. Concave #111317 Crater Socket
-            val craterRadius = 24.2.dp.toPx()
+            // 3. Concave #111317 Crater Socket (72.dp diameter)
+            val craterRadius = 36.dp.toPx()
             drawCircle(
                 color = MetaToolsTokens.PewterCrater,
                 radius = craterRadius,
                 center = collarCenter,
             )
 
-            // 4. 46.dp 3D Raytraced Sphere (depresses +3.dp into crater on touch-down)
+            // 4. 68.dp (34.dp radius) 3D Raytraced Sphere (depresses +3.dp into crater on touch-down)
             val depressPx = depressOffset.toPx()
-            val sphereRadius = (23.dp.toPx() - depressPx * 0.22f).coerceAtLeast(16f)
+            val sphereRadius = (34.dp.toPx() - depressPx * 0.22f).coerceAtLeast(24f)
             val sphereCenter = Offset(
                 x = collarCenter.x + depressPx * 0.38f,
                 y = collarCenter.y + depressPx * 0.65f,
             )
 
-            // Specular & gradient focal point:
-            // - Connected: 10 o'clock (30%, 28% inside sphere bounding box)
-            // - Bootstrapping: discrete 30deg ticks at 6fps (166ms step)
             val sphereTopLeft = Offset(sphereCenter.x - sphereRadius, sphereCenter.y - sphereRadius)
             val sphereDiameter = sphereRadius * 2f
 
@@ -258,7 +256,6 @@ fun TorKnurledOrbPod(
                     y = sphereTopLeft.y + sphereDiameter * 0.28f,
                 )
             } else {
-                // 10 o'clock is -135 deg (-2.356 rad); rotate in discrete +30deg ticks!
                 val angleRad = ((-135.0 + discreteTickStep * 30.0) * PI) / 180.0
                 val orbitR = sphereRadius * 0.54f
                 Offset(
@@ -270,27 +267,28 @@ fun TorKnurledOrbPod(
             if (torReady) {
                 drawCircle(
                     brush = Brush.radialGradient(
-                        0.0f to MetaToolsTokens.TorPurpleBright,
-                        0.46f to MetaToolsTokens.TorPurpleMid,
+                        0.0f to Color(0xFFD69EFF),
+                        0.16f to MetaToolsTokens.TorPurpleBright,
+                        0.50f to MetaToolsTokens.TorPurpleMid,
                         0.88f to MetaToolsTokens.TorPurpleDeep,
-                        1.0f to Color(0xFF120024),
+                        1.0f to Color(0xFF100022),
                         center = highlightCenter,
-                        radius = sphereDiameter * 0.88f,
+                        radius = sphereDiameter * 0.90f,
                     ),
                     radius = sphereRadius,
                     center = sphereCenter,
                 )
-                // Subtle bottom-right bounce rim reflection
+                // Subsurface acrylic rim reflection on lower-right hemisphere
                 drawCircle(
                     brush = Brush.radialGradient(
-                        0.65f to Color.Transparent,
-                        0.93f to Color(0x40C77DFF),
+                        0.64f to Color.Transparent,
+                        0.92f to Color(0x52C77DFF),
                         1.0f to Color.Transparent,
                         center = Offset(
-                            sphereCenter.x - sphereRadius * 0.15f,
-                            sphereCenter.y - sphereRadius * 0.15f,
+                            sphereCenter.x - sphereRadius * 0.16f,
+                            sphereCenter.y - sphereRadius * 0.16f,
                         ),
-                        radius = sphereRadius * 1.05f,
+                        radius = sphereRadius * 1.06f,
                     ),
                     radius = sphereRadius,
                     center = sphereCenter,
@@ -298,47 +296,48 @@ fun TorKnurledOrbPod(
             } else {
                 drawCircle(
                     brush = Brush.radialGradient(
-                        0.0f to MetaToolsTokens.TorAmberBright,
-                        0.48f to MetaToolsTokens.TorAmberMid,
+                        0.0f to Color(0xFFFFEA70),
+                        0.16f to MetaToolsTokens.TorAmberBright,
+                        0.50f to MetaToolsTokens.TorAmberMid,
                         0.88f to MetaToolsTokens.TorAmberDeep,
-                        1.0f to Color(0xFF2E1B00),
+                        1.0f to Color(0xFF2B1800),
                         center = highlightCenter,
-                        radius = sphereDiameter * 0.88f,
+                        radius = sphereDiameter * 0.90f,
                     ),
                     radius = sphereRadius,
                     center = sphereCenter,
                 )
             }
 
-            // 5. Debossed Concentric Onion Vector Glyph stamped into sphere center
+            // 5. Debossed Concentric Onion Vector Emblem stamped into 68.dp sphere center
             drawDebossedOnionGlyph(
                 sphereCenter = sphereCenter,
-                glyphRadius = sphereRadius * 0.42f,
+                glyphRadius = sphereRadius * 0.43f,
                 torReady = torReady,
             )
 
-            // 6. Crisp White Pinprick Specular Highlight
+            // 6. Crisp 10-o'clock White Pinprick Specular Highlight
             drawCircle(
                 brush = Brush.radialGradient(
                     0.0f to Color.White,
-                    0.35f to Color.White.copy(alpha = 0.72f),
+                    0.36f to Color.White.copy(alpha = 0.76f),
                     1.0f to Color.Transparent,
                     center = highlightCenter,
-                    radius = 4.2.dp.toPx(),
+                    radius = 6.4.dp.toPx(),
                 ),
-                radius = 4.2.dp.toPx(),
+                radius = 6.4.dp.toPx(),
                 center = highlightCenter,
             )
             drawCircle(
                 color = Color.White,
-                radius = 1.35.dp.toPx(),
+                radius = 2.1.dp.toPx(),
                 center = highlightCenter,
             )
 
             // Crater overhang shadow when depressed
             if (depressPx > 0.1f) {
                 drawCircle(
-                    color = Color.Black.copy(alpha = (depressPx / 3.dp.toPx()) * 0.24f),
+                    color = Color.Black.copy(alpha = (depressPx / 3.dp.toPx()) * 0.26f),
                     radius = sphereRadius,
                     center = sphereCenter,
                 )
@@ -352,16 +351,15 @@ private fun DrawScope.drawDebossedOnionGlyph(
     glyphRadius: Float,
     torReady: Boolean,
 ) {
-    val shadowStroke = if (torReady) Color(0xAA140028) else Color(0xAA3B2200)
-    val catchlightStroke = if (torReady) Color(0x77D89EFF) else Color(0x77FFE680)
-    val strokePx = 1.35.dp.toPx()
+    val shadowStroke = if (torReady) Color(0xBA140028) else Color(0xBA3B2200)
+    val catchlightStroke = if (torReady) Color(0x88E0B0FF) else Color(0x88FFE680)
+    val strokePx = 2.0.dp.toPx()
 
     fun buildOnionPath(scale: Float, shift: Offset): Path {
         val r = glyphRadius * scale
         val cx = sphereCenter.x + shift.x
         val cy = sphereCenter.y + shift.y + r * 0.14f
         return Path().apply {
-            // Pointed onion tip at top -> bulbous lower belly -> base -> up left belly
             moveTo(cx, cy - r * 1.18f)
             cubicTo(
                 cx + r * 0.22f, cy - r * 0.65f,
@@ -387,7 +385,7 @@ private fun DrawScope.drawDebossedOnionGlyph(
         }
     }
 
-    val catchShift = Offset(0.7.dp.toPx(), 0.8.dp.toPx())
+    val catchShift = Offset(1.0.dp.toPx(), 1.1.dp.toPx())
     val scales = floatArrayOf(1.0f, 0.64f, 0.32f)
     for (s in scales) {
         drawPath(
