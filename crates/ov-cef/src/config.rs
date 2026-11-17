@@ -6,7 +6,7 @@
 //! evaluates clearnet URLs against [`ov_tor::ClearnetAllowlist`].
 
 use std::{
-    net::{IpAddr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -19,6 +19,11 @@ use serde::{Deserialize, Serialize};
 /// Length of the base32 service-ID label in a Tor v3 `.onion` address
 /// (56 RFC 4648 lowercase base32 characters `[a-z2-7]`).
 pub const V3_ONION_LABEL_LEN: usize = 56;
+
+/// Zero-JavaScript HTML v3 `.onion` DuckDuckGo search endpoint used for all
+/// non-URL address bar queries.
+pub const DEFAULT_ONION_SEARCH_PREFIX: &str =
+    "https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/html/?q=";
 
 /// Runtime network policy shared across the browser bridge and Tor service.
 #[derive(Clone, Debug)]
@@ -103,8 +108,16 @@ impl UrlPolicyDecision {
     }
 }
 
-/// Normalize user-entered navigation input while preserving `about:blank`:
-/// bare `.onion` hosts default to `http://`, bare clearnet hosts default to `https://`.
+/// Normalize user-entered navigation input:
+/// - Preserves `about:*`, `http://*`, and `https://*` (as well as explicit schemes
+///   so `check_url_policy` can validate or reject them fail-closed).
+/// - Treats bare input without whitespace as a domain/host URL only when it ends
+///   with `.onion`, is `localhost` / IPv4 / `[IPv6]`, or has a valid hostname
+///   before `/`/`:`/end containing at least one `.` and an alphabetic TLD of
+///   `>= 2` chars (`http://` for `.onion`, `https://` for clearnet/host URLs).
+/// - Routes all other non-empty inputs (single-word queries, multi-word queries,
+///   queries with `?` or symbols) to DuckDuckGo's zero-JS HTML v3 `.onion`
+///   endpoint (`DEFAULT_ONION_SEARCH_PREFIX` + RFC 3986 percent-encoded query).
 pub fn normalize_navigation_url(raw: &str) -> String {
     let trimmed = raw.trim();
     if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("about:blank") {
@@ -112,45 +125,156 @@ pub fn normalize_navigation_url(raw: &str) -> String {
     }
     let lower = trimmed.to_ascii_lowercase();
     if lower.starts_with("about:")
+        || lower.starts_with("http://")
+        || lower.starts_with("https://")
         || lower.starts_with("data:")
         || lower.starts_with("blob:")
-        || trimmed.contains("://")
         || lower.starts_with("javascript:")
+        || lower.starts_with("vbscript:")
         || lower.starts_with("file:")
         || lower.starts_with("content:")
         || lower.starts_with("intent:")
+        || lower.starts_with("mailto:")
+        || lower.starts_with("tel:")
+        || lower.starts_with("sms:")
+        || lower.starts_with("geo:")
+        || lower.starts_with("magnet:")
+        || lower.starts_with("chrome:")
+        || lower.starts_with("chrome-error:")
+        || lower.starts_with("view-source:")
     {
         return trimmed.to_string();
     }
 
-    let host_part = trimmed.split(['/', '?', '#']).next().unwrap_or(trimmed);
-
-    // Preserve unknown opaque schemes like `mailto:...` or `vbscript:...` so
-    // `check_url_policy` rejects them instead of prefixing `https://`.
-    if !host_part.starts_with('[') {
-        if let Some((scheme_candidate, rest)) = host_part.split_once(':') {
-            let port_digits = !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit());
+    if !trimmed.chars().any(char::is_whitespace) {
+        if let Some((scheme_candidate, _)) = trimmed.split_once("://") {
             let valid_scheme = !scheme_candidate.is_empty()
                 && scheme_candidate.as_bytes()[0].is_ascii_alphabetic()
                 && scheme_candidate
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.'));
-            if !port_digits && valid_scheme && !scheme_candidate.contains('.') {
+            if valid_scheme {
                 return trimmed.to_string();
             }
         }
     }
 
-    // Bare hostname/path entered into the address bar: `.onion` destinations
-    // default to `http://` (authenticated end-to-end by v3 onion circuits),
-    // while clearnet hosts (e.g. `tor.taxi`, `tor.taxi/foo`) default to `https://`.
-    let host_only = strip_port(host_part).trim_end_matches('.');
-    let host_lower = host_only.to_ascii_lowercase();
-    if host_lower == "onion" || host_lower.ends_with(".onion") {
-        format!("http://{trimmed}")
-    } else {
-        format!("https://{trimmed}")
+    if is_bare_domain_or_host(trimmed) {
+        let authority = trimmed.split(['/', '?', '#']).next().unwrap_or(trimmed);
+        let host_only = strip_port(authority).trim_end_matches('.');
+        let host_lower = host_only.to_ascii_lowercase();
+        if host_lower == "onion" || host_lower.ends_with(".onion") {
+            return format!("http://{trimmed}");
+        }
+        return format!("https://{trimmed}");
     }
+
+    format!(
+        "{DEFAULT_ONION_SEARCH_PREFIX}{}",
+        percent_encode_rfc3986(trimmed)
+    )
+}
+
+/// RFC 3986 Section 2.3 percent-encoding (unreserved: `ALPHA / DIGIT / "-" / "." / "_" / "~"`).
+pub fn percent_encode_rfc3986(input: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut out = String::with_capacity(input.len() + 8);
+    for &b in input.as_bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push('%');
+            out.push(HEX[(b >> 4) as usize] as char);
+            out.push(HEX[(b & 0x0f) as usize] as char);
+        }
+    }
+    out
+}
+
+fn is_bare_domain_or_host(trimmed: &str) -> bool {
+    if trimmed.is_empty()
+        || trimmed
+            .bytes()
+            .any(|b| b.is_ascii_whitespace() || b <= 0x20 || b == 0x7f)
+        || trimmed.chars().any(char::is_whitespace)
+    {
+        return false;
+    }
+
+    let authority = trimmed.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.is_empty() || authority.contains('@') {
+        return false;
+    }
+
+    if let Some(after_open) = authority.strip_prefix('[') {
+        let Some((ipv6_str, rest)) = after_open.split_once(']') else {
+            return false;
+        };
+        if ipv6_str.parse::<Ipv6Addr>().is_err() {
+            return false;
+        }
+        return match rest {
+            "" => true,
+            _ => rest.strip_prefix(':').is_some_and(is_valid_port),
+        };
+    }
+
+    let host_candidate = match authority.split_once(':') {
+        Some((h, port)) => {
+            if !is_valid_port(port) {
+                return false;
+            }
+            h
+        }
+        None => authority,
+    };
+
+    let host = host_candidate.trim_end_matches('.');
+    if host.is_empty() {
+        return false;
+    }
+    let host_lower = host.to_ascii_lowercase();
+
+    if host_lower == "localhost" {
+        return true;
+    }
+
+    if host.parse::<Ipv4Addr>().is_ok() {
+        return true;
+    }
+
+    if host_lower == "onion" || host_lower.ends_with(".onion") {
+        return host_lower
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.' || b == b'-');
+    }
+
+    let labels: Vec<&str> = host_lower.split('.').collect();
+    if labels.len() < 2 {
+        return false;
+    }
+    let valid_labels = labels.iter().all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    });
+    if !valid_labels {
+        return false;
+    }
+    let tld = labels[labels.len() - 1];
+    (tld.len() >= 2 && tld.bytes().all(|b| b.is_ascii_lowercase()))
+        || (tld.len() >= 5 && tld.starts_with("xn--"))
+}
+
+fn is_valid_port(port: &str) -> bool {
+    !port.is_empty()
+        && port.len() <= 5
+        && port.bytes().all(|b| b.is_ascii_digit())
+        && port.parse::<u16>().is_ok_and(|p| p >= 1)
 }
 
 /// Evaluate `url` against Trap's scheme, loopback-isolation, and
@@ -543,5 +667,82 @@ mod tests {
         );
         assert!(sub_ok.allowed);
         assert!(!sub_ok.requires_clearnet_consent);
+    }
+
+    #[test]
+    fn routes_non_url_queries_to_duckduckgo_v3_onion_html_endpoint_without_clearnet_consent() {
+        let allowlist = ClearnetAllowlist::in_memory();
+
+        // Single-word search terms route to DuckDuckGo v3 `.onion` zero-JS HTML search:
+        for (query, expected_encoded) in [
+            ("dread", "dread"),
+            ("securedrop", "securedrop"),
+            ("whistleblower drop", "whistleblower%20drop"),
+            ("privacy news", "privacy%20news"),
+            ("how to verify pgp?", "how%20to%20verify%20pgp%3F"),
+            ("?q=onion+directory", "%3Fq%3Donion%2Bdirectory"),
+            ("c++ & rust_lang~1.0", "c%2B%2B%20%26%20rust_lang~1.0"),
+            ("site:propublica.org", "site%3Apropublica.org"),
+            ("v0.1.32", "v0.1.32"),
+        ] {
+            let expected_url = format!("{DEFAULT_ONION_SEARCH_PREFIX}{expected_encoded}");
+            assert_eq!(normalize_navigation_url(query), expected_url);
+
+            // Allowed immediately over Tor without clearnet consent, even in hidden-service-only mode:
+            let decision_default = check_url_policy_with_clearnet(query, false, &allowlist);
+            assert!(decision_default.allowed, "failed for query={query}");
+            assert!(
+                decision_default.is_onion,
+                "expected onion for query={query}"
+            );
+            assert!(
+                !decision_default.requires_clearnet_consent,
+                "must not prompt clearnet consent for query={query}"
+            );
+            assert_eq!(decision_default.normalized_url, expected_url);
+
+            let decision_strict = check_url_policy_with_clearnet(query, true, &allowlist);
+            assert!(
+                decision_strict.allowed,
+                "strict mode failed for query={query}"
+            );
+            assert!(decision_strict.is_onion);
+            assert!(!decision_strict.requires_clearnet_consent);
+        }
+
+        // Bare domains, `.onion` hosts, localhost, IPv4, and `[IPv6]` remain host navigations:
+        assert_eq!(normalize_navigation_url("tor.taxi"), "https://tor.taxi");
+        assert_eq!(
+            normalize_navigation_url("www.tor.taxi/foo?bar=1"),
+            "https://www.tor.taxi/foo?bar=1"
+        );
+        assert_eq!(
+            normalize_navigation_url("tor.taxi:8443/dir"),
+            "https://tor.taxi:8443/dir"
+        );
+        assert_eq!(
+            normalize_navigation_url(
+                "duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion"
+            ),
+            "http://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion"
+        );
+        assert_eq!(
+            normalize_navigation_url("localhost:9050"),
+            "https://localhost:9050"
+        );
+        assert_eq!(
+            normalize_navigation_url("127.0.0.1:8080"),
+            "https://127.0.0.1:8080"
+        );
+        assert_eq!(normalize_navigation_url("[::1]:8080"), "https://[::1]:8080");
+        assert_eq!(normalize_navigation_url("about:srcdoc"), "about:srcdoc");
+        assert_eq!(
+            normalize_navigation_url("http://example.com/a"),
+            "http://example.com/a"
+        );
+        assert_eq!(
+            normalize_navigation_url("https://example.com/a"),
+            "https://example.com/a"
+        );
     }
 }

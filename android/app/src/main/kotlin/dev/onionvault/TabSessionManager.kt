@@ -24,6 +24,7 @@ import dev.onionvault.platform.LanAccessController
 import dev.onionvault.platform.MediaDisplayNormalizer
 import dev.onionvault.platform.ScreenRecordingGuard
 import dev.onionvault.platform.TouchpadPointerBridge
+import dev.onionvault.ui.isBlankOrStartUrl
 import java.util.UUID
 import kotlin.math.abs
 import kotlin.math.ln
@@ -137,6 +138,11 @@ class TabSessionManager(
     ) : FrameLayout(ctx) {
         val virtualPointer = TouchpadPointerBridge.VirtualPointerState()
 
+        private var trackingPointerId: Int = MotionEvent.INVALID_POINTER_ID
+        private var lastTrackY: Float = 0f
+        private var directionalDeltaY: Float = 0f
+        private var multiTouchGesture: Boolean = false
+
         private val refreshRunnable = Runnable {
             val browser = sessions[tabId]?.browser ?: return@Runnable
             cdpController.refreshViewportBounds(tabId, browser)
@@ -150,6 +156,7 @@ class TabSessionManager(
             if (touchSuppressed) {
                 return true
             }
+            trackScrollChoreography(ev)
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN,
                 MotionEvent.ACTION_MOVE,
@@ -170,6 +177,86 @@ class TabSessionManager(
             return handled
         }
 
+        private fun trackScrollChoreography(ev: MotionEvent) {
+            if (tabId != _activeTabId.value) return
+            val activeUrl = sessions[tabId]?.state?.url.orEmpty()
+            if (isBlankOrStartUrl(activeUrl)) {
+                if (_podsRetracted.value) {
+                    _podsRetracted.value = false
+                }
+                trackingPointerId = MotionEvent.INVALID_POINTER_ID
+                directionalDeltaY = 0f
+                multiTouchGesture = false
+                return
+            }
+
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    trackingPointerId = ev.getPointerId(0)
+                    lastTrackY = ev.y
+                    directionalDeltaY = 0f
+                    multiTouchGesture = false
+                }
+
+                MotionEvent.ACTION_POINTER_DOWN -> {
+                    multiTouchGesture = true
+                    directionalDeltaY = 0f
+                }
+
+                MotionEvent.ACTION_POINTER_UP -> {
+                    val liftedIdx = ev.actionIndex
+                    if (ev.getPointerId(liftedIdx) == trackingPointerId) {
+                        val nextIdx = if (liftedIdx == 0) 1 else 0
+                        if (nextIdx < ev.pointerCount) {
+                            trackingPointerId = ev.getPointerId(nextIdx)
+                            lastTrackY = ev.getY(nextIdx)
+                        } else {
+                            trackingPointerId = MotionEvent.INVALID_POINTER_ID
+                        }
+                    }
+                    directionalDeltaY = 0f
+                    if (ev.pointerCount - 1 <= 1) {
+                        multiTouchGesture = false
+                    }
+                }
+
+                MotionEvent.ACTION_MOVE -> {
+                    if (!multiTouchGesture && ev.pointerCount == 1) {
+                        val idx = ev.findPointerIndex(trackingPointerId)
+                        if (idx >= 0) {
+                            val currentY = ev.getY(idx)
+                            val stepDy = currentY - lastTrackY
+                            lastTrackY = currentY
+                            directionalDeltaY = if (
+                                (stepDy > 0f && directionalDeltaY < 0f) ||
+                                (stepDy < 0f && directionalDeltaY > 0f)
+                            ) {
+                                stepDy
+                            } else {
+                                directionalDeltaY + stepDy
+                            }
+                            val density = resources.displayMetrics.density.coerceAtLeast(1f)
+                            val retractPx = SCROLL_RETRACT_THRESHOLD_DP * density
+                            val restorePx = SCROLL_RESTORE_THRESHOLD_DP * density
+                            if (directionalDeltaY < -retractPx) {
+                                setPodsRetracted(true)
+                            } else if (directionalDeltaY > restorePx) {
+                                setPodsRetracted(false)
+                            }
+                        }
+                    }
+                }
+
+                MotionEvent.ACTION_UP,
+                MotionEvent.ACTION_CANCEL,
+                -> {
+                    trackingPointerId = MotionEvent.INVALID_POINTER_ID
+                    directionalDeltaY = 0f
+                    multiTouchGesture = false
+                }
+            }
+        }
+
         override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
             if (touchSuppressed) {
                 return true
@@ -187,6 +274,17 @@ class TabSessionManager(
 
         override fun onGenericMotionEvent(event: MotionEvent): Boolean {
             if (touchSuppressed) return true
+            if (event.actionMasked == MotionEvent.ACTION_SCROLL && tabId == _activeTabId.value) {
+                val activeUrl = sessions[tabId]?.state?.url.orEmpty()
+                if (!isBlankOrStartUrl(activeUrl)) {
+                    val vScroll = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
+                    if (vScroll < -0.2f) {
+                        setPodsRetracted(true)
+                    } else if (vScroll > 0.2f) {
+                        setPodsRetracted(false)
+                    }
+                }
+            }
             if (dispatchRelativeTouchpadOrPointerMotion(event)) {
                 return true
             }
@@ -209,11 +307,254 @@ class TabSessionManager(
         }
     }
 
-    private companion object {
-        const val TAG = "TabSessionManager"
-        const val MENU_ID_PGP_ACTION = 0x54524150
-        const val MIN_ZOOM_PERCENT = 50
-        const val MAX_ZOOM_PERCENT = 300
+    companion object {
+        private const val TAG = "TabSessionManager"
+        private const val MENU_ID_PGP_ACTION = 0x54524150
+        private const val MIN_ZOOM_PERCENT = 50
+        private const val MAX_ZOOM_PERCENT = 300
+        private val HEX_UPPER = "0123456789ABCDEF".toCharArray()
+
+        const val DEFAULT_ONION_SEARCH_PREFIX: String =
+            "https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/html/?q="
+
+        const val SCROLL_RETRACT_THRESHOLD_DP: Float = 12f
+        const val SCROLL_RESTORE_THRESHOLD_DP: Float = 10f
+
+        /**
+         * Normalizes user-entered address bar text:
+         * - Preserves `about:` URIs and explicit `http://` or `https://` URLs (plus
+         *   explicit schemes so URL policy rejects unsafe schemes fail-closed).
+         * - Treats bare input without whitespace as a domain/host URL only when it ends
+         *   with `.onion`, is `localhost` / IPv4 / `[IPv6]`, or has a valid hostname
+         *   before path, port, or end containing at least one `.` and an alphabetic TLD >= 2 chars.
+         * - Routes all other non-empty queries to DuckDuckGo's zero-JS HTML v3 `.onion`
+         *   endpoint (`DEFAULT_ONION_SEARCH_PREFIX` + RFC 3986 percent-encoded query).
+         */
+        fun normalizeAddressOrSearch(rawInput: String): String {
+            val trimmed = rawInput.trim()
+            if (trimmed.isEmpty() || trimmed.equals("about:blank", ignoreCase = true)) {
+                return "about:blank"
+            }
+            val lower = trimmed.lowercase()
+            if (lower.startsWith("about:") ||
+                lower.startsWith("http://") ||
+                lower.startsWith("https://") ||
+                lower.startsWith("data:") ||
+                lower.startsWith("blob:") ||
+                lower.startsWith("javascript:") ||
+                lower.startsWith("vbscript:") ||
+                lower.startsWith("file:") ||
+                lower.startsWith("content:") ||
+                lower.startsWith("intent:") ||
+                lower.startsWith("mailto:") ||
+                lower.startsWith("tel:") ||
+                lower.startsWith("sms:") ||
+                lower.startsWith("geo:") ||
+                lower.startsWith("magnet:") ||
+                lower.startsWith("chrome:") ||
+                lower.startsWith("chrome-error:") ||
+                lower.startsWith("view-source:")
+            ) {
+                return trimmed
+            }
+
+            if (trimmed.none { it.isWhitespace() }) {
+                val schemeIdx = trimmed.indexOf("://")
+                if (schemeIdx > 0) {
+                    val schemeCandidate = trimmed.substring(0, schemeIdx)
+                    val validScheme = schemeCandidate[0].isLetter() &&
+                        schemeCandidate.all { ch ->
+                            ch.isLetterOrDigit() || ch == '+' || ch == '-' || ch == '.'
+                        }
+                    if (validScheme) {
+                        return trimmed
+                    }
+                }
+            }
+
+            if (isBareDomainOrHost(trimmed)) {
+                val authority = trimmed.substringBefore('/').substringBefore('?').substringBefore('#')
+                val hostOnly = stripPort(authority).trimEnd('.')
+                val hostLower = hostOnly.lowercase()
+                val scheme = if (
+                    hostLower == "onion" ||
+                    hostLower.endsWith(".onion") ||
+                    LanAccessController.isLocalNetworkUrlOrHost(trimmed)
+                ) {
+                    "http://"
+                } else {
+                    "https://"
+                }
+                return "$scheme$trimmed"
+            }
+
+            return "$DEFAULT_ONION_SEARCH_PREFIX${percentEncodeRfc3986(trimmed)}"
+        }
+
+        fun percentEncodeRfc3986(input: String): String {
+            val bytes = input.encodeToByteArray()
+            val out = StringBuilder(bytes.size + 8)
+            for (b in bytes) {
+                val u = b.toInt() and 0xFF
+                val isUnreserved = (u in 'A'.code..'Z'.code) ||
+                    (u in 'a'.code..'z'.code) ||
+                    (u in '0'.code..'9'.code) ||
+                    u == '-'.code ||
+                    u == '.'.code ||
+                    u == '_'.code ||
+                    u == '~'.code
+                if (isUnreserved) {
+                    out.append(u.toChar())
+                } else {
+                    out.append('%')
+                    out.append(HEX_UPPER[u ushr 4])
+                    out.append(HEX_UPPER[u and 0x0F])
+                }
+            }
+            return out.toString()
+        }
+
+        private fun isBareDomainOrHost(trimmed: String): Boolean {
+            if (trimmed.isEmpty() ||
+                trimmed.any { it.isWhitespace() || it.code <= 0x20 || it.code == 0x7F }
+            ) {
+                return false
+            }
+
+            val authority = trimmed.substringBefore('/').substringBefore('?').substringBefore('#')
+            if (authority.isEmpty() || authority.contains('@')) {
+                return false
+            }
+
+            if (authority.startsWith('[')) {
+                val closeIdx = authority.indexOf(']')
+                if (closeIdx <= 1) return false
+                val ipv6Str = authority.substring(1, closeIdx)
+                if (!isIpv6Literal(ipv6Str)) return false
+                val rest = authority.substring(closeIdx + 1)
+                return rest.isEmpty() || (rest.startsWith(':') && isValidPort(rest.substring(1)))
+            }
+
+            val colonIdx = authority.indexOf(':')
+            val hostCandidate = if (colonIdx >= 0) {
+                val port = authority.substring(colonIdx + 1)
+                if (!isValidPort(port)) return false
+                authority.substring(0, colonIdx)
+            } else {
+                authority
+            }
+
+            val host = hostCandidate.trimEnd('.')
+            if (host.isEmpty()) return false
+            val hostLower = host.lowercase()
+
+            if (hostLower == "localhost") return true
+            if (isIpv4Literal(host)) return true
+
+            if (hostLower == "onion" || hostLower.endsWith(".onion")) {
+                return hostLower.all { ch ->
+                    ch in 'a'..'z' || ch in '0'..'9' || ch == '.' || ch == '-'
+                }
+            }
+
+            val labels = hostLower.split('.')
+            if (labels.size < 2) return false
+            val validLabels = labels.all { label ->
+                label.isNotEmpty() &&
+                    label.length <= 63 &&
+                    !label.startsWith('-') &&
+                    !label.endsWith('-') &&
+                    label.all { ch -> ch in 'a'..'z' || ch in '0'..'9' || ch == '-' }
+            }
+            if (!validLabels) return false
+            val tld = labels.last()
+            return (tld.length >= 2 && tld.all { it in 'a'..'z' }) ||
+                (tld.length >= 5 && tld.startsWith("xn--"))
+        }
+
+        private fun stripPort(hostPort: String): String {
+            if (hostPort.startsWith('[')) {
+                val closeIdx = hostPort.indexOf(']')
+                return if (closeIdx > 0) hostPort.substring(1, closeIdx) else hostPort
+            }
+            val colonIdx = hostPort.lastIndexOf(':')
+            if (colonIdx > 0) {
+                val port = hostPort.substring(colonIdx + 1)
+                if (port.isNotEmpty() && port.all { it in '0'..'9' }) {
+                    return hostPort.substring(0, colonIdx)
+                }
+            }
+            return hostPort
+        }
+
+        private fun isValidPort(port: String): Boolean {
+            if (port.isEmpty() || port.length > 5 || !port.all { it in '0'..'9' }) return false
+            val num = port.toIntOrNull() ?: return false
+            return num in 1..65535
+        }
+
+        private fun isIpv4Literal(raw: String): Boolean {
+            val parts = raw.split('.')
+            if (parts.size != 4) return false
+            return parts.all { part ->
+                val n = part.toIntOrNull() ?: return false
+                n in 0..255 && part == n.toString()
+            }
+        }
+
+        private fun isIpv6Literal(raw: String): Boolean {
+            if (raw.isEmpty() || !raw.contains(':') || raw.contains(":::")) return false
+            val doubleColonCount = raw.windowed(size = 2, step = 1).count { it == "::" }
+            if (doubleColonCount > 1) return false
+
+            val hasDoubleColon = doubleColonCount == 1
+            val halves = if (hasDoubleColon) raw.split("::", limit = 2) else listOf(raw)
+            val leftGroups = if (halves[0].isEmpty()) emptyList() else halves[0].split(':')
+            val rightGroups = if (hasDoubleColon && halves[1].isNotEmpty()) {
+                halves[1].split(':')
+            } else {
+                emptyList()
+            }
+
+            val mutableRight = rightGroups.toMutableList()
+            var ipv4TailSegments = 0
+            val tailCandidate = mutableRight.lastOrNull()
+                ?: if (!hasDoubleColon) leftGroups.lastOrNull() else null
+            if (tailCandidate != null && tailCandidate.contains('.')) {
+                if (!isIpv4Literal(tailCandidate)) return false
+                ipv4TailSegments = 2
+                if (mutableRight.isNotEmpty()) {
+                    mutableRight.removeAt(mutableRight.lastIndex)
+                } else {
+                    return validateIpv6Hextets(
+                        left = leftGroups.dropLast(1),
+                        right = emptyList(),
+                        extraSegments = ipv4TailSegments,
+                        hasDoubleColon = hasDoubleColon,
+                    )
+                }
+            }
+            return validateIpv6Hextets(leftGroups, mutableRight, ipv4TailSegments, hasDoubleColon)
+        }
+
+        private fun validateIpv6Hextets(
+            left: List<String>,
+            right: List<String>,
+            extraSegments: Int,
+            hasDoubleColon: Boolean,
+        ): Boolean {
+            val allGroups = left + right
+            if (allGroups.any { group ->
+                    group.isEmpty() || group.length > 4 || group.any { ch ->
+                        ch !in '0'..'9' && ch !in 'a'..'f' && ch !in 'A'..'F'
+                    }
+                }
+            ) {
+                return false
+            }
+            val totalSegments = allGroups.size + extraSegments
+            return if (hasDoubleColon) totalSegments <= 7 else totalSegments == 8
+        }
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -230,6 +571,17 @@ class TabSessionManager(
 
     private val _activeSocksAddr = MutableStateFlow("")
     val activeSocksAddr: StateFlow<String> = _activeSocksAddr.asStateFlow()
+
+    private val _podsRetracted = MutableStateFlow(false)
+    val podsRetracted: StateFlow<Boolean> = _podsRetracted.asStateFlow()
+
+    fun setPodsRetracted(retracted: Boolean) {
+        _podsRetracted.value = retracted
+    }
+
+    @VisibleForTesting
+    internal fun createTouchGateForTest(tabId: String): FrameLayout =
+        TouchGateFrameLayout(context, tabId)
 
     @Volatile
     private var touchSuppressed: Boolean = false
@@ -384,6 +736,7 @@ class TabSessionManager(
         val existing = sessions.values.toList()
         sessions.clear()
         _activeTabId.value = null
+        _podsRetracted.value = false
         cdpController.clearAll()
         backStackManager.clearAll()
 
@@ -494,6 +847,9 @@ class TabSessionManager(
                     }
                     managed.overrideDisplayUrl = null
                     managed.pendingNavigationUrl = candidate
+                    if (targetTabId == _activeTabId.value) {
+                        _podsRetracted.value = false
+                    }
                     updateTabState(targetTabId) {
                         it.copy(
                             url = candidate,
@@ -571,6 +927,9 @@ class TabSessionManager(
 
         managed.overrideDisplayUrl = null
         managed.pendingNavigationUrl = normalized.takeIf { it != "about:blank" }
+        if (targetTabId == _activeTabId.value) {
+            _podsRetracted.value = false
+        }
         updateTabState(targetTabId) {
             it.copy(
                 url = normalized,
@@ -608,6 +967,9 @@ class TabSessionManager(
                 return@post
             }
             managed.overrideDisplayUrl = displayUrl
+            if (targetTabId == _activeTabId.value) {
+                _podsRetracted.value = false
+            }
             updateTabState(targetTabId) {
                 it.copy(
                     url = displayUrl,
@@ -682,6 +1044,9 @@ class TabSessionManager(
         val managed = tabId?.let { sessions[it] } ?: return false
         val browser = managed.browser ?: return false
         if (!browser.canGoBack()) return false
+        if (managed.id == _activeTabId.value) {
+            _podsRetracted.value = false
+        }
         backStackManager.popNewest(managed.id)
         browser.goBack()
         return true
@@ -692,6 +1057,9 @@ class TabSessionManager(
         val browser = managed.browser ?: return false
         if (!managed.state.canGoForward && !canNavigateForward(browser)) {
             return false
+        }
+        if (managed.id == _activeTabId.value) {
+            _podsRetracted.value = false
         }
         backStackManager.capture(
             tabId = managed.id,
@@ -1091,6 +1459,7 @@ class TabSessionManager(
         val all = sessions.values.toList()
         sessions.clear()
         _activeTabId.value = null
+        _podsRetracted.value = false
         cdpController.clearAll()
         backStackManager.clearAll()
         mediaDisplayNormalizer.releaseAll()
@@ -1325,8 +1694,10 @@ class TabSessionManager(
                         }
                     }
                     val isOnion = isOnionAddress(safeUrl)
+                    var activeUrlChanged = false
                     updateTabState(tabId) { state ->
                         val urlChanged = state.url != safeUrl
+                        activeUrlChanged = urlChanged || isBlankOrStartUrl(safeUrl)
                         state.copy(
                             url = safeUrl,
                             title = if (safeUrl == "about:blank") "New Tab" else state.title.ifBlank { displayTitleForUrl(safeUrl) },
@@ -1340,6 +1711,9 @@ class TabSessionManager(
                             videoWidth = if (safeUrl == "about:blank") 0 else state.videoWidth,
                             videoHeight = if (safeUrl == "about:blank") 0 else state.videoHeight,
                         )
+                    }
+                    if (tabId == _activeTabId.value && activeUrlChanged) {
+                        _podsRetracted.value = false
                     }
                 }
             }
@@ -1585,29 +1959,8 @@ class TabSessionManager(
         return OvNative.parseTextClassification(json)
     }
 
-    private fun normalizeUserAddressInput(rawInput: String): String {
-        val trimmed = rawInput.trim()
-        if (trimmed.isEmpty() || trimmed.equals("about:blank", ignoreCase = true)) {
-            return "about:blank"
-        }
-        if (trimmed.contains("://") || trimmed.startsWith("about:", ignoreCase = true) ||
-            trimmed.startsWith("data:", ignoreCase = true) ||
-            trimmed.startsWith("file:", ignoreCase = true) ||
-            trimmed.startsWith("javascript:", ignoreCase = true)
-        ) {
-            return trimmed
-        }
-        // Hidden services and local LAN endpoints default to `http://`; clearnet defaults to `https://`.
-        val hostPart = trimmed.substringBefore('/').substringBefore(':').lowercase()
-        val scheme = if (hostPart.endsWith(".onion") ||
-            LanAccessController.isLocalNetworkUrlOrHost(trimmed)
-        ) {
-            "http://"
-        } else {
-            "https://"
-        }
-        return "$scheme$trimmed"
-    }
+    private fun normalizeUserAddressInput(rawInput: String): String =
+        normalizeAddressOrSearch(rawInput)
 
     private fun evaluateUrlPolicy(
         url: String,
@@ -1647,6 +2000,7 @@ class TabSessionManager(
 
     private fun selectTabInternal(tabId: String) {
         _activeTabId.value = tabId
+        _podsRetracted.value = false
         sessions.forEach { (id, managed) ->
             val visible = id == tabId
             managed.browser?.let { browser ->

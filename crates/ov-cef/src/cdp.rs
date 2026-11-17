@@ -45,6 +45,12 @@ pub struct CdpClassifiedNode {
     /// Real cryptographic fingerprint / KeyID hint extracted from OpenPGP
     /// packets when available (`""` when none is present).
     pub fingerprint_hint: String,
+    /// `true` when this element is a search box (`type="search"`,
+    /// `role="searchbox"`, or single-line `<input>` with `name`/`id` in
+    /// `["q", "query", "search", "s"]`), allowing UI chrome to exclude search
+    /// boxes from passive editable PGP compose fields unless explicitly targeted.
+    #[serde(default)]
+    pub is_search_like: bool,
 }
 
 /// Classification emitted for arbitrary selected or pasted text.
@@ -285,6 +291,7 @@ fn walk_cdp<F>(
         if let Some((kind, default_label, payload_text, locks_children)) =
             classify_cdp_element(node, &tag, inside_pgp_block)
         {
+            let is_search_like = kind == "pgp_textarea" && is_search_like_element(node, &tag);
             let (fp_hint, label_override) = hint_resolver(kind, &payload_text);
             out.push(CdpClassifiedNode {
                 node_id: node.node_id,
@@ -294,6 +301,7 @@ fn walk_cdp<F>(
                 action_label: label_override.unwrap_or_else(|| default_label.to_string()),
                 text: payload_text,
                 fingerprint_hint: fp_hint.unwrap_or_default(),
+                is_search_like,
             });
             if locks_children {
                 child_inside = true;
@@ -597,6 +605,34 @@ fn is_pubkey_upload_field(node: &CdpNode, live_value: &str) -> bool {
     false
 }
 
+/// `true` when `node` is a search box (`type="search"`, `role="searchbox"`, or
+/// single-line `<input>` with `name`/`id` in `["q", "query", "search", "s"]`).
+pub fn is_search_like_element(node: &CdpNode, tag: &str) -> bool {
+    if node
+        .attr("role")
+        .is_some_and(|r| r.trim().eq_ignore_ascii_case("searchbox"))
+    {
+        return true;
+    }
+    if tag == "input" {
+        if node
+            .attr("type")
+            .is_some_and(|t| t.trim().eq_ignore_ascii_case("search"))
+        {
+            return true;
+        }
+        for attr_name in ["name", "id"] {
+            if let Some(raw) = node.attr(attr_name) {
+                let normalized = raw.trim().to_ascii_lowercase();
+                if matches!(normalized.as_str(), "q" | "query" | "search" | "s") {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -877,5 +913,106 @@ mod tests {
         assert!(!nodes[0].text.contains("Initial stale text"));
         assert!(nodes[0].text.starts_with("-----BEGIN PGP MESSAGE-----"));
         assert!(nodes[0].text.ends_with("-----END PGP MESSAGE-----"));
+        assert!(!nodes[0].is_search_like);
+    }
+
+    #[test]
+    fn marks_search_inputs_as_is_search_like_while_preserving_compose_textareas() {
+        let cdp_json = r##"{
+          "root": {
+            "nodeId": 1,
+            "backendNodeId": 1,
+            "nodeType": 9,
+            "nodeName": "#document",
+            "children": [{
+              "nodeId": 2,
+              "backendNodeId": 2,
+              "nodeType": 1,
+              "nodeName": "BODY",
+              "localName": "body",
+              "children": [
+                {
+                  "nodeId": 10,
+                  "backendNodeId": 100,
+                  "nodeType": 1,
+                  "nodeName": "INPUT",
+                  "localName": "input",
+                  "attributes": ["type", "text", "name", "q", "placeholder", "Search DuckDuckGo"]
+                },
+                {
+                  "nodeId": 11,
+                  "backendNodeId": 101,
+                  "nodeType": 1,
+                  "nodeName": "INPUT",
+                  "localName": "input",
+                  "attributes": ["type", "search", "name", "site_filter"]
+                },
+                {
+                  "nodeId": 12,
+                  "backendNodeId": 102,
+                  "nodeType": 1,
+                  "nodeName": "INPUT",
+                  "localName": "input",
+                  "attributes": ["type", "text", "id", "query"]
+                },
+                {
+                  "nodeId": 13,
+                  "backendNodeId": 103,
+                  "nodeType": 1,
+                  "nodeName": "DIV",
+                  "localName": "div",
+                  "attributes": ["contenteditable", "true", "role", "searchbox"]
+                },
+                {
+                  "nodeId": 20,
+                  "backendNodeId": 200,
+                  "nodeType": 1,
+                  "nodeName": "INPUT",
+                  "localName": "input",
+                  "attributes": ["type", "text", "name", "subject"]
+                },
+                {
+                  "nodeId": 21,
+                  "backendNodeId": 201,
+                  "nodeType": 1,
+                  "nodeName": "TEXTAREA",
+                  "localName": "textarea",
+                  "attributes": ["name", "q", "rows", "6"]
+                },
+                {
+                  "nodeId": 22,
+                  "backendNodeId": 202,
+                  "nodeType": 1,
+                  "nodeName": "TEXTAREA",
+                  "localName": "textarea",
+                  "attributes": ["id", "message", "name", "message"]
+                }
+              ]
+            }]
+          }
+        }"##;
+
+        let nodes = classify_cdp_dom_json(cdp_json).expect("valid CDP JSON");
+        assert_eq!(nodes.len(), 7);
+
+        // Search boxes (`name="q"`, `type="search"`, `id="query"`, `role="searchbox"`):
+        for node in &nodes[..4] {
+            assert!(
+                node.is_search_like,
+                "expected node {node:?} to be marked isSearchLike",
+            );
+        }
+
+        // Non-search `<input name="subject">` and multi-line `<textarea>` controls:
+        for node in &nodes[4..7] {
+            assert!(
+                !node.is_search_like,
+                "expected node {node:?} NOT to be marked isSearchLike",
+            );
+        }
+
+        // Verify camelCase JSON serialization emits `"isSearchLike":true`:
+        let serialized = serde_json::to_string(&nodes[0]).expect("serialize node");
+        assert!(serialized.contains("\"isSearchLike\":true"));
     }
 }

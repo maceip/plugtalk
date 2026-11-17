@@ -53,6 +53,7 @@ data class BrowserUiState(
     val surfaceFilterMode: SurfaceFilterMode = SurfaceFilterMode.None,
     val handoffEnabled: Boolean = false,
     val isScreenRecordingActive: Boolean = false,
+    val podsRetracted: Boolean = false,
 ) {
     val tabCount: Int get() = tabs.size.coerceAtLeast(1)
 
@@ -121,7 +122,20 @@ data class PgpOverlayState(
     val encryptRequest: EncryptRequestState? = null,
     val decryptPassphraseRequest: DecryptPassphraseRequestState? = null,
     val error: String? = null,
-)
+) {
+    val hasArmoredPgpBlock: Boolean
+        get() = fields.any { it.isArmoredPgpBlock }
+
+    val primaryArmoredBlock: PgpFieldState?
+        get() = fields.firstOrNull { it.kind == "pgp_message" }
+            ?: fields.firstOrNull { it.isArmoredPgpBlock }
+
+    val editablePgpFields: List<PgpFieldState>
+        get() = fields.filter { it.isEditablePgpField }
+
+    val hasPgpContent: Boolean
+        get() = hasArmoredPgpBlock || editablePgpFields.isNotEmpty()
+}
 
 @Immutable
 data class PgpFieldState(
@@ -134,7 +148,21 @@ data class PgpFieldState(
     val cdpNodeId: Int = 0,
     val backendNodeId: Int = 0,
     val fingerprintHint: String = "",
-)
+    val isSearchLike: Boolean = false,
+) {
+    val isArmoredPgpBlock: Boolean
+        get() = kind == "pgp_message" ||
+            (kind == "pgp_public_key" && !label.equals("Insert My PubKey", ignoreCase = true))
+
+    val isEditablePgpField: Boolean
+        get() = !isSearchLike && (
+            kind == "pgp_textarea" ||
+                kind == "textarea" ||
+                kind == "text_input" ||
+                kind == "editable" ||
+                (kind == "pgp_public_key" && label.equals("Insert My PubKey", ignoreCase = true))
+            )
+}
 
 @Immutable
 data class NormalizedBounds(
