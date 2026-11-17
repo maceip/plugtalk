@@ -338,25 +338,36 @@ class PipControllerTest {
             }
         }
 
-        // Before PiP transition: dock, loading bar, status banner, and PGP overlay exist.
-        compose.onNodeWithTag("bottom_control_dock").assertExists()
-        compose.onNodeWithTag("top_loading_bar").assertExists()
+        // Before PiP transition: floating MetaTools pods, steel rails, status banner, and PGP overlay exist.
+        compose.onAllNodesWithTag("bottom_control_dock").assertCountEquals(0)
+        compose.onNodeWithTag("metatools_browser_shell").assertExists()
+        compose.onNodeWithTag("perimeter_steel_rails").assertExists()
+        compose.onNodeWithTag("tor_orb_pod").assertExists()
+        compose.onNodeWithTag("crt_address_pod").assertExists()
+        compose.onNodeWithTag("pgp_rocker_pod").assertExists()
+        compose.onNodeWithTag("side_remote_pod").assertExists()
         compose.onNodeWithTag("status_notice_banner").assertExists()
         compose.onNodeWithTag("pgp_field_overlay").assertExists()
 
-        // First frame of transition (`isTransitioningToPip == true`): all chrome stripped.
+        // First frame of transition (`isTransitioningToPip == true`): all floating pods & rails stripped.
         chromeHidden = true
         compose.waitForIdle()
-        compose.onAllNodesWithTag("bottom_control_dock").assertCountEquals(0)
-        compose.onAllNodesWithTag("top_loading_bar").assertCountEquals(0)
+        compose.onAllNodesWithTag("perimeter_steel_rails").assertCountEquals(0)
+        compose.onAllNodesWithTag("tor_orb_pod").assertCountEquals(0)
+        compose.onAllNodesWithTag("crt_address_pod").assertCountEquals(0)
+        compose.onAllNodesWithTag("pgp_rocker_pod").assertCountEquals(0)
+        compose.onAllNodesWithTag("side_remote_pod").assertCountEquals(0)
         compose.onAllNodesWithTag("status_notice_banner").assertCountEquals(0)
         compose.onAllNodesWithTag("pgp_field_overlay").assertCountEquals(0)
 
-        // Exiting PiP restores surrounding browser chrome cleanly.
+        // Exiting PiP restores surrounding floating pods & rails cleanly.
         chromeHidden = false
         compose.waitForIdle()
-        compose.onNodeWithTag("bottom_control_dock").assertExists()
-        compose.onNodeWithTag("top_loading_bar").assertExists()
+        compose.onNodeWithTag("perimeter_steel_rails").assertExists()
+        compose.onNodeWithTag("tor_orb_pod").assertExists()
+        compose.onNodeWithTag("crt_address_pod").assertExists()
+        compose.onNodeWithTag("pgp_rocker_pod").assertExists()
+        compose.onNodeWithTag("side_remote_pod").assertExists()
         compose.onNodeWithTag("status_notice_banner").assertExists()
         compose.onNodeWithTag("pgp_field_overlay").assertExists()
     }

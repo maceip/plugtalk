@@ -267,6 +267,12 @@ fun RecessedCrtAddressPod(
         val readout = remember(url, isLoading) {
             formatCrtDisplayAddress(url = url, isLoading = isLoading)
         }
+        val fullTarget = if (isBlankOrStartUrl(url)) "search / .onion" else url.trim()
+        val a11yAddressDesc = if (isLoading && !isBlankOrStartUrl(url)) {
+            "Address bar (Stop loading): $fullTarget"
+        } else {
+            "Address bar: $fullTarget"
+        }
 
         Box(
             modifier = modifier
@@ -276,7 +282,7 @@ fun RecessedCrtAddressPod(
                 .clip(outerShape)
                 .semantics {
                     role = Role.Button
-                    contentDescription = "Address bar: ${readout.text.text}"
+                    contentDescription = a11yAddressDesc
                     onClick {
                         onEditingChange(true)
                         true

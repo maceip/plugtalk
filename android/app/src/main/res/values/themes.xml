@@ -7,8 +7,9 @@
     -->
     <style name="Theme.Trap" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/trap_sd_bg</item>
-        <item name="android:statusBarColor">@color/trap_sd_bg</item>
-        <item name="android:navigationBarColor">@color/trap_sd_surface</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
         <item name="android:windowLightStatusBar">false</item>
     </style>
 </resources>

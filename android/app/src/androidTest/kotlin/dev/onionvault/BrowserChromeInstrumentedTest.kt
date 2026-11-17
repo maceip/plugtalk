@@ -2,6 +2,7 @@ package dev.onionvault
 
 import android.content.ClipboardManager
 import android.content.Context
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
@@ -11,11 +12,12 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.height
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.onionvault.ui.TrapPreferences
 import dev.onionvault.ui.TrapThemeFamily
@@ -36,9 +38,11 @@ import org.junit.runner.RunWith
 /**
  * End-to-end instrumentation suite running on a real Android device / Limrun instance.
  *
- * Exercises live [MainActivity], single-row [BrowserScreen] chrome, minimal [StartPage],
- * [ClearnetConsentSheet] (3-day TTL persistence, custom `*` globbing, and rule revocation),
- * [TrapPreferences], [TabSessionManager], and [OvNative] (Arti Tor + Sequoia OpenPGP).
+ * Exercises live [MainActivity], full-bleed `MetaToolsBrowserShell` floating hardware pods
+ * (`tor_orb_pod`, `crt_address_pod`, `pgp_rocker_pod`, `side_remote_pod`, `perimeter_steel_rails`),
+ * street-zine `StartPage` + `TrustedOnionDirectory`, `ClearnetConsentHardwarePod` (3-day TTL
+ * persistence, custom `*` globbing, and rule revocation), [TrapPreferences], [TabSessionManager],
+ * and [OvNative] (Arti Tor + Sequoia OpenPGP).
  */
 @RunWith(AndroidJUnit4::class)
 class BrowserChromeInstrumentedTest {
@@ -55,29 +59,33 @@ class BrowserChromeInstrumentedTest {
             OvNative.nativeClearClearnetRules()
         }
 
-        // 1. Minimal StartPage + single-row bottom dock (~56.dp content height, zero top bar)
+        // 1. Full-bleed MetaToolsBrowserShell + street-zine StartPage (zero BottomControlDock)
         composeRule.onNodeWithTag("browser_screen").assertIsDisplayed()
+        composeRule.onNodeWithTag("metatools_browser_shell").assertIsDisplayed()
+        composeRule.onNodeWithTag("perimeter_steel_rails").assertIsDisplayed()
+        composeRule.onNodeWithTag("tor_orb_pod").assertIsDisplayed()
+        composeRule.onNodeWithTag("crt_address_pod").assertIsDisplayed()
+        composeRule.onNodeWithTag("pgp_rocker_pod").assertIsDisplayed()
+        composeRule.onNodeWithTag("side_remote_pod").assertIsDisplayed()
         composeRule.onNodeWithTag("start_page").assertIsDisplayed()
         composeRule.onNodeWithTag("start_tor_status").assertIsDisplayed()
+        composeRule.onNodeWithTag("start_search_box").assertIsDisplayed()
+        composeRule.onNodeWithTag("trusted_onion_directory").assertIsDisplayed()
+        composeRule.onNodeWithTag("bottom_control_dock").assertDoesNotExist()
         composeRule.onNodeWithTag("top_identity_header").assertDoesNotExist()
         composeRule.onNodeWithTag("transport_footer").assertDoesNotExist()
-        composeRule.onNodeWithTag("start_security_card").assertDoesNotExist()
-        composeRule.onNodeWithTag("start_ddg_onion_card").assertDoesNotExist()
-        composeRule.onNodeWithText("Launch").assertDoesNotExist()
-        composeRule.onNodeWithTag("address_input").assertTextEquals("Enter address", "")
 
-        val dockHeight = composeRule.onNodeWithTag("bottom_control_dock")
-            .getUnclippedBoundsInRoot()
-            .height
-        assertTrue(
-            "Expected single-row bottom_control_dock content height < 90dp, got $dockHeight",
-            dockHeight >= 48.dp && dockHeight < 90.dp,
-        )
+        val orbBounds = composeRule.onNodeWithTag("tor_orb_pod").getUnclippedBoundsInRoot()
+        val crtBounds = composeRule.onNodeWithTag("crt_address_pod").getUnclippedBoundsInRoot()
+        val pgpBounds = composeRule.onNodeWithTag("pgp_rocker_pod").getUnclippedBoundsInRoot()
+        assertTrue(crtBounds.left - orbBounds.right >= 10.dp)
+        assertTrue(pgpBounds.left - crtBounds.right >= 10.dp)
 
-        // 2. Menu -> Settings Sheet persists Theme Family & Appearance Mode
-        composeRule.onNodeWithTag("nav_menu").performClick()
-        composeRule.onNodeWithTag("browser_menu_sheet").assertIsDisplayed()
-        composeRule.onNodeWithTag("menu_settings").performScrollTo().performClick()
+        // 2. Side Remote -> Settings Hardware Pod persists Theme Family & Appearance Mode
+        composeRule.onNodeWithTag("side_remote_collapsed_face").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("remote_settings").performScrollTo().performClick()
+        composeRule.waitForIdle()
         composeRule.onNodeWithTag("settings_sheet").assertIsDisplayed()
 
         composeRule.onNodeWithText("Neon Graffiti").performClick()
@@ -97,12 +105,13 @@ class BrowserChromeInstrumentedTest {
         composeRule.onNodeWithTag("sheet_close_button").performClick()
         composeRule.waitForIdle()
 
-        // 3. Tor Shield -> Security & Circuit Sheet -> verify Hidden Service Only toggle
-        composeRule.onNodeWithTag("address_security_button").performClick()
-        composeRule.onNodeWithTag("security_circuit_sheet").assertIsDisplayed()
+        // 3. TorKnurledOrbPod -> PhotoSoapSideRemote TorCircuit mode -> verify .onion-Only Lock toggle
+        composeRule.onNodeWithTag("tor_orb_pod").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("remote_tor_circuit").assertIsDisplayed()
 
         val initialHiddenOnly = prefs.hiddenServiceOnly
-        composeRule.onNodeWithTag("security_hidden_service_switch").performScrollTo().performClick()
+        composeRule.onNodeWithTag("remote_onion_only_toggle").performScrollTo().performClick()
         composeRule.waitForIdle()
         assertEquals(!initialHiddenOnly, prefs.hiddenServiceOnly)
         if (OvNative.isLoaded) {
@@ -112,24 +121,29 @@ class BrowserChromeInstrumentedTest {
 
         // Ensure Hidden Service Only = false (default clearnet consent mode)
         if (prefs.hiddenServiceOnly) {
-            composeRule.onNodeWithTag("security_hidden_service_switch").performScrollTo().performClick()
+            composeRule.onNodeWithTag("remote_onion_only_toggle").performScrollTo().performClick()
             composeRule.waitForIdle()
         }
         assertFalse(prefs.hiddenServiceOnly)
-        composeRule.onNodeWithTag("sheet_close_button").performClick()
+        composeRule.onNodeWithTag("remote_close_button").performClick()
         composeRule.waitForIdle()
 
-        // 4. Multi-Tab Sheet: create tab, verify sheet, close sheet
-        composeRule.onNodeWithTag("nav_tabs").performClick()
+        // 4. Upward pull on RecessedCrtAddressPod -> SpatialTabSwitcherPod -> New Tab
+        composeRule.onNodeWithTag("crt_address_pod").performTouchInput {
+            down(center)
+            moveBy(Offset(0f, -40.dp.toPx()))
+            up()
+        }
+        composeRule.waitForIdle()
         composeRule.onNodeWithTag("tabs_sheet").assertIsDisplayed()
         composeRule.onNodeWithTag("tabs_new_tab").performClick()
         composeRule.waitForIdle()
 
-        // 5. Keyring Sheet via Menu -> PGP Keyring: generate real Sequoia keypair & Copy PubKey
+        // 5. KeyringHardwarePod via OpenPgpRockerPod tap: generate real Sequoia keypair & Copy PubKey
         if (OvNative.isLoaded) {
             val beforeCount = OvNative.parseKeys(OvNative.nativeListKeysJson()).size
-            composeRule.onNodeWithTag("nav_menu").performClick()
-            composeRule.onNodeWithTag("menu_keyring").performScrollTo().performClick()
+            composeRule.onNodeWithTag("pgp_rocker_pod").performClick()
+            composeRule.waitForIdle()
             composeRule.onNodeWithTag("keyring_sheet").assertIsDisplayed()
 
             composeRule.onNodeWithText("Generate").performClick()
@@ -158,12 +172,14 @@ class BrowserChromeInstrumentedTest {
             composeRule.waitForIdle()
         }
 
-        // 6. Clearnet Consent Interstitial Sheet E2E: `tor.taxi` -> `*.tor.taxi` -> Allow for 3 days -> Revoke
+        // 6. ClearnetConsentHardwarePod E2E: `tor.taxi` -> `*.tor.taxi` -> Allow for 3 days -> Revoke
         if (OvNative.isLoaded) {
             try {
                 OvNative.nativeClearClearnetRules()
-                composeRule.onNodeWithTag("address_input").performTextInput("tor.taxi")
-                composeRule.onNodeWithTag("address_go").performClick()
+                composeRule.onNodeWithTag("crt_address_pod").performClick()
+                composeRule.waitForIdle()
+                composeRule.onNodeWithTag("crt_address_input").performTextInput("tor.taxi")
+                composeRule.onNodeWithTag("crt_address_input").performImeAction()
 
                 composeRule.waitUntil(timeoutMillis = 10_000L) {
                     composeRule.onAllNodesWithTag("clearnet_consent_sheet")
@@ -183,15 +199,18 @@ class BrowserChromeInstrumentedTest {
                             .fetchSemanticsNodes()
                             .isEmpty()
                 }
-                composeRule.onNodeWithTag("address_input").assertTextEquals("https://tor.taxi")
+                composeRule.onNodeWithText("tor.taxi").assertIsDisplayed()
 
-                // Custom glob editing + Revoke via SecurityCircuitSheet
-                composeRule.onNodeWithTag("nav_tabs").performClick()
-                composeRule.onNodeWithTag("tabs_new_tab").performClick()
+                // Custom glob editing + Revoke via TorKnurledOrbPod -> PhotoSoapSideRemote TorCircuit
+                composeRule.onNodeWithTag("side_remote_collapsed_face").performClick()
+                composeRule.waitForIdle()
+                composeRule.onNodeWithTag("remote_new_tab").performClick()
                 composeRule.waitForIdle()
 
-                composeRule.onNodeWithTag("address_input").performTextInput("sub.example.org")
-                composeRule.onNodeWithTag("address_go").performClick()
+                composeRule.onNodeWithTag("crt_address_pod").performClick()
+                composeRule.waitForIdle()
+                composeRule.onNodeWithTag("crt_address_input").performTextInput("sub.example.org")
+                composeRule.onNodeWithTag("crt_address_input").performImeAction()
                 composeRule.waitUntil(timeoutMillis = 10_000L) {
                     composeRule.onAllNodesWithTag("clearnet_consent_sheet")
                         .fetchSemanticsNodes()
@@ -209,13 +228,13 @@ class BrowserChromeInstrumentedTest {
                 }
                 composeRule.waitForIdle()
 
-                composeRule.onNodeWithTag("address_security_button").performClick()
+                composeRule.onNodeWithTag("tor_orb_pod").performClick()
                 composeRule.waitUntil(timeoutMillis = 5_000L) {
-                    composeRule.onAllNodesWithTag("security_circuit_sheet")
+                    composeRule.onAllNodesWithTag("remote_tor_circuit")
                         .fetchSemanticsNodes()
                         .isNotEmpty()
                 }
-                composeRule.onNodeWithTag("security_circuit_sheet").assertIsDisplayed()
+                composeRule.onNodeWithTag("remote_tor_circuit").assertIsDisplayed()
                 composeRule.onNodeWithTag("clearnet_revoke_*example.org")
                     .performScrollTo()
                     .performClick()
@@ -223,7 +242,7 @@ class BrowserChromeInstrumentedTest {
                     OvNative.parseClearnetRules(OvNative.nativeListClearnetRulesJson())
                         .none { it.pattern == "*example.org" }
                 }
-                composeRule.onNodeWithTag("sheet_close_button").performClick()
+                composeRule.onNodeWithTag("remote_close_button").performClick()
                 composeRule.waitForIdle()
             } finally {
                 OvNative.nativeClearClearnetRules()
@@ -242,13 +261,13 @@ class BrowserChromeInstrumentedTest {
         val prefs = TrapPreferences(activity)
         prefs.requireBiometric = false
 
-        // Generate a dedicated Sequoia OpenPGP own keypair via the real KeyringSheet UI
-        // (opened via Menu -> PGP Keyring) so MainActivity refreshes uiState.keys end-to-end.
+        // Generate a dedicated Sequoia OpenPGP own keypair via the real KeyringHardwarePod UI
+        // (opened via OpenPgpRockerPod) so MainActivity refreshes uiState.keys end-to-end.
         val beforeKeys = OvNative.parseKeys(OvNative.nativeListKeysJson())
         val beforeFingerprints = beforeKeys.map { it.fingerprint }.toSet()
 
-        composeRule.onNodeWithTag("nav_menu").performClick()
-        composeRule.onNodeWithTag("menu_keyring").performScrollTo().performClick()
+        composeRule.onNodeWithTag("pgp_rocker_pod").performClick()
+        composeRule.waitForIdle()
         composeRule.onNodeWithTag("keyring_sheet").assertIsDisplayed()
         composeRule.onNodeWithText("Generate").performClick()
         composeRule.onNodeWithTag("keygen_userid_input").performTextInput("ZeroJS Signer <zerojs@onion>")
@@ -360,9 +379,14 @@ class BrowserChromeInstrumentedTest {
                 pubFieldValue.contains("Paste PGP public key"),
             )
 
-            // 4. Tap "Encrypt Field" on #msg -> EncryptPickerSheet -> Sign & Encrypt -> verify #inner-editor.
+            // 4. Tap "Encrypt Field" on #msg -> EncryptRecipientHardwarePod -> explicitly select key -> Sign & Encrypt.
             composeRule.onNodeWithText("Encrypt Field").performClick()
+            composeRule.waitForIdle()
             composeRule.onNodeWithTag("encrypt_picker_sheet").assertIsDisplayed()
+            composeRule.onNodeWithTag("encrypt_recipient_${createdKey.fingerprint}")
+                .performScrollTo()
+                .performClick()
+            composeRule.waitForIdle()
             composeRule.onNodeWithTag("encrypt_confirm_button").performClick()
 
             // Wait for CdpDomPgpController to write ciphertext, verify Blink #inner-editor read-back,
@@ -376,19 +400,24 @@ class BrowserChromeInstrumentedTest {
             assertTrue(encryptedFieldValue.contains("-----END PGP MESSAGE-----"))
             assertFalse(encryptedFieldValue.contains("Plaintext secret drop"))
 
-            // 5. Tap "Decrypt Block" -> native PlaintextSheet with verified Sequoia signer identity & fingerprint.
-            composeRule.onNodeWithText("Decrypt Block").performClick()
+            // 5. Drag OpenPgpRockerPod latch upward (`dy < -18dp`) -> quick-decrypts primaryArmoredBlock
+            //    into DecryptedPlaintextHardwarePod with verified Sequoia signer identity & fingerprint!
+            composeRule.onNodeWithTag("pgp_rocker_pod").performTouchInput {
+                down(center)
+                moveBy(Offset(0f, -26.dp.toPx()))
+                up()
+            }
             composeRule.waitUntil(timeoutMillis = 15_000L) {
                 composeRule.onAllNodesWithText("Plaintext secret drop").fetchSemanticsNodes().isNotEmpty()
             }
             composeRule.onNodeWithTag("plaintext_sheet").assertIsDisplayed()
             composeRule.onNodeWithText("Plaintext secret drop").assertIsDisplayed()
-            composeRule.onNodeWithText("Good signature · ZeroJS Signer <zerojs@onion>")
+            composeRule.onNodeWithText("GOOD SIG · ZeroJS Signer <zerojs@onion>")
                 .assertIsDisplayed()
-            composeRule.onNodeWithText("Key ID · ${createdKey.fingerprint.takeLast(16)}")
+            composeRule.onNodeWithText("KEY · ${createdKey.fingerprint.takeLast(16)}")
                 .assertIsDisplayed()
 
-            // Closing PlaintextSheet must leave ciphertext intact in DOM (never leaking plaintext to page).
+            // Closing DecryptedPlaintextHardwarePod must leave ciphertext intact in DOM (never leaking plaintext to page).
             composeRule.onNodeWithTag("plaintext_close").performClick()
             composeRule.waitForIdle()
             val postDecryptDomValue =
@@ -448,95 +477,78 @@ class BrowserChromeInstrumentedTest {
         val root = runCatching { JSONObject(rawDocJson).optJSONObject("root") }.getOrNull()
             ?: return ""
         val target = findElementById(root, elementId) ?: return ""
-        val shadows = target.optJSONArray("shadowRoots")
-        if (shadows != null && shadows.length() > 0) {
-            for (i in 0 until shadows.length()) {
-                val shadow = shadows.optJSONObject(i) ?: continue
-                val editor = findElementById(shadow, "inner-editor")
-                if (editor != null) {
-                    return collectNonPlaceholderTextNodes(editor)
-                }
+        val shadowRoots = target.optJSONArray("shadowRoots")
+        if (shadowRoots != null && shadowRoots.length() > 0) {
+            val sb = StringBuilder()
+            for (i in 0 until shadowRoots.length()) {
+                val sr = shadowRoots.optJSONObject(i) ?: continue
+                val innerEditor = findElementById(sr, "inner-editor")
+                collectTextNodes(innerEditor ?: sr, sb)
             }
-            val shadowText = StringBuilder()
-            for (i in 0 until shadows.length()) {
-                val shadow = shadows.optJSONObject(i) ?: continue
-                shadowText.append(collectNonPlaceholderTextNodes(shadow))
-            }
-            return shadowText.toString()
+            if (sb.isNotEmpty()) return sb.toString()
         }
-        return collectNonPlaceholderTextNodes(target)
+        val childSb = StringBuilder()
+        collectTextNodes(target, childSb)
+        if (childSb.isNotEmpty()) return childSb.toString()
+        return extractAttribute(target.optJSONArray("attributes"), "value")
     }
 
     private fun findElementById(node: JSONObject, targetId: String): JSONObject? {
-        if (node.optInt("nodeType", 0) == 1) {
-            val attrs = node.optJSONArray("attributes")
-            if (attrs != null) {
-                var i = 0
-                while (i + 1 < attrs.length()) {
-                    if (attrs.optString(i).equals("id", ignoreCase = true) &&
-                        attrs.optString(i + 1) == targetId
-                    ) {
-                        return node
-                    }
-                    i += 2
-                }
-            }
+        if (node.optInt("nodeType") == 1) {
+            val idVal = extractAttribute(node.optJSONArray("attributes"), "id")
+            if (idVal == targetId) return node
         }
-        val children: JSONArray? = node.optJSONArray("children")
+        val children = node.optJSONArray("children")
         if (children != null) {
             for (i in 0 until children.length()) {
                 val child = children.optJSONObject(i) ?: continue
                 findElementById(child, targetId)?.let { return it }
             }
         }
-        val shadows: JSONArray? = node.optJSONArray("shadowRoots")
-        if (shadows != null) {
-            for (i in 0 until shadows.length()) {
-                val shadow = shadows.optJSONObject(i) ?: continue
-                findElementById(shadow, targetId)?.let { return it }
+        val shadowRoots = node.optJSONArray("shadowRoots")
+        if (shadowRoots != null) {
+            for (i in 0 until shadowRoots.length()) {
+                val sr = shadowRoots.optJSONObject(i) ?: continue
+                findElementById(sr, targetId)?.let { return it }
             }
+        }
+        node.optJSONObject("contentDocument")?.let { doc ->
+            findElementById(doc, targetId)?.let { return it }
         }
         return null
     }
 
-    private fun isPlaceholderNode(node: JSONObject): Boolean {
-        if (node.optInt("nodeType", 0) != 1) return false
-        val attrs = node.optJSONArray("attributes") ?: return false
+    private fun extractAttribute(attrs: JSONArray?, key: String): String {
+        if (attrs == null) return ""
         var i = 0
         while (i + 1 < attrs.length()) {
-            val k = attrs.optString(i)
-            val v = attrs.optString(i + 1)
-            if (k.equals("id", ignoreCase = true) && v.equals("placeholder", ignoreCase = true)) {
-                return true
-            }
-            if (k.equals("pseudo", ignoreCase = true) && v.contains("placeholder", ignoreCase = true)) {
-                return true
+            if (attrs.optString(i).equals(key, ignoreCase = true)) {
+                return attrs.optString(i + 1, "")
             }
             i += 2
         }
-        return false
+        return ""
     }
 
-    private fun collectNonPlaceholderTextNodes(node: JSONObject): String {
-        val sb = StringBuilder()
-        fun walk(cur: JSONObject) {
-            if (isPlaceholderNode(cur)) return
-            val type = cur.optInt("nodeType", 0)
-            if (type == 3) {
-                sb.append(cur.optString("nodeValue", ""))
+    private fun collectTextNodes(node: JSONObject, out: StringBuilder) {
+        if (node.optInt("nodeType") == 1) {
+            val pseudo = extractAttribute(node.optJSONArray("attributes"), "pseudo")
+            if (pseudo.contains("placeholder", ignoreCase = true)) {
                 return
-            }
-            if (type == 1 && cur.optString("localName", "").equals("br", ignoreCase = true)) {
-                sb.append('\n')
-                return
-            }
-            val kids = cur.optJSONArray("children") ?: return
-            for (i in 0 until kids.length()) {
-                val child = kids.optJSONObject(i) ?: continue
-                walk(child)
             }
         }
-        walk(node)
-        return sb.toString()
+        val nodeType = node.optInt("nodeType")
+        if (nodeType == 3) {
+            out.append(node.optString("nodeValue", ""))
+        } else if (nodeType == 1 && node.optString("nodeName").equals("BR", ignoreCase = true)) {
+            out.append('\n')
+        }
+        val children = node.optJSONArray("children")
+        if (children != null) {
+            for (i in 0 until children.length()) {
+                val child = children.optJSONObject(i) ?: continue
+                collectTextNodes(child, out)
+            }
+        }
     }
 }

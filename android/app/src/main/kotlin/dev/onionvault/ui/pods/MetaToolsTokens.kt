@@ -12,12 +12,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.ImageBitmapConfig
 import androidx.compose.ui.graphics.ImageShader
 import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.TileMode
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
@@ -132,7 +131,6 @@ object MetaToolsTokens {
 fun rememberPewterGrainBrush(): ShaderBrush {
     return remember {
         val side = 64
-        val bitmap = ImageBitmap(side, side, ImageBitmapConfig.Argb8888)
         val androidBitmap = android.graphics.Bitmap.createBitmap(
             side,
             side,
@@ -153,10 +151,7 @@ fun rememberPewterGrainBrush(): ShaderBrush {
             pixels[i] = (alpha shl 24) or rgb
         }
         androidBitmap.setPixels(pixels, 0, side, 0, 0, side, side)
-        val composeBitmap = ImageBitmap(side, side, ImageBitmapConfig.Argb8888)
-        val canvas = androidx.compose.ui.graphics.Canvas(composeBitmap)
-        canvas.nativeCanvas.drawBitmap(androidBitmap, 0f, 0f, null)
-        ShaderBrush(ImageShader(composeBitmap, TileMode.Repeated, TileMode.Repeated))
+        ShaderBrush(ImageShader(androidBitmap.asImageBitmap(), TileMode.Repeated, TileMode.Repeated))
     }
 }
 
@@ -517,6 +512,7 @@ fun containsArmoredPgpHeader(text: String?): Boolean {
 }
 
 private fun PgpFieldState.isContextualPgpField(): Boolean {
+    if (isSearchLike) return false
     return when (kind) {
         "pgp_message", "pgp_public_key", "pgp_textarea", "textarea", "editable" -> true
         "text_input" -> label.contains("PubKey", ignoreCase = true) ||

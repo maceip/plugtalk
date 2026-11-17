@@ -384,6 +384,11 @@ class MainActivity : FragmentActivity() {
                         tabSessionManager.setTouchSuppressed(open)
                     }
                 },
+                onSetPodsRetracted = { retracted ->
+                    if (controllersReady) {
+                        tabSessionManager.setPodsRetracted(retracted)
+                    }
+                },
                 onLoadLegalLines = { name ->
                     withContext(Dispatchers.IO) {
                         LegalNotices.read(this@MainActivity, name)
@@ -719,11 +724,13 @@ class MainActivity : FragmentActivity() {
                 tabSessionManager.activeTabId,
                 cdpController.activeNodes,
                 backStackManager.revision,
-            ) { tabs, activeId, nodesByTab, _ ->
+                tabSessionManager.podsRetracted,
+            ) { tabs, activeId, nodesByTab, _, podsRetracted ->
                 ControllerSnapshot(
                     tabs = tabs,
                     activeTabId = activeId,
                     nodesByTab = nodesByTab,
+                    podsRetracted = podsRetracted,
                 )
             }.collect { snapshot ->
                 val activeTab = snapshot.tabs.firstOrNull { it.id == snapshot.activeTabId }
@@ -797,6 +804,7 @@ class MainActivity : FragmentActivity() {
                     tabs = tabItems,
                     activeTabId = effectiveActiveId,
                     zoomPercent = activeTab?.zoomPercent ?: prefs.defaultZoomPercent,
+                    podsRetracted = snapshot.podsRetracted,
                     pgp = uiState.pgp.copy(fields = liveNodes),
                 )
                 mediaDisplayNormalizer.applyWindowHdrHeadroom(
@@ -1531,9 +1539,16 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    @Suppress("DEPRECATION")
     private fun applySystemBarsAppearance(mode: TrapThemeMode) {
         val lightBars = mode == TrapThemeMode.Light
         runCatching {
+            window.statusBarColor = android.graphics.Color.TRANSPARENT
+            window.navigationBarColor = android.graphics.Color.TRANSPARENT
+            if (Build.VERSION.SDK_INT >= 29) {
+                window.isNavigationBarContrastEnforced = false
+                window.isStatusBarContrastEnforced = false
+            }
             val controller = WindowCompat.getInsetsController(window, window.decorView)
             controller.isAppearanceLightStatusBars = lightBars
             controller.isAppearanceLightNavigationBars = lightBars
@@ -2120,6 +2135,7 @@ class MainActivity : FragmentActivity() {
         val tabs: List<TabSessionManager.TabState>,
         val activeTabId: String?,
         val nodesByTab: Map<String, List<CdpDomPgpController.DetectedPgpNode>>,
+        val podsRetracted: Boolean,
     )
 }
 
@@ -2139,6 +2155,7 @@ private fun CdpDomPgpController.DetectedPgpNode.toPgpFieldState(): PgpFieldState
         cdpNodeId = nodeId,
         backendNodeId = backendNodeId,
         fingerprintHint = fingerprintHint,
+        isSearchLike = isSearchLike,
     )
 
 private fun OnionBackStackManager.BackSnapshotEntry.toBackPreviewState(): BackPreviewState =

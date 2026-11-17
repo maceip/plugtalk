@@ -295,44 +295,61 @@ async function startMockLimrunServer(toolsDir, mode) {
       }
 
       if (type === 'getElementTree') {
-        const navActionDesc =
-          mode === 'premature_onion_still_loading' ? 'Stop loading' : 'Reload';
+        const crtAddressDesc =
+          mode === 'premature_onion_still_loading'
+            ? 'Address bar (Stop loading): https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/'
+            : 'Address bar: https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/';
         const xml =
           mode === 'crash_on_launch'
             ? '<hierarchy><node package="com.android.launcher3" text="Home" /></hierarchy>'
             : state.navigatedOnion
               ? '<hierarchy>' +
-                '<node package="dev.onionvault" content-desc="Back" />' +
-                '<node package="dev.onionvault" content-desc="Tor security status" />' +
-                '<node package="dev.onionvault" text="https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/" />' +
-                `<node package="dev.onionvault" content-desc="${navActionDesc}" />` +
-                '<node package="dev.onionvault" text="Go" content-desc="Go" />' +
+                '<node package="dev.onionvault" content-desc="Tor ready. Tap for circuit telemetry, hold to rotate identity" />' +
+                `<node package="dev.onionvault" text="duckduck…zczad.onion" content-desc="${crtAddressDesc}" />` +
+                '<node package="dev.onionvault" content-desc="OpenPGP Keyring and tools" />' +
+                '<node package="dev.onionvault" content-desc="Open hardware remote menu" />' +
                 '</hierarchy>'
               : '<hierarchy>' +
-                '<node package="dev.onionvault" text="Trap" />' +
+                '<node package="dev.onionvault" text="TRAP" />' +
                 '<node package="dev.onionvault" text="Tor ready" />' +
-                '<node package="dev.onionvault" content-desc="Tor security status" />' +
-                '<node package="dev.onionvault" text="Enter address" />' +
-                '<node package="dev.onionvault" text="Go" content-desc="Go" />' +
+                '<node package="dev.onionvault" text="DuckDuckGo" />' +
+                '<node package="dev.onionvault" content-desc="Tor ready. Tap for circuit telemetry, hold to rotate identity" />' +
+                '<node package="dev.onionvault" text="search / .onion" content-desc="Address bar: search / .onion" />' +
+                '<node package="dev.onionvault" content-desc="Open hardware remote menu" />' +
                 '</hierarchy>';
 
         const nodes = state.navigatedOnion
           ? [
-              { packageName: 'dev.onionvault', contentDesc: 'Back' },
-              { packageName: 'dev.onionvault', contentDesc: 'Tor security status' },
               {
                 packageName: 'dev.onionvault',
-                text: 'https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/',
+                contentDesc: 'Tor ready. Tap for circuit telemetry, hold to rotate identity',
               },
-              { packageName: 'dev.onionvault', contentDesc: navActionDesc },
-              { packageName: 'dev.onionvault', text: 'Go', contentDesc: 'Go' },
+              {
+                packageName: 'dev.onionvault',
+                text: 'duckduck…zczad.onion',
+                contentDesc: crtAddressDesc,
+              },
+              { packageName: 'dev.onionvault', contentDesc: 'OpenPGP Keyring and tools' },
+              { packageName: 'dev.onionvault', contentDesc: 'Open hardware remote menu' },
             ]
           : [
-              { packageName: 'dev.onionvault', text: 'Trap' },
+              { packageName: 'dev.onionvault', text: 'TRAP' },
               { packageName: 'dev.onionvault', text: 'Tor ready' },
-              { packageName: 'dev.onionvault', contentDesc: 'Tor security status' },
-              { packageName: 'dev.onionvault', text: 'Enter address' },
-              { packageName: 'dev.onionvault', text: 'Go', contentDesc: 'Go' },
+              {
+                packageName: 'dev.onionvault',
+                text: 'DuckDuckGo',
+                parsedBounds: { centerX: 200, centerY: 420 },
+              },
+              {
+                packageName: 'dev.onionvault',
+                contentDesc: 'Tor ready. Tap for circuit telemetry, hold to rotate identity',
+              },
+              {
+                packageName: 'dev.onionvault',
+                text: 'search / .onion',
+                contentDesc: 'Address bar: search / .onion',
+              },
+              { packageName: 'dev.onionvault', contentDesc: 'Open hardware remote menu' },
             ];
 
         ws.send(
@@ -563,7 +580,7 @@ async function runTests() {
       assert.equal(summary.readiness.engineReady, true);
       assert.equal(summary.readiness.socksEndpoint, '127.0.0.1:41955');
       assert.equal(summary.readiness.torBootstrapped, true);
-      assert.equal(summary.onionSmoke.triggerMethod, 'am-start-action-view');
+      assert.equal(summary.onionSmoke.triggerMethod, 'ui-tap-start-directory');
       assert.equal(summary.onionSmoke.isolationCreatedInLogcat, true);
       assert.equal(summary.onionSmoke.onionHostVisibleInUi, true);
       assert.equal(summary.onionSmoke.pageLoadedInLogcat, true);

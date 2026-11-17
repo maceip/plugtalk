@@ -6,19 +6,29 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
@@ -27,11 +37,13 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.height
 import androidx.compose.ui.unit.width
 import dev.onionvault.ui.BackPreviewState
 import dev.onionvault.ui.BrowserScreen
@@ -51,6 +63,7 @@ import dev.onionvault.ui.TrapPreferences
 import dev.onionvault.ui.TrapTheme
 import dev.onionvault.ui.TrapThemeFamily
 import dev.onionvault.ui.TrapThemeMode
+import dev.onionvault.ui.TrustedOnionDirectory
 import dev.onionvault.ui.previews.BrowserChromePreview
 import dev.onionvault.ui.previews.BrowserMenuPreview
 import dev.onionvault.ui.previews.ClearnetConsentPreview
@@ -67,7 +80,6 @@ import dev.onionvault.ui.previews.TorBootstrapPreview
 import dev.onionvault.ui.previews.TorTaxiPreview
 import dev.onionvault.ui.previews.torTaxiState
 import java.io.File
-import kotlin.math.abs
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -79,10 +91,12 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * Screenshot & interactive Compose UI verification suite for Trap's single-row bottom
- * browser chrome, minimal start page, clearnet consent interstitial bottom sheet,
- * theme families (`SecureDrop` & `NeonGraffiti` × `Dark` & `Light`), sheets, PGP
- * flows, predictive-back snapshot recovery, and `TrapPreferences` persistence.
+ * Screenshot & interactive Compose UI verification suite for Trap's full-bleed
+ * `MetaToolsBrowserShell` floating hardware pods (`tor_orb_pod`, `crt_address_pod`,
+ * `pgp_rocker_pod`, `side_remote_pod`, `perimeter_steel_rails`), street-zine `StartPage`
+ * with SHA3-verified `TrustedOnionDirectory`, `ClearnetConsentHardwarePod`, theme families
+ * (`SecureDrop` & `NeonGraffiti` × `Dark` & `Light`), PGP flows, hit-test passthrough,
+ * `BackHandler` dismissal, predictive-back snapshot recovery, and `TrapPreferences` persistence.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w411dp-h891dp-xhdpi")
@@ -100,7 +114,7 @@ class ScreenshotTest {
     }
 
     @Test
-    fun the_pgp_chips_are_rendered() {
+    fun the_pgp_chips_is_rendered() {
         capture("2-pgp-chips") { PgpActionChipsPreview() }
     }
 
@@ -181,11 +195,12 @@ class ScreenshotTest {
         capture("14-clearnet-consent") { ClearnetConsentPreview() }
     }
 
-    // --- Single-Row Chrome Geometry & Minimal Start Page Verification ---
+    // --- Full-Bleed MetaTools Shell, Street-Zine StartPage & Hit-Test Passthrough ---
 
     @Test
-    fun single_row_bottom_chrome_and_minimal_start_page_enforce_geometry_and_zero_top_bar() {
+    fun metatools_pods_and_street_zine_start_page_enforce_zero_container_bars_and_full_wiring() {
         var navigatedUrl = ""
+        var webpageTaps by mutableIntStateOf(0)
         var state by mutableStateOf(
             BrowserUiState(
                 url = "about:blank",
@@ -200,21 +215,37 @@ class ScreenshotTest {
                     navigatedUrl = target
                     state = state.copy(url = target)
                 },
+                surface = {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color(0xFF0E1013))
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = { webpageTaps += 1 },
+                            )
+                            .testTag("live_webpage_surface"),
+                    )
+                },
             )
         }
+        compose.waitForIdle()
 
-        // 1. Strictly zero top app bar, zero top address bar, zero transport footer, zero 3-card clutter.
+        // 1. Strictly zero rectangular BottomControlDock, zero top app bar, zero transport footer.
+        compose.onNodeWithTag("bottom_control_dock").assertDoesNotExist()
         compose.onNodeWithTag("top_identity_header").assertDoesNotExist()
         compose.onNodeWithTag("transport_footer").assertDoesNotExist()
         compose.onNodeWithTag("top_tor_pill").assertDoesNotExist()
-        compose.onNodeWithTag("top_keyring_button").assertDoesNotExist()
-        compose.onNodeWithTag("start_security_card").assertDoesNotExist()
-        compose.onNodeWithTag("start_ddg_onion_card").assertDoesNotExist()
-        compose.onNodeWithTag("start_open_keyring").assertDoesNotExist()
-        compose.onNodeWithTag("start_open_settings").assertDoesNotExist()
-        compose.onNodeWithText("Launch").assertDoesNotExist()
 
-        // 2. Street-zine StartPage renders "TRAP" lockup, live Tor status, CRT search, and trusted .onion directory.
+        // 2. MetaToolsBrowserShell + floating islands + street-zine StartPage + TrustedOnionDirectory.
+        compose.onNodeWithTag("metatools_browser_shell").assertIsDisplayed()
+        compose.onNodeWithTag("perimeter_steel_rails").assertIsDisplayed()
+        compose.onNodeWithTag("tor_orb_pod").assertIsDisplayed()
+        compose.onNodeWithTag("crt_address_pod").assertIsDisplayed()
+        compose.onNodeWithTag("pgp_rocker_pod").assertIsDisplayed()
+        compose.onNodeWithTag("side_remote_pod").assertIsDisplayed()
+
         compose.onNodeWithTag("start_page").assertIsDisplayed()
         compose.onNodeWithText("TRAP").assertIsDisplayed()
         compose.onNodeWithTag("start_tor_status").assertIsDisplayed()
@@ -222,76 +253,67 @@ class ScreenshotTest {
         compose.onNodeWithTag("start_search_box").assertIsDisplayed()
         compose.onNodeWithTag("trusted_onion_directory").assertIsDisplayed()
 
+        // 3. Tapping start_tor_status expands PhotoSoapSideRemote in TorCircuit mode; BackHandler collapses it.
         compose.onNodeWithTag("start_tor_status").performClick()
-        compose.onNodeWithTag("security_circuit_sheet").assertIsDisplayed()
-        compose.onNodeWithTag("sheet_close_button").performClick()
-
-        // 3. Unfocused single-row bottom dock (~56.dp content height, strictly < 90.dp).
-        compose.onNodeWithTag("address_input").assertTextEquals("Enter address", "")
-        compose.onNodeWithTag("nav_back").assertIsNotEnabled()
-        compose.onNodeWithTag("nav_forward").assertDoesNotExist()
-
-        val dockBounds = compose.onNodeWithTag("bottom_control_dock").getUnclippedBoundsInRoot()
-        assertTrue(
-            "Expected single-row bottom_control_dock content height ~56dp (< 90dp), got ${dockBounds.height}",
-            dockBounds.height >= 48.dp && dockBounds.height < 90.dp && dockBounds.height <= 64.dp,
-        )
-
-        val backBounds = compose.onNodeWithTag("nav_back").getUnclippedBoundsInRoot()
-        val capsuleBounds = compose.onNodeWithTag("address_capsule").getUnclippedBoundsInRoot()
-        val tabsBounds = compose.onNodeWithTag("nav_tabs").getUnclippedBoundsInRoot()
-        val menuBounds = compose.onNodeWithTag("nav_menu").getUnclippedBoundsInRoot()
-
-        val backCenterY = (backBounds.top.value + backBounds.bottom.value) / 2f
-        val capsuleCenterY = (capsuleBounds.top.value + capsuleBounds.bottom.value) / 2f
-        val tabsCenterY = (tabsBounds.top.value + tabsBounds.bottom.value) / 2f
-        val menuCenterY = (menuBounds.top.value + menuBounds.bottom.value) / 2f
-        assertTrue(abs(backCenterY - capsuleCenterY) <= 1.5f)
-        assertTrue(abs(tabsCenterY - capsuleCenterY) <= 1.5f)
-        assertTrue(abs(menuCenterY - capsuleCenterY) <= 1.5f)
-
-        // 4. Focusing address input switches to [ Cancel · Wide Address Capsule ] in ONE row (< 90.dp).
-        compose.onNodeWithTag("address_input").performClick()
         compose.waitForIdle()
-        compose.onNodeWithTag("address_cancel").assertIsDisplayed()
-        compose.onNodeWithTag("nav_back").assertDoesNotExist()
-        compose.onNodeWithTag("nav_tabs").assertDoesNotExist()
-        compose.onNodeWithTag("nav_menu").assertDoesNotExist()
-
-        val focusedDockBounds = compose.onNodeWithTag("bottom_control_dock").getUnclippedBoundsInRoot()
-        val focusedCapsuleBounds = compose.onNodeWithTag("address_capsule").getUnclippedBoundsInRoot()
-        assertTrue(
-            "Focused bottom_control_dock must remain 1 row (< 90dp), got ${focusedDockBounds.height}",
-            focusedDockBounds.height >= 48.dp && focusedDockBounds.height < 90.dp,
-        )
-        assertTrue(
-            "Focused address_capsule must expand across single row (>= 320dp on 411dp phone), got ${focusedCapsuleBounds.width}",
-            focusedCapsuleBounds.width >= 320.dp,
-        )
-
-        compose.onNodeWithTag("address_input").performTextInput("draft.example")
-        compose.onNodeWithTag("address_clear").performClick()
-        compose.onNodeWithTag("address_input").assertTextEquals("Enter address", "")
-
-        compose.onNodeWithTag("address_input").performTextInput("cancel.example")
-        compose.onNodeWithTag("address_cancel").performClick()
+        compose.onNodeWithTag("remote_tor_circuit").assertIsDisplayed()
+        compose.runOnUiThread {
+            compose.activity.onBackPressedDispatcher.onBackPressed()
+        }
         compose.waitForIdle()
+        compose.onNodeWithTag("remote_tor_circuit").assertDoesNotExist()
 
-        // Cancel clears focus and restores resting single-row controls.
-        compose.onNodeWithTag("nav_back").assertIsDisplayed()
-        compose.onNodeWithTag("nav_tabs").assertIsDisplayed()
-        compose.onNodeWithTag("nav_menu").assertIsDisplayed()
-        compose.onNodeWithTag("address_input").assertTextEquals("Enter address", "")
+        // 4. Verify >= 10dp open gaps between floating Tri-Pod islands.
+        val orbBounds = compose.onNodeWithTag("tor_orb_pod").getUnclippedBoundsInRoot()
+        val crtBounds = compose.onNodeWithTag("crt_address_pod").getUnclippedBoundsInRoot()
+        val pgpBounds = compose.onNodeWithTag("pgp_rocker_pod").getUnclippedBoundsInRoot()
+        assertTrue(crtBounds.left - orbBounds.right >= 10.dp)
+        assertTrue(pgpBounds.left - crtBounds.right >= 10.dp)
 
-        // Navigating via Go clears focus and submits URL.
-        compose.onNodeWithTag("address_input").performTextInput(DUCKDUCKGO_ONION_URL)
-        compose.onNodeWithTag("address_go").performClick()
+        // 5. Submitting a search query on start_search_box routes directly to DuckDuckGo v3 .onion!
+        compose.onNodeWithTag("start_search_box").performTextInput("securedrop")
+        compose.onNodeWithTag("start_search_submit").performClick()
+        compose.waitForIdle()
+        assertEquals(
+            TrustedOnionDirectory.resolveSearchOrAddress("securedrop"),
+            navigatedUrl,
+        )
+        compose.onNodeWithTag("start_page").assertDoesNotExist()
+        compose.onNodeWithText("duckduck…zczad.onion").assertIsDisplayed()
+
+        // 6. Hit-test passthrough on live webpage through open gap between Tor Orb and CRT pod!
+        val liveOrbBounds = compose.onNodeWithTag("tor_orb_pod").getUnclippedBoundsInRoot()
+        val liveCrtBounds = compose.onNodeWithTag("crt_address_pod").getUnclippedBoundsInRoot()
+        assertTrue(liveCrtBounds.left - liveOrbBounds.right >= 10.dp)
+        val gapX = ((liveOrbBounds.right.value + liveCrtBounds.left.value) / 2f).dp
+        val gapY = ((liveCrtBounds.top.value + liveCrtBounds.bottom.value) / 2f).dp
+        compose.onNodeWithTag("metatools_browser_shell").performTouchInput {
+            click(Offset(gapX.toPx(), gapY.toPx()))
+        }
+        compose.waitForIdle()
+        assertEquals("Open gap between pods must pass touch straight to webpage", 1, webpageTaps)
+
+        // 7. Focusing crt_address_pod expands >= 94% width (~360dp+), hides Orb/Rocker/Remote, BackHandler collapses!
+        compose.onNodeWithTag("crt_address_pod").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("tor_orb_pod").assertDoesNotExist()
+        compose.onNodeWithTag("pgp_rocker_pod").assertDoesNotExist()
+        compose.onNodeWithTag("side_remote_pod").assertDoesNotExist()
+
+        val focusedCrtWidth = compose.onNodeWithTag("crt_address_pod").getUnclippedBoundsInRoot().width
+        assertTrue("Expected focused CRT >= 360dp on 411dp screen, got $focusedCrtWidth", focusedCrtWidth >= 360.dp)
+
+        compose.onNodeWithTag("crt_clear_button").performClick()
+        compose.onNodeWithTag("crt_address_input").performTextInput(DUCKDUCKGO_ONION_URL)
+        compose.onNodeWithTag("crt_address_input").performImeAction()
+        compose.waitForIdle()
         assertEquals(DUCKDUCKGO_ONION_URL, navigatedUrl)
+        compose.onNodeWithTag("tor_orb_pod").assertIsDisplayed()
     }
 
     @Test
     @Config(qualifiers = "w600dp-h891dp-xhdpi")
-    fun wide_viewport_renders_forward_button_in_single_row_bottom_dock() {
+    fun wide_viewport_renders_detached_metatools_pods_with_zero_bottom_bar() {
         compose.setContent {
             BrowserScreen(
                 state = BrowserUiState(
@@ -303,16 +325,14 @@ class ScreenshotTest {
             )
         }
 
-        compose.onNodeWithTag("top_identity_header").assertDoesNotExist()
-        compose.onNodeWithTag("nav_back").assertIsDisplayed()
-        compose.onNodeWithTag("nav_forward").assertIsDisplayed().assertIsNotEnabled()
-        compose.onNodeWithTag("nav_reload").assertIsDisplayed()
-
-        val dockHeight = compose.onNodeWithTag("bottom_control_dock").getUnclippedBoundsInRoot().height
-        assertTrue("Expected single-row tablet dock < 90dp, got $dockHeight", dockHeight < 90.dp)
+        compose.onNodeWithTag("bottom_control_dock").assertDoesNotExist()
+        compose.onNodeWithTag("tor_orb_pod").assertIsDisplayed()
+        compose.onNodeWithTag("crt_address_pod").assertIsDisplayed()
+        compose.onNodeWithTag("pgp_rocker_pod").assertIsDisplayed()
+        compose.onNodeWithTag("side_remote_pod").assertIsDisplayed()
     }
 
-    // --- Clearnet Consent Interstitial Bottom Sheet E2E Verification ---
+    // --- Clearnet Consent Hardware Pod E2E Verification ---
 
     @Test
     fun clearnet_consent_sheet_allows_for_3_days_supports_glob_editing_and_revokes_rules() {
@@ -404,9 +424,11 @@ class ScreenshotTest {
             )
         }
 
-        // 1. Navigating to bare clearnet `tor.taxi` opens ClearnetConsentSheet (no red error banner).
-        compose.onNodeWithTag("address_input").performTextInput("tor.taxi")
-        compose.onNodeWithTag("address_go").performClick()
+        // 1. Navigating to bare clearnet `tor.taxi` via CRT pod opens ClearnetConsentHardwarePod.
+        compose.onNodeWithTag("crt_address_pod").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("crt_address_input").performTextInput("tor.taxi")
+        compose.onNodeWithTag("crt_address_input").performImeAction()
         compose.waitForIdle()
 
         compose.onNodeWithTag("status_notice_banner").assertDoesNotExist()
@@ -415,20 +437,20 @@ class ScreenshotTest {
         compose.onNodeWithTag("clearnet_prompt_host").assertTextEquals("tor.taxi")
         compose.onNodeWithTag("clearnet_pattern_input").assertTextEquals("*.tor.taxi")
 
-        // 2. Scope chips toggle cleanly between Exact host and *.domain.
+        // 2. Scope pills toggle cleanly between Exact host and *.domain.
         compose.onNodeWithTag("clearnet_scope_exact").performClick()
         compose.onNodeWithTag("clearnet_pattern_input").assertTextEquals("tor.taxi")
         compose.onNodeWithTag("clearnet_scope_domain").performClick()
         compose.onNodeWithTag("clearnet_pattern_input").assertTextEquals("*.tor.taxi")
 
-        // 3. One click on "Allow for 3 days" persists 259,200s rule, dismisses sheet, and navigates to https://tor.taxi!
+        // 3. One click on "Allow for 3 days" persists 259,200s rule, dismisses pod, and navigates to https://tor.taxi!
         compose.onNodeWithTag("clearnet_allow_3d_button").performClick()
         compose.waitForIdle()
 
         assertEquals(listOf("*.tor.taxi" to 259_200L), recordedAllows)
         compose.onNodeWithTag("clearnet_consent_sheet").assertDoesNotExist()
         assertEquals("https://tor.taxi", state.url)
-        compose.onNodeWithTag("address_input").assertTextEquals("https://tor.taxi")
+        compose.onNodeWithText("tor.taxi").assertIsDisplayed()
 
         // 4. Custom glob editing + "Allow once" (`ttlSeconds = 0L`) on SOCKS5 subresource prompt (`pendingUrl = null`).
         state = state.copy(
@@ -463,9 +485,10 @@ class ScreenshotTest {
         assertEquals(listOf("telemetry.example.com"), recordedBlocks)
         assertEquals("https://tor.taxi", state.url)
 
-        // 6. SecurityCircuitSheet displays active rules ("3d left" & "Session"), Revoke removes rule, Clear all empties list.
-        compose.onNodeWithTag("address_security_button").performClick()
-        compose.onNodeWithTag("security_circuit_sheet").assertIsDisplayed()
+        // 6. TorKnurledOrbPod -> PhotoSoapSideRemote TorCircuit mode displays active rules, Revoke & Clear All!
+        compose.onNodeWithTag("tor_orb_pod").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("remote_tor_circuit").assertIsDisplayed()
         compose.onNodeWithText("*.tor.taxi").assertIsDisplayed()
         compose.onNodeWithText("3d left").assertIsDisplayed()
         compose.onNodeWithText("*cdn.assets.net").performScrollTo().assertIsDisplayed()
@@ -537,10 +560,10 @@ class ScreenshotTest {
         assertTrue(rules[1].sessionOnly)
     }
 
-    // --- Interactive Compose Controls & Persisted State Verification ---
+    // --- Interactive Hardware Pods & Persisted State Verification ---
 
     @Test
-    fun settings_sheet_persists_theme_family_mode_and_zoom_to_shared_preferences() {
+    fun settings_pod_persists_theme_family_mode_and_zoom_to_shared_preferences() {
         val rawPrefs = compose.activity.getSharedPreferences("test_trap_prefs", Context.MODE_PRIVATE)
         rawPrefs.edit().clear().commit()
         val prefs = TrapPreferences(rawPrefs)
@@ -574,6 +597,7 @@ class ScreenshotTest {
             )
         }
 
+        compose.onNodeWithTag("settings_sheet").assertIsDisplayed()
         compose.onNodeWithText("Neon Graffiti").performClick()
         assertEquals(TrapThemeFamily.NeonGraffiti, prefs.themeFamily)
         assertEquals(TrapThemeFamily.NeonGraffiti, state.themeFamily)
@@ -588,11 +612,12 @@ class ScreenshotTest {
     }
 
     @Test
-    fun tor_shield_and_menu_wire_security_navigation_and_identity_reset() {
+    fun tor_orb_and_side_remote_wire_circuit_telemetry_navigation_zoom_and_identity_reset() {
         var hiddenOnly = true
         var resetCount = 0
         var reloadCount = 0
         var forwardCount = 0
+        var zoomInCount = 0
         var uiState by mutableStateOf(
             BrowserUiState(
                 url = DUCKDUCKGO_ONION_URL,
@@ -615,6 +640,7 @@ class ScreenshotTest {
                 state = uiState,
                 onReload = { reloadCount += 1 },
                 onForward = { forwardCount += 1 },
+                onZoomIn = { zoomInCount += 1 },
                 onToggleRouting = { enabled ->
                     hiddenOnly = enabled
                     uiState = uiState.copy(hiddenServiceOnly = enabled)
@@ -625,32 +651,39 @@ class ScreenshotTest {
             )
         }
 
-        compose.onNodeWithTag("address_security_button").performClick()
-        compose.onNodeWithTag("security_circuit_sheet").assertIsDisplayed()
+        // 1. Tap TorKnurledOrbPod -> expands PhotoSoapSideRemote in TorCircuit mode with real isolation token.
+        compose.onNodeWithTag("tor_orb_pod").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("remote_tor_circuit").assertIsDisplayed()
         compose.onNode(
-            hasText("iso-duckduckgogg42xj") and hasAnyAncestor(hasTestTag("security_circuit_sheet")),
+            hasText("iso-duckduckgogg42xj") and hasAnyAncestor(hasTestTag("remote_tor_circuit")),
         ).assertIsDisplayed()
 
-        compose.onNodeWithTag("security_hidden_service_switch").performScrollTo().performClick()
+        compose.onNodeWithTag("remote_onion_only_toggle").performScrollTo().performClick()
         assertFalse(hiddenOnly)
 
-        compose.onNodeWithTag("security_reset_identity").performScrollTo().performClick()
+        // 2-tap confirm on New Tor Identity
+        compose.onNodeWithTag("remote_new_identity").performScrollTo().performClick()
+        assertEquals(0, resetCount)
+        compose.onNodeWithTag("remote_new_identity").performScrollTo().performClick()
         assertEquals(1, resetCount)
-        compose.onNodeWithTag("sheet_close_button").performClick()
 
-        // Inline reload icon inside capsule when unfocused on non-start page.
-        compose.onNodeWithTag("nav_reload").performClick()
+        // Switch to Menu mode on PhotoSoapSideRemote -> Zoom +, Reload, Forward
+        compose.onNodeWithTag("remote_switch_to_menu").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("remote_zoom_in").performScrollTo().performClick()
+        assertEquals(1, zoomInCount)
+        compose.onNodeWithTag("remote_reload").performScrollTo().performClick()
         assertEquals(1, reloadCount)
 
-        // BrowserMenuSheet provides 1-tap Forward, Reload, New Tab, Keyring, Tor & Clearnet Rules, Settings.
-        compose.onNodeWithTag("nav_menu").performClick()
-        compose.onNodeWithTag("browser_menu_sheet").assertIsDisplayed()
-        compose.onNodeWithTag("menu_forward").performClick()
+        compose.onNodeWithTag("side_remote_collapsed_face").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("remote_forward").performClick()
         assertEquals(1, forwardCount)
     }
 
     @Test
-    fun tabs_sheet_creates_switches_and_closes_tabs() {
+    fun crt_swipe_and_spatial_tab_switcher_pod_create_switch_and_close_tabs() {
         var createdCount = 0
         var selectedId = "tab-1"
         var closedId = ""
@@ -658,6 +691,7 @@ class ScreenshotTest {
         compose.setContent {
             BrowserScreen(
                 state = BrowserUiState(
+                    url = DUCKDUCKGO_ONION_URL,
                     tabs = listOf(
                         TabItemState(id = "tab-1", title = "Trap", url = "about:blank", isActive = true),
                         TabItemState(id = "tab-2", title = "DuckDuckGo", url = DUCKDUCKGO_ONION_URL, isActive = false, isOnion = true),
@@ -670,24 +704,38 @@ class ScreenshotTest {
             )
         }
 
-        compose.onNodeWithTag("nav_tabs").performClick()
+        // Horizontal swipe left on CRT capsule switches to adjacent tab ("tab-2")
+        compose.onNodeWithTag("crt_address_pod").performTouchInput { swipeLeft() }
+        compose.waitForIdle()
+        assertEquals("tab-2", selectedId)
+
+        // Pull upward on CRT capsule opens SpatialTabSwitcherPod ("tabs_sheet")
+        compose.onNodeWithTag("crt_address_pod").performTouchInput {
+            down(center)
+            moveBy(Offset(0f, -40.dp.toPx()))
+            up()
+        }
+        compose.waitForIdle()
         compose.onNodeWithTag("tabs_sheet").assertIsDisplayed()
 
-        // Closing a background tab keeps the TabsSheet open so multiple tabs can be closed.
         compose.onNodeWithTag("tab_close_tab-2").performClick()
         assertEquals("tab-2", closedId)
 
-        // Selecting a tab invokes onSelectTab and dismisses TabsSheet.
+        selectedId = "tab-1"
         compose.onNodeWithTag("tab_row_tab-2").performClick()
         assertEquals("tab-2", selectedId)
 
-        compose.onNodeWithTag("nav_tabs").performClick()
+        // Re-open via Side Remote -> Tabs (2) -> New Tab
+        compose.onNodeWithTag("side_remote_collapsed_face").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("remote_tabs").performClick()
+        compose.waitForIdle()
         compose.onNodeWithTag("tabs_new_tab").performClick()
         assertEquals(1, createdCount)
     }
 
     @Test
-    fun pgp_overlay_encrypt_picker_plaintext_and_keyring_flows_execute() {
+    fun pgp_overlay_rocker_latch_encrypt_picker_plaintext_and_keyring_pods_execute() {
         var generatedUserId = ""
         var generatedPassphrase = ""
         var encryptedRecipient = ""
@@ -784,25 +832,34 @@ class ScreenshotTest {
             )
         }
 
-        // 1. Tap "Encrypt Field" chip -> opens Recipient & Signer Picker Sheet
-        compose.onNodeWithText("Encrypt Field").performClick()
+        // 1. Dragging OpenPgpRockerPod latch upward (`dy < -18dp`) opens EncryptRecipientHardwarePod
+        //    (auto-selecting external `deskKey`, never `[Own]`!).
+        compose.onNodeWithTag("pgp_rocker_pod").performTouchInput {
+            down(center)
+            moveBy(Offset(0f, -26.dp.toPx()))
+            up()
+        }
+        compose.waitForIdle()
         compose.onNodeWithTag("encrypt_picker_sheet").assertIsDisplayed()
-        compose.onNodeWithTag("encrypt_confirm_button").performClick()
+        compose.onNodeWithTag("encrypt_confirm_button").assertIsEnabled().performClick()
         assertEquals("Confidential tip body", encryptedText)
         assertEquals(deskKey.fingerprint, encryptedRecipient)
         assertEquals(ownKey.fingerprint, encryptedSigner)
 
-        // 2. PlaintextSheet renders signature attribution, Copy, conditional Insert, and Close
+        // 2. DecryptedPlaintextHardwarePod renders signature attribution, Copy, Insert, and Close
         compose.onNodeWithTag("plaintext_sheet").assertIsDisplayed()
         compose.onNodeWithTag("plaintext_copy").performClick()
         assertEquals("Verified reply from newsroom", copiedPlaintext)
         compose.onNodeWithTag("plaintext_insert").performClick()
         assertEquals("Verified reply from newsroom", insertedPlaintext)
         compose.onNodeWithTag("plaintext_close").performClick()
+        compose.waitForIdle()
 
-        // 3. KeyringSheet accessed cleanly via Menu -> PGP Keyring
-        compose.onNodeWithTag("nav_menu").performClick()
-        compose.onNodeWithTag("menu_keyring").performScrollTo().performClick()
+        // 3. KeyringHardwarePod accessed cleanly via Side Remote -> Keyring
+        compose.onNodeWithTag("side_remote_collapsed_face").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("remote_keyring").performScrollTo().performClick()
+        compose.waitForIdle()
         compose.onNodeWithTag("keyring_sheet").assertIsDisplayed()
         compose.onNodeWithText("Generate").performClick()
         compose.onNodeWithTag("keygen_userid_input").performTextInput("Journalist <j@onion>")

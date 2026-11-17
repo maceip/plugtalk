@@ -167,6 +167,8 @@ fun PhotoSoapSideRemote(
     onImportArmoredKey: (String) -> Unit,
     onEncryptSelectedText: (String) -> Unit,
     modifier: Modifier = Modifier,
+    onZoomIn: () -> Unit = {},
+    onZoomOut: () -> Unit = {},
 ) {
     val haptics = LocalHapticFeedback.current
     val grainBrush = rememberPewterGrainBrush()
@@ -241,6 +243,8 @@ fun PhotoSoapSideRemote(
                 onDecryptArmoredText = onDecryptArmoredText,
                 onImportArmoredKey = onImportArmoredKey,
                 onEncryptSelectedText = onEncryptSelectedText,
+                onZoomIn = onZoomIn,
+                onZoomOut = onZoomOut,
             )
         }
     }
@@ -350,6 +354,8 @@ private fun ExpandedRemoteFace(
     onDecryptArmoredText: (String) -> Unit,
     onImportArmoredKey: (String) -> Unit,
     onEncryptSelectedText: (String) -> Unit,
+    onZoomIn: () -> Unit,
+    onZoomOut: () -> Unit,
 ) {
     val headerLabel = when (mode) {
         RemoteMode.Menu -> "REMOTE"
@@ -426,6 +432,8 @@ private fun ExpandedRemoteFace(
                     onOpenTorCircuit = { onSelectMode(RemoteMode.TorCircuit) },
                     onOpenSettings = onOpenSettings,
                     onOpenLicences = onOpenLicences,
+                    onZoomIn = onZoomIn,
+                    onZoomOut = onZoomOut,
                 )
 
                 RemoteMode.TorCircuit -> RemoteTorCircuitBody(
@@ -478,6 +486,8 @@ private fun RemoteMenuBody(
     onOpenTorCircuit: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenLicences: () -> Unit,
+    onZoomIn: () -> Unit,
+    onZoomOut: () -> Unit,
 ) {
     RemoteEngravedRowButton(
         label = "Back",
@@ -546,6 +556,34 @@ private fun RemoteMenuBody(
         },
         testTag = "remote_home",
     )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        RemoteMiniKey(
+            label = "−",
+            onClick = onZoomOut,
+            testTag = "remote_zoom_out",
+        )
+        Text(
+            text = "Zoom ${state.zoomPercent}%",
+            color = MetaToolsTokens.StencilInk,
+            fontSize = 11.5.sp,
+            fontWeight = FontWeight.Bold,
+            fontFamily = FontFamily.Monospace,
+            maxLines = 1,
+            modifier = Modifier.testTag("remote_zoom_readout"),
+        )
+        RemoteMiniKey(
+            label = "+",
+            onClick = onZoomIn,
+            testTag = "remote_zoom_in",
+        )
+    }
+    EngravedGrooveDivider()
     RemoteEngravedRowButton(
         label = "Tor Circuit",
         glyph = TrapGlyph.Shield,

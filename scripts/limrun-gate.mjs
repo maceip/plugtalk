@@ -215,34 +215,53 @@ function hasStaleAboutBlankTitle(tree) {
 function isStillLoadingInUi(tree) {
   if (
     Array.isArray(tree?.nodes) &&
-    tree.nodes.some((n) => String(n.contentDesc || '').trim() === 'Stop loading')
+    tree.nodes.some((n) => String(n.contentDesc || '').includes('Stop loading'))
   ) {
     return true;
   }
-  return /\bcontent-desc="Stop loading"/i.test(tree?.xml || '');
+  return /content-desc="[^"]*Stop loading[^"]*"/i.test(tree?.xml || '');
+}
+
+function truncateOnionPreservingTail(host) {
+  const clean = String(host || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^www\./, '');
+  if (!clean.endsWith('.onion')) return clean;
+  const stem = clean.slice(0, -6);
+  if (stem.length <= 15) return `${stem}.onion`;
+  return `${stem.slice(0, 8)}…${stem.slice(-5)}.onion`;
 }
 
 function hasOnionHostInChrome(tree, expectedHost) {
-  if (/\btext="Enter address"/i.test(tree?.xml || '')) {
+  const truncatedHost = truncateOnionPreservingTail(expectedHost);
+  const xml = String(tree?.xml || '');
+  if (/\btext="Enter address"/i.test(xml) || /\btext="search \/ \.onion"/i.test(xml)) {
     return false;
   }
   if (Array.isArray(tree?.nodes) && tree.nodes.length > 0) {
-    if (tree.nodes.some((n) => String(n.text || '').trim() === 'Enter address')) {
+    if (
+      tree.nodes.some((n) => {
+        const t = String(n.text || '').trim();
+        return t === 'Enter address' || t === 'search / .onion';
+      })
+    ) {
       return false;
     }
     return tree.nodes.some((n) => {
-      const t = String(n.text || '');
+      const combined = `${n.text || ''} ${n.contentDesc || ''}`;
       return (
-        t.includes(expectedHost) &&
-        !/Navigation failed/i.test(t) &&
-        !t.includes('about:blank · zero-JS')
+        (combined.includes(expectedHost) || combined.includes(truncatedHost)) &&
+        !/Navigation failed/i.test(combined) &&
+        !combined.includes('about:blank · zero-JS') &&
+        !combined.includes('Address bar: search / .onion')
       );
     });
   }
-  const xml = String(tree?.xml || '');
   return (
     !xml.includes('about:blank · zero-JS') &&
-    xml.includes(expectedHost) &&
+    !xml.includes('Address bar: search / .onion') &&
+    (xml.includes(expectedHost) || xml.includes(truncatedHost)) &&
     !/Navigation failed[^"]*duckduckgogg/i.test(xml)
   );
 }
@@ -687,9 +706,10 @@ async function main() {
 
       let tappedCard = false;
       if (startTree && Array.isArray(startTree.nodes)) {
-        const ddgNode = startTree.nodes.find((n) =>
-          String(n.text || '').includes('DuckDuckGo (.onion v3)'),
-        );
+        const ddgNode = startTree.nodes.find((n) => {
+          const txt = String(n.text || '').trim();
+          return txt === 'DuckDuckGo' || txt.includes('DuckDuckGo (.onion v3)');
+        });
         if (ddgNode?.parsedBounds) {
           try {
             await client.tap({
@@ -697,7 +717,7 @@ async function main() {
               y: ddgNode.parsedBounds.centerY,
             });
             tappedCard = true;
-            summary.onionSmoke.triggerMethod = 'ui-tap-start-card';
+            summary.onionSmoke.triggerMethod = 'ui-tap-start-directory';
           } catch {}
         }
       }
@@ -787,9 +807,13 @@ async function main() {
                 `  .onion rendezvous attempt ${summary.onionSmoke.attempts - 1} reported navigation error at ${elapsedSec.toFixed(1)}s; retrying live navigation (attempt ${summary.onionSmoke.attempts}/${MAX_ONION_ATTEMPTS})...`,
               );
               if (summary.onionSmoke.attempts === 3) {
-                const shieldNode = (finalTree.nodes || []).find(
-                  (n) => String(n.contentDesc || '') === 'Tor security status',
-                );
+                const shieldNode = (finalTree.nodes || []).find((n) => {
+                  const desc = String(n.contentDesc || '');
+                  return (
+                    desc === 'Tor security status' ||
+                    desc.startsWith('Tor ready. Tap for circuit telemetry')
+                  );
+                });
                 if (shieldNode?.parsedBounds) {
                   await client
                     .tap({ x: shieldNode.parsedBounds.centerX, y: shieldNode.parsedBounds.centerY })
@@ -798,18 +822,26 @@ async function main() {
                   const secTree = await client
                     .getElementTree({ waitForIdleTimeoutMs: 1000 })
                     .catch(() => null);
-                  const resetNode = (secTree?.nodes || []).find((n) =>
-                    String(n.text || '').includes('New Identity'),
-                  );
+                  const resetNode = (secTree?.nodes || []).find((n) => {
+                    const txt = String(n.text || '');
+                    return txt.includes('New Tor Identity') || txt.includes('New Identity');
+                  });
                   if (resetNode?.parsedBounds) {
+                    await client
+                      .tap({ x: resetNode.parsedBounds.centerX, y: resetNode.parsedBounds.centerY })
+                      .catch(() => {});
+                    await sleep(600);
+                    // 2-tap confirm on PhotoSoapSideRemote ('Confirm New ID?')
                     await client
                       .tap({ x: resetNode.parsedBounds.centerX, y: resetNode.parsedBounds.centerY })
                       .catch(() => {});
                     await sleep(1000);
                   }
-                  const closeNode = (secTree?.nodes || []).find(
-                    (n) => String(n.contentDesc || '') === 'Close sheet',
-                  );
+                  const closeNode = (secTree?.nodes || []).find((n) => {
+                    const desc = String(n.contentDesc || '');
+                    const txt = String(n.text || '').trim();
+                    return desc === 'Close sheet' || txt === '✕';
+                  });
                   if (closeNode?.parsedBounds) {
                     await client
                       .tap({ x: closeNode.parsedBounds.centerX, y: closeNode.parsedBounds.centerY })

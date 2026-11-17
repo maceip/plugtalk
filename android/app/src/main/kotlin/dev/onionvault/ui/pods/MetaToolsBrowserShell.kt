@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.ime
@@ -15,7 +16,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -64,12 +65,13 @@ import dev.onionvault.ui.TrapThemeMode
 fun MetaToolsBrowserShell(
     state: BrowserUiState,
     modifier: Modifier = Modifier,
-    podsRetracted: Boolean = false,
+    podsRetracted: Boolean = state.podsRetracted,
     onSetPodsRetracted: (Boolean) -> Unit = {},
     clipboardTextOverride: String? = null,
     imeVisibleOverride: Boolean? = null,
     initialRemoteExpanded: Boolean = false,
     initialRemoteMode: RemoteMode = RemoteMode.Menu,
+    openTorCircuitTrigger: Int = 0,
     showTabsModal: Boolean = false,
     showKeyringModal: Boolean = false,
     showSettingsModal: Boolean = false,
@@ -84,6 +86,8 @@ fun MetaToolsBrowserShell(
     onForward: () -> Unit = {},
     onReload: () -> Unit = {},
     onHome: () -> Unit = {},
+    onZoomIn: () -> Unit = {},
+    onZoomOut: () -> Unit = {},
     onAllowClearnet: (prompt: ClearnetPromptState, pattern: String, ttlSeconds: Long) -> Unit = { _, _, _ -> },
     onBlockClearnet: (prompt: ClearnetPromptState) -> Unit = {},
     onRevokeClearnetRule: (String) -> Unit = {},
@@ -133,10 +137,11 @@ fun MetaToolsBrowserShell(
 ) {
     val density = LocalDensity.current
     val clipboard = LocalClipboardManager.current
+    val chromeHiddenForPip = state.isInPipMode || state.isPipChromeHidden
 
     var crtEditing by remember { mutableStateOf(false) }
-    var remoteExpanded by remember { mutableStateOf(initialRemoteExpanded) }
-    var remoteMode by remember { mutableStateOf(initialRemoteMode) }
+    var remoteExpanded by remember(initialRemoteExpanded) { mutableStateOf(initialRemoteExpanded) }
+    var remoteMode by remember(initialRemoteMode) { mutableStateOf(initialRemoteMode) }
     var tabsOpen by remember(showTabsModal) { mutableStateOf(showTabsModal) }
     var keyringOpen by remember(showKeyringModal) { mutableStateOf(showKeyringModal) }
     var settingsOpen by remember(showSettingsModal) { mutableStateOf(showSettingsModal) }
@@ -148,6 +153,25 @@ fun MetaToolsBrowserShell(
     fun restoreRetractedPods() {
         retracted = false
         onSetPodsRetracted(false)
+    }
+
+    LaunchedEffect(chromeHiddenForPip) {
+        if (chromeHiddenForPip) {
+            crtEditing = false
+            remoteExpanded = false
+            tabsOpen = false
+            keyringOpen = false
+            settingsOpen = false
+            legalOpen = false
+        }
+    }
+
+    LaunchedEffect(openTorCircuitTrigger) {
+        if (openTorCircuitTrigger > 0 && !chromeHiddenForPip) {
+            restoreRetractedPods()
+            remoteMode = RemoteMode.TorCircuit
+            remoteExpanded = true
+        }
     }
 
     // Automatically surface ContextMenu or SelectionPgp in the Side Remote
@@ -202,7 +226,7 @@ fun MetaToolsBrowserShell(
         )
     }
 
-    val anyOverlayOpen = !state.isPipChromeHidden && (
+    val anyOverlayOpen = !chromeHiddenForPip && (
         crtEditing ||
             remoteExpanded ||
             tabsOpen ||
@@ -248,28 +272,24 @@ fun MetaToolsBrowserShell(
         label = "corner_pod_scale",
     )
 
+    val topStatusBarInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+
     Box(
         modifier = modifier
             .fillMaxSize()
             .testTag("metatools_browser_shell"),
     ) {
-        // 1. Full-bleed Webpage / StartPage Surface (100% unobstructed)
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .let { base ->
-                    if (state.isPipChromeHidden) base else base.statusBarsPadding()
-                },
-        ) {
+        // 1. Full-bleed Webpage / StartPage Surface (100% unobstructed edge-to-edge, 0dp top/bottom container bars)
+        Box(modifier = Modifier.fillMaxSize()) {
             surface()
         }
 
-        if (!state.isPipChromeHidden) {
+        if (!chromeHiddenForPip) {
             // 2. 3dp Cylindrical Brushed-Steel Frame + Street Overspray (100% Hit-Test Passthrough!)
             PerimeterSteelRails(
                 isLoading = state.isLoading,
                 loadProgress = state.loadProgress,
-                modifier = Modifier.statusBarsPadding(),
+                topInset = topStatusBarInset,
             )
 
             // 3. Detached Right-Edge PhotoSoap Side Remote (hidden while CRT editing / IME open)
@@ -322,6 +342,8 @@ fun MetaToolsBrowserShell(
                         onDecryptArmoredText = onDecryptArmoredText,
                         onImportArmoredKey = { armored -> onImportKey(armored, "") },
                         onEncryptSelectedText = onEncryptSelectedText,
+                        onZoomIn = onZoomIn,
+                        onZoomOut = onZoomOut,
                     )
                 }
             }
@@ -572,19 +594,12 @@ private fun triggerDefaultQuickPgpAction(
     onImportKey: (String, String) -> Unit,
     onOpenKeyring: () -> Unit,
 ) {
-    val messageField = state.pgp.fields.firstOrNull { it.kind == "pgp_message" }
-    if (messageField != null) {
-        onFieldAction(messageField)
+    val primaryArmored = state.pgp.primaryArmoredBlock
+    if (primaryArmored != null) {
+        onFieldAction(primaryArmored)
         return
     }
-    val pubKeyField = state.pgp.fields.firstOrNull {
-        it.kind == "pgp_public_key" && !it.label.equals("Insert My PubKey", ignoreCase = true)
-    }
-    if (pubKeyField != null) {
-        onFieldAction(pubKeyField)
-        return
-    }
-    val editableField = state.pgp.fields.firstOrNull()
+    val editableField = state.pgp.editablePgpFields.firstOrNull()
     if (editableField != null) {
         onFieldAction(editableField)
         return

@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /**
@@ -43,6 +44,7 @@ fun PerimeterSteelRails(
     isLoading: Boolean,
     modifier: Modifier = Modifier,
     loadProgress: Int = 0,
+    topInset: Dp = 0.dp,
 ) {
     val splatters = remember { buildDeterministicRailSplatters() }
 
@@ -70,13 +72,14 @@ fun PerimeterSteelRails(
         val oneDp = 1.dp.toPx()
         val twoDp = 2.dp.toPx()
         val threeDp = 3.dp.toPx()
+        val topRailYPx = topInset.toPx().coerceAtLeast(0f)
         val maxInwardClipPx = 4.5.dp.toPx() // 3dp rail + <= 1.5dp inward overspray clip
 
         val w = size.width
         val h = size.height
         if (w <= 0f || h <= 0f) return@Canvas
 
-        // 1. Left Cylindrical Brushed-Steel Rail (x = 0..3dp)
+        // 1. Left Cylindrical Brushed-Steel Rail (x = 0..3dp, full bezel height)
         drawRect(
             color = MetaToolsTokens.SteelOuterEdge,
             topLeft = Offset(0f, 0f),
@@ -84,16 +87,16 @@ fun PerimeterSteelRails(
         )
         drawRect(
             color = MetaToolsTokens.SteelSpecularRidge,
-            topLeft = Offset(oneDp, oneDp),
-            size = Size(oneDp, (h - oneDp).coerceAtLeast(0f)),
+            topLeft = Offset(oneDp, 0f),
+            size = Size(oneDp, h),
         )
         drawRect(
             color = MetaToolsTokens.SteelInnerShadow,
-            topLeft = Offset(twoDp, twoDp),
-            size = Size(oneDp, (h - twoDp).coerceAtLeast(0f)),
+            topLeft = Offset(twoDp, 0f),
+            size = Size(oneDp, h),
         )
 
-        // 2. Right Cylindrical Brushed-Steel Rail (x = w-3dp..w)
+        // 2. Right Cylindrical Brushed-Steel Rail (x = w-3dp..w, full bezel height)
         drawRect(
             color = MetaToolsTokens.SteelOuterEdge,
             topLeft = Offset((w - oneDp).coerceAtLeast(0f), 0f),
@@ -101,29 +104,29 @@ fun PerimeterSteelRails(
         )
         drawRect(
             color = MetaToolsTokens.SteelSpecularRidge,
-            topLeft = Offset((w - twoDp).coerceAtLeast(0f), oneDp),
-            size = Size(oneDp, (h - oneDp).coerceAtLeast(0f)),
+            topLeft = Offset((w - twoDp).coerceAtLeast(0f), 0f),
+            size = Size(oneDp, h),
         )
         drawRect(
             color = MetaToolsTokens.SteelInnerShadow,
-            topLeft = Offset((w - threeDp).coerceAtLeast(0f), twoDp),
-            size = Size(oneDp, (h - twoDp).coerceAtLeast(0f)),
+            topLeft = Offset((w - threeDp).coerceAtLeast(0f), 0f),
+            size = Size(oneDp, h),
         )
 
-        // 3. Top Cylindrical Brushed-Steel Rail (y = 0..3dp)
+        // 3. Top Cylindrical Brushed-Steel Rail (y = topRailYPx..topRailYPx+3dp)
         drawRect(
             color = MetaToolsTokens.SteelOuterEdge,
-            topLeft = Offset(0f, 0f),
+            topLeft = Offset(0f, topRailYPx),
             size = Size(w, oneDp),
         )
         drawRect(
             color = MetaToolsTokens.SteelSpecularRidge,
-            topLeft = Offset(oneDp, oneDp),
+            topLeft = Offset(oneDp, topRailYPx + oneDp),
             size = Size((w - twoDp).coerceAtLeast(0f), oneDp),
         )
         drawRect(
             color = MetaToolsTokens.SteelInnerShadow,
-            topLeft = Offset(twoDp, twoDp),
+            topLeft = Offset(twoDp, topRailYPx + twoDp),
             size = Size((w - twoDp * 2f).coerceAtLeast(0f), oneDp),
         )
 
@@ -173,11 +176,12 @@ fun PerimeterSteelRails(
 
         // 5. Top Ridge Solid 2dp Acid-Yellow (#D8FF00) Traveling Load Pulse
         if (isLoading) {
+            val pulseY = topRailYPx + 0.5.dp.toPx()
             val clampedProgress = (loadProgress.coerceIn(0, 100)) / 100f
             if (clampedProgress > 0f) {
                 drawRect(
                     color = MetaToolsTokens.AcidYellow.copy(alpha = 0.45f),
-                    topLeft = Offset(0f, 0.5.dp.toPx()),
+                    topLeft = Offset(0f, pulseY),
                     size = Size(w * clampedProgress, twoDp),
                 )
             }
@@ -189,7 +193,7 @@ fun PerimeterSteelRails(
             if (clippedEnd > clippedStart) {
                 drawRect(
                     color = MetaToolsTokens.AcidYellow,
-                    topLeft = Offset(clippedStart, 0.5.dp.toPx()),
+                    topLeft = Offset(clippedStart, pulseY),
                     size = Size(clippedEnd - clippedStart, twoDp),
                 )
             }

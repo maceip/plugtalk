@@ -1,7 +1,9 @@
 package dev.onionvault
 
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
 import dev.onionvault.ui.previews.BrowserChromePreview
 import dev.onionvault.ui.previews.BrowserMenuPreview
 import dev.onionvault.ui.previews.ClearnetConsentPreview
@@ -68,6 +70,14 @@ class OnionVaultPreviewsTest {
     fun the_browser_chrome_preview_renders() {
         compose.setContent { BrowserChromePreview() }
         compose.onAllNodes(isRoot())[0].assertExists()
+        compose.onNodeWithTag("metatools_browser_shell").assertIsDisplayed()
+        compose.onNodeWithTag("tor_orb_pod").assertIsDisplayed()
+        compose.onNodeWithTag("crt_address_pod").assertIsDisplayed()
+        compose.onNodeWithTag("pgp_rocker_pod").assertIsDisplayed()
+        compose.onNodeWithTag("side_remote_pod").assertIsDisplayed()
+        compose.onNodeWithTag("start_page").assertIsDisplayed()
+        compose.onNodeWithTag("trusted_onion_directory").assertIsDisplayed()
+        compose.onNodeWithTag("bottom_control_dock").assertDoesNotExist()
     }
 
     @Test
