@@ -141,19 +141,13 @@ impl IsolationRegistry {
     ///   full `.onion` URL, `.onion` host, or raw isolation key) and returns
     ///   `1` if an active group was evicted (`0` otherwise).
     pub fn reset_isolation(&self, target_url_or_empty: &str) -> usize {
-        let trimmed = target_url_or_empty.trim();
         let mut groups = self.lock_groups();
-        if trimmed.is_empty() {
+        let Some(resolved_key) = resolve_isolation_key(target_url_or_empty) else {
             let evicted = groups.len();
             groups.clear();
             log::info!("reset all {evicted} isolated Tor circuit groups");
             return evicted;
-        }
-
-        let resolved_key = extract_host(trimmed)
-            .and_then(|h| apex_domain(&h))
-            .or_else(|| apex_domain(trimmed))
-            .unwrap_or_else(|| trimmed.strip_prefix("iso-").unwrap_or(trimmed).to_string());
+        };
 
         if groups.remove(&resolved_key).is_some() {
             log::info!("reset isolated Tor circuit group iso-{resolved_key}");
@@ -167,6 +161,20 @@ impl IsolationRegistry {
     pub fn apex_domain(&self, host: &str) -> Option<String> {
         apex_domain(host)
     }
+}
+
+/// Resolve a reset target (`""` -> `None` meaning all groups; `.onion` URL,
+/// `.onion` host, or `"iso-<key>"` -> `Some(key)`).
+pub fn resolve_isolation_key(target_url_or_empty: &str) -> Option<String> {
+    let trimmed = target_url_or_empty.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let key = extract_host(trimmed)
+        .and_then(|h| apex_domain(&h))
+        .or_else(|| apex_domain(trimmed))
+        .unwrap_or_else(|| trimmed.strip_prefix("iso-").unwrap_or(trimmed).to_string());
+    Some(key)
 }
 
 /// Returns `true` iff `host` is a syntactically valid Tor v3 `.onion` hostname
