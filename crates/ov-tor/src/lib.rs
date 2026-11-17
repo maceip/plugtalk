@@ -225,8 +225,10 @@ impl TorService {
         &self.clearnet
     }
 
-    /// Evict circuit isolation group(s) (`""` resets all `.onion` circuits).
+    /// Evict circuit isolation group(s) (`""` resets all `.onion` circuits)
+    /// and flush any stashed or orphaned in-flight `.onion` streams for that identity.
     pub fn reset_isolation(&self, target_url_or_empty: &str) -> usize {
+        self.socks.clear_onion_pool(target_url_or_empty);
         self.isolation.reset_isolation(target_url_or_empty)
     }
 
