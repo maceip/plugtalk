@@ -64,7 +64,7 @@ fun OvCrashScreen(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
                 modifier = Modifier
-                    .size(48.dp)
+                    .size(52.dp)
                     .clip(RoundedCornerShape(14.dp))
                     .background(colors.dangerContainer)
                     .border(1.dp, colors.danger, RoundedCornerShape(14.dp)),
@@ -74,7 +74,7 @@ fun OvCrashScreen(
                     painter = painterResource(R.drawable.ov_trap_mark),
                     contentDescription = "Trap",
                     contentScale = ContentScale.Fit,
-                    modifier = Modifier.size(32.dp),
+                    modifier = Modifier.size(42.dp),
                 )
             }
             Spacer(Modifier.width(12.dp))

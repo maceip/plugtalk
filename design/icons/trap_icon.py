@@ -1,15 +1,30 @@
 #!/usr/bin/env python3
-"""Generate every Trap icon asset by resizing the canonical Trap icon artwork.
+"""Generate every Trap icon asset, adaptive layer, monochrome glyph, and lockup.
 
     python3 design/icons/trap_icon.py           # write the files
     python3 design/icons/trap_icon.py --check   # fail when they drifted
 
-The canonical artwork lives in `design/icons/src/trap-icon.webp` alongside its
-lossless RGBA decode `design/icons/src/trap-icon.png` (kept as lossless PNG so
-cross-distro `libwebp` decoder revisions can never introduce 1-LSB YUV drift in
-CI).  The artwork itself is never cropped, recoloured, masked, or modified in
-any way—only resized cleanly to each required Android launcher density, adaptive
-safe-zone foreground slot, interface mark, store listing size, and doc lockup.
+The canonical V3 cutout artwork lives in `design/icons/src/trap-icon.webp`
+alongside its lossless RGBA decode `design/icons/src/trap-icon.png` (kept as
+lossless PNG so cross-distro `libwebp` decoder revisions can never introduce
+1-LSB YUV drift in CI).
+
+Generated outputs:
+  - Legacy & round launcher icons (`mdpi`..`xxxhdpi` `ic_launcher.png` &
+    `ic_launcher_round.png`): unmodified resized artwork (`48px`..`192px`).
+  - Adaptive 108dp icon layers across all densities (`mdpi` `108px` through
+    `xxxhdpi` `432px`):
+      * `ic_launcher_foreground.png` — unmodified artwork fitted inside the
+        72dp safe zone so launcher masks never clip the 3D breakout lettering.
+      * `ic_launcher_background.png` — deep obsidian-plum `#0D080B` backdrop
+        sampled directly from the V3 shutter shadow palette.
+      * `ic_launcher_monochrome.png` — crisp single-channel white alpha mask of
+        the neon shutter `TR/AP` letterforms for Android 13+ themed icons.
+  - Interface & store exports: `drawable-nodpi/ov_trap_mark.png` (`512px`),
+    `play-store-512.png`, `play-store-1024.png`, and
+    `ic_launcher_monochrome_512.png`.
+  - Light & dark wordmark lockups (`trap-lockup.png`/`.svg` and
+    `trap-lockup-dark.png`/`.svg`).
 
 Only Pillow is needed; it is in the image of the builder.
 """
@@ -37,7 +52,7 @@ SRC_PNG = HERE / "src" / "trap-icon.png"
 OUT = HERE / "out"
 RES = ROOT / "android" / "app" / "src" / "main" / "res"
 
-# Standard Android launcher icon pixel sizes per density bucket (48dp base).
+# Standard Android 48dp legacy/round launcher icon pixel sizes per density.
 DENSITIES: dict[str, int] = {
     "mdpi": 48,
     "hdpi": 72,
@@ -46,16 +61,26 @@ DENSITIES: dict[str, int] = {
     "xxxhdpi": 192,
 }
 
-# Adaptive icon canvas (108dp = 432px at xxxhdpi) and visible mask (72dp = 288px).
+# Standard Android 108dp adaptive icon canvas pixel sizes per density.
+ADAPTIVE_DENSITIES: dict[str, int] = {
+    "mdpi": 108,
+    "hdpi": 162,
+    "xhdpi": 216,
+    "xxhdpi": 324,
+    "xxxhdpi": 432,
+}
+
+# Adaptive icon geometry (108dp canvas, 72dp visible safe-zone diameter).
 ADAPTIVE_DP = 108
 ADAPTIVE_VISIBLE_DP = 72
-ADAPTIVE_CANVAS_PX = 432
-ADAPTIVE_BG_RGBA = (0x0F, 0x0F, 0x0F, 0xFF)
+# Deep obsidian-plum (#0D080B) sampled from the V3 cutout shutter shadow.
+ADAPTIVE_BG_RGBA = (0x0D, 0x08, 0x0B, 0xFF)
 
-# The wordmark of the documentation lockup.
+# Wordmark lockup typography & V3 cutout-matched inks.
 WORDMARK = "Trap"
 FONT = HERE / "fonts" / "Trap-Bold.ttf"
-INK = (0x14, 0x11, 0x0E)
+INK_LIGHT_SURFACE = (0x18, 0x0D, 0x12)
+INK_DARK_SURFACE = (0xF5, 0xEE, 0xF4)
 
 
 # ------------------------------------------------------------------- the source
@@ -71,7 +96,7 @@ def _source_artwork() -> Image.Image:
 
 
 def resized(image: Image.Image, side: int) -> Image.Image:
-    """Resize the square RGBA icon cleanly without modifying its artwork."""
+    """Resize a square RGBA image cleanly using Lanczos resampling."""
     if image.size == (side, side):
         return image.copy()
     return image.resize((side, side), Image.LANCZOS)
@@ -97,10 +122,9 @@ def fitted(image: Image.Image, canvas: int, max_r: float) -> Image.Image:
     """Centre the unmodified resized icon inside the 72dp adaptive safe zone.
 
     Every non-transparent pixel stays strictly inside the circular 72dp mask
-    (with a 1px margin) so launchers never clip any edge of the artwork.
+    (with a 1px margin) so launchers never clip any edge of the 3D lettering.
     """
     visible_radius = (canvas * ADAPTIVE_VISIBLE_DP / ADAPTIVE_DP) / 2.0 - 1.0
-    base_half = min(image.size) / 2.0
     if max_r <= 0.0:
         side = int(round(visible_radius * 2.0))
     else:
@@ -115,6 +139,43 @@ def fitted(image: Image.Image, canvas: int, max_r: float) -> Image.Image:
     return out
 
 
+def monochrome_source(source: Image.Image) -> Image.Image:
+    """Extract a crisp white-on-transparent monochrome glyph of the TR/AP mark.
+
+    Both electric cyan (#5BCEF1) and hot neon magenta (#F27AF3) interiors of the
+    stacked `TR / AP` graffiti letterforms carry high blue-channel intensity
+    (`B >= 135`) while the warm shutter disc, 3D plum extrusion (#361821), and
+    horizontal shutter slats sit well below `B <= 115`.  Ramping smoothly across
+    that boundary yields an anti-aliased single-color glyph preserving every
+    letter counter and shutter stripe for Android 13+ themed icons.
+    """
+    width, height = source.size
+    raw = source.tobytes()
+    out = bytearray(len(raw))
+    low = 118
+    span = 68  # 118..186 smooth anti-aliased ramp
+    for idx in range(0, len(raw), 4):
+        r = raw[idx]
+        g = raw[idx + 1]
+        b = raw[idx + 2]
+        a = raw[idx + 3]
+        if a == 0 or b <= low:
+            continue
+        # Reject any neutral warm highlights outside the cyan/magenta neon fill
+        # where green exceeds blue and red exceeds blue simultaneously.
+        neon_signal = b - (min(r, g) // 5)
+        if neon_signal <= low:
+            continue
+        ramp = min(255, ((neon_signal - low) * 255) // span)
+        mono_a = (ramp * a) // 255
+        if mono_a > 0:
+            out[idx] = 255
+            out[idx + 1] = 255
+            out[idx + 2] = 255
+            out[idx + 3] = mono_a
+    return Image.frombytes("RGBA", (width, height), bytes(out))
+
+
 # ------------------------------------------------------------------- lockups
 
 
@@ -125,38 +186,58 @@ def _font(size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.truetype(str(FONT), size)
 
 
-def lockup_png(source: Image.Image, width: int = 1024) -> Image.Image:
+def lockup_png(
+    source: Image.Image,
+    ink_rgb: tuple[int, int, int] = INK_LIGHT_SURFACE,
+    backdrop_rgba: tuple[int, int, int, int] = (0, 0, 0, 0),
+    width: int = 1024,
+) -> Image.Image:
     """The unmodified resized icon next to the Trap wordmark."""
     height = int(round(width * 0.28))
+    pad = int(round(height * 0.12)) if backdrop_rgba[3] > 0 else 0
     icon = resized(source, height)
     font = _font(int(height * 0.40))
     text_width = int(font.getlength(WORDMARK))
     gap = int(height * 0.16)
-    canvas = Image.new(
-        "RGBA", (height + gap + text_width + int(height * 0.1), height), (0, 0, 0, 0)
-    )
-    canvas.alpha_composite(icon, (0, 0))
+    total_w = pad * 2 + height + gap + text_width + int(height * 0.1)
+    total_h = pad * 2 + height
+    canvas = Image.new("RGBA", (total_w, total_h), backdrop_rgba)
+    canvas.alpha_composite(icon, (pad, pad))
     draw = ImageDraw.Draw(canvas)
     box = draw.textbbox((0, 0), WORDMARK, font=font)
     draw.text(
-        (height + gap, (height - (box[3] - box[1])) / 2 - box[1]),
+        (pad + height + gap, pad + (height - (box[3] - box[1])) / 2 - box[1]),
         WORDMARK,
         font=font,
-        fill=INK + (255,),
+        fill=ink_rgb + (255,),
     )
     return canvas
 
 
-def lockup_svg(source: Image.Image) -> str:
+def lockup_svg(
+    source: Image.Image,
+    ink_hex: str = "#180D12",
+    backdrop_hex: str | None = None,
+) -> str:
     """The lockup as a vector, embedding the unmodified 256px icon raster."""
     icon = resized(source, 256)
     buffer = io.BytesIO()
     icon.save(buffer, format="PNG", optimize=True)
     encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
     font = base64.b64encode(FONT.read_bytes()).decode("ascii")
+    bg_rect = (
+        f'\n  <rect x="0" y="0" width="1024" height="296" rx="28" fill="{backdrop_hex}"/>'
+        if backdrop_hex
+        else ""
+    )
+    svg_h = 296 if backdrop_hex else 256
+    img_x = 20 if backdrop_hex else 0
+    img_y = 20 if backdrop_hex else 0
+    txt_x = 316 if backdrop_hex else 296
+    txt_y = 186 if backdrop_hex else 166
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
-     width="1024" height="256" viewBox="0 0 1024 256">
+     width="1024" height="{svg_h}" viewBox="0 0 1024 {svg_h}">
   <title>{WORDMARK}</title>
   <defs>
     <style>
@@ -166,10 +247,10 @@ def lockup_svg(source: Image.Image) -> str:
       }}
       .wordmark {{ font-family: "Trap", sans-serif; font-weight: bold; }}
     </style>
-  </defs>
-  <image x="0" y="0" width="256" height="256"
+  </defs>{bg_rect}
+  <image x="{img_x}" y="{img_y}" width="256" height="256"
          xlink:href="data:image/png;base64,{encoded}"/>
-  <text x="296" y="166" class="wordmark" font-size="102" fill="#14110E">{WORDMARK}</text>
+  <text x="{txt_x}" y="{txt_y}" class="wordmark" font-size="102" fill="{ink_hex}">{WORDMARK}</text>
 </svg>
 """
 
@@ -181,6 +262,8 @@ def render(target_res: Path, target_out: Path) -> dict[Path, bytes]:
     """Render every icon asset and return the files with their content."""
     source = _source_artwork()
     max_r = _max_alpha_radius(source)
+    mono = monochrome_source(source)
+    mono_max_r = _max_alpha_radius(mono)
     files: dict[Path, bytes] = {}
 
     def put(path: Path, data: bytes) -> None:
@@ -191,7 +274,7 @@ def render(target_res: Path, target_out: Path) -> dict[Path, bytes]:
         image.save(buffer, format="PNG", optimize=True)
         put(path, buffer.getvalue())
 
-    # Legacy & round launcher icons of every density: unmodified resized artwork.
+    # 1. Legacy & round launcher icons across all 5 densities (48px..192px).
     for density, px in DENSITIES.items():
         launcher_png = resized(source, px)
         buffer = io.BytesIO()
@@ -200,43 +283,56 @@ def render(target_res: Path, target_out: Path) -> dict[Path, bytes]:
         put(target_res / f"mipmap-{density}" / "ic_launcher.png", encoded)
         put(target_res / f"mipmap-{density}" / "ic_launcher_round.png", encoded)
 
-    # Adaptive icon foreground (unmodified artwork resized into safe zone) + dark background.
-    put_png(
-        target_res / "mipmap-xxxhdpi" / "ic_launcher_foreground.png",
-        fitted(source, ADAPTIVE_CANVAS_PX, max_r),
-    )
-    put_png(
-        target_res / "mipmap-xxxhdpi" / "ic_launcher_background.png",
-        Image.new("RGBA", (ADAPTIVE_CANVAS_PX, ADAPTIVE_CANVAS_PX), ADAPTIVE_BG_RGBA),
-    )
+    # 2. Adaptive 108dp foreground, background & Android 13+ monochrome layers
+    #    across all 5 densities (108px..432px).
+    for density, canvas_px in ADAPTIVE_DENSITIES.items():
+        put_png(
+            target_res / f"mipmap-{density}" / "ic_launcher_foreground.png",
+            fitted(source, canvas_px, max_r),
+        )
+        put_png(
+            target_res / f"mipmap-{density}" / "ic_launcher_background.png",
+            Image.new("RGBA", (canvas_px, canvas_px), ADAPTIVE_BG_RGBA),
+        )
+        put_png(
+            target_res / f"mipmap-{density}" / "ic_launcher_monochrome.png",
+            fitted(mono, canvas_px, max(max_r, mono_max_r)),
+        )
 
-    # Interface mark and store exports: unmodified resized artwork.
+    # 3. Interface mark and high-res store / monochrome exports.
     icon_512 = resized(source, 512)
     put_png(target_res / "drawable-nodpi" / "ov_trap_mark.png", icon_512)
     put_png(target_out / "play-store-1024.png", resized(source, 1024))
     put_png(target_out / "play-store-512.png", icon_512)
+    put_png(target_out / "ic_launcher_monochrome_512.png", resized(mono, 512))
 
-    # Documentation wordmark lockups.
-    put_png(target_out / "trap-lockup.png", lockup_png(source))
-    put(target_out / "trap-lockup.svg", lockup_svg(source).encode("utf-8"))
+    # 4. Light-surface and dark-surface wordmark lockups (PNG + SVG).
+    put_png(
+        target_out / "trap-lockup.png",
+        lockup_png(source, ink_rgb=INK_LIGHT_SURFACE, backdrop_rgba=(0, 0, 0, 0)),
+    )
+    put(
+        target_out / "trap-lockup.svg",
+        lockup_svg(source, ink_hex="#180D12", backdrop_hex=None).encode("utf-8"),
+    )
+    put_png(
+        target_out / "trap-lockup-dark.png",
+        lockup_png(source, ink_rgb=INK_DARK_SURFACE, backdrop_rgba=ADAPTIVE_BG_RGBA),
+    )
+    put(
+        target_out / "trap-lockup-dark.svg",
+        lockup_svg(source, ink_hex="#F5EEF4", backdrop_hex="#0D080B").encode("utf-8"),
+    )
 
     return files
 
 
 def stale_files() -> list[Path]:
     """Files from earlier icon pipelines that must not linger in the tree."""
-    paths = [
+    return [
         RES / "drawable" / "ic_launcher_background.xml",
-        RES / "mipmap-xxxhdpi" / "ic_launcher_monochrome.png",
         OUT / "ic_launcher_monochrome_192.png",
-        OUT / "ic_launcher_monochrome_512.png",
     ]
-    for density in DENSITIES:
-        if density == "xxxhdpi":
-            continue
-        for name in ("ic_launcher_foreground.png", "ic_launcher_monochrome.png"):
-            paths.append(RES / f"mipmap-{density}" / name)
-    return paths
 
 
 def unexpected_files(expected_res: set[Path], expected_out: set[Path]) -> list[Path]:

@@ -20,13 +20,15 @@ The script needs Pillow, nothing else: no browser, no network.
 
 | lockup | file | use |
 | --- | --- | --- |
-| hero icon | `mipmap-*/ic_launcher.png` | the unmodified icon resized for `mdpi` (`48px`) through `xxxhdpi` (`192px`) |
-| round icon | `mipmap-*/ic_launcher_round.png` | the unmodified icon resized for launchers requesting `roundIcon` |
-| adaptive foreground | `mipmap-xxxhdpi/ic_launcher_foreground.png` | the unmodified icon resized inside the 72dp safe zone of the 108dp (`432px`) canvas |
-| adaptive background | `mipmap-xxxhdpi/ic_launcher_background.png` | the `#0F0F0F` dark field behind the adaptive foreground |
-| the mark | `drawable-nodpi/ov_trap_mark.png` | the unmodified `512px` icon mark used on the start and crash screens |
+| hero icon | `mipmap-*/ic_launcher.png` | the unmodified V3 cutout resized for `mdpi` (`48px`) through `xxxhdpi` (`192px`) |
+| round icon | `mipmap-*/ic_launcher_round.png` | the unmodified V3 cutout resized for launchers requesting `roundIcon` |
+| adaptive foreground | `mipmap-*/ic_launcher_foreground.png` | the unmodified V3 cutout fitted inside the 72dp safe zone across all 5 densities (`108px`..`432px`) |
+| adaptive background | `mipmap-*/ic_launcher_background.png` | the `#0D080B` obsidian-plum shutter field across all 5 densities (`108px`..`432px`) |
+| adaptive monochrome | `mipmap-*/ic_launcher_monochrome.png` | the shutter-striped `TR/AP` glyph mask for Android 13+ themed icons (`108px`..`432px` + `out/ic_launcher_monochrome_512.png`) |
+| the mark | `drawable-nodpi/ov_trap_mark.png` | the unmodified `512px` V3 mark used on the start and crash screens |
 | store icon | `design/icons/out/play-store-1024.png` | the full `1024px` and `512px` (`play-store-512.png`) exports |
-| wordmark | `design/icons/out/trap-lockup.svg` | the unmodified resized icon next to the wordmark (`trap-lockup.png` / `.svg`) |
+| light lockup | `design/icons/out/trap-lockup.svg` | the unmodified resized icon next to `#180D12` wordmark ink (`trap-lockup.png` / `.svg`) |
+| dark lockup | `design/icons/out/trap-lockup-dark.svg` | the unmodified resized icon on `#0D080B` with `#F5EEF4` wordmark ink (`trap-lockup-dark.png` / `.svg`) |
 
 ## The safe zone of the adaptive icon
 

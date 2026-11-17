@@ -1,5 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Adaptive Launcher & V3 Cutout Brand Swatches -->
+    <color name="ic_launcher_background">#FF0D080B</color>
+    <color name="trap_icon_backdrop">#FF0D080B</color>
+    <color name="trap_icon_extrude">#FF361821</color>
+    <color name="trap_icon_cyan">#FF5BCEF1</color>
+    <color name="trap_icon_magenta">#FFF27AF3</color>
+
     <!-- SecureDrop Chrome Dark Tokens -->
     <color name="trap_sd_bg">#FF0F0C09</color>
     <color name="trap_sd_surface">#FF1A1510</color>
@@ -12,15 +19,15 @@
     <color name="trap_sd_text">#FFE8DDD0</color>
     <color name="trap_sd_muted">#FFB9AEA0</color>
 
-    <!-- Neon Graffiti Board Dark Tokens -->
-    <color name="trap_neon_bg">#FF15181F</color>
-    <color name="trap_neon_surface">#FF1E222C</color>
-    <color name="trap_neon_control">#FF2A2F3C</color>
-    <color name="trap_neon_line">#FF3A4050</color>
-    <color name="trap_neon_teal">#FF00E4C1</color>
-    <color name="trap_neon_mint">#FF67EEE1</color>
-    <color name="trap_neon_pink">#FFFD96C3</color>
+    <!-- Neon Graffiti V3 Cutout Dark Tokens -->
+    <color name="trap_neon_bg">#FF120E14</color>
+    <color name="trap_neon_surface">#FF1B151F</color>
+    <color name="trap_neon_control">#FF281F2E</color>
+    <color name="trap_neon_line">#FF3E3046</color>
+    <color name="trap_neon_teal">#FF35DCF0</color>
+    <color name="trap_neon_mint">#FF5BCEF1</color>
+    <color name="trap_neon_pink">#FFF27AF3</color>
     <color name="trap_neon_amber">#FFE8933E</color>
     <color name="trap_neon_cream">#FFFBD4A9</color>
-    <color name="trap_neon_purple">#FF8F55A6</color>
+    <color name="trap_neon_purple">#FFB565E8</color>
 </resources>

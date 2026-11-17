@@ -8,33 +8,35 @@ import androidx.compose.ui.graphics.Color
  * 2. [OnionPalette] (`NeonGraffiti`): Neon Graffiti Browser Board swatches.
  */
 object OnionPalette {
-    // Neon Graffiti Board Swatches
-    val Teal = Color(0xFF00E4C1)
-    val TealDeep = Color(0xFF00A88F)
-    val Mint = Color(0xFF67EEE1)
-    val Pink = Color(0xFFFD96C3)
-    val PinkDeep = Color(0xFFB85C8B)
+    // V3 Cutout & Neon Graffiti Swatches
+    val IconBackdrop = Color(0xFF0D080B)
+    val IconExtrude = Color(0xFF361821)
+    val Teal = Color(0xFF35DCF0)
+    val TealDeep = Color(0xFF009DB5)
+    val Mint = Color(0xFF5BCEF1)
+    val Pink = Color(0xFFF27AF3)
+    val PinkDeep = Color(0xFFB338B8)
     val Amber = Color(0xFFE8933E)
     val Cream = Color(0xFFFBD4A9)
-    val Purple = Color(0xFF8F55A6)
-    val PurpleDeep = Color(0xFF5A3568)
+    val Purple = Color(0xFFB565E8)
+    val PurpleDeep = Color(0xFF6B2F96)
 
-    // Neon Graffiti Dark Surfaces & Ink
-    val Surface = Color(0xFF15181F)
-    val SurfaceRaised = Color(0xFF1E222C)
-    val SurfaceCanvas = Color(0xFF11141A)
-    val SurfaceHigh = Color(0xFF2A2F3C)
-    val Hairline = Color(0xFF3A4050)
-    val CardBorder = Color(0xFF2E3442)
-    val TextPrimary = Color(0xFFF2EEE6)
-    val TextBody = Color(0xFFE5E0D5)
-    val TextMuted = Color(0xFFA8A2B8)
-    val TextSubtle = Color(0xFF7E7890)
+    // V3 Cutout Obsidian-Plum Dark Surfaces & Ink
+    val Surface = Color(0xFF120E14)
+    val SurfaceRaised = Color(0xFF1B151F)
+    val SurfaceCanvas = Color(0xFF0D080B)
+    val SurfaceHigh = Color(0xFF281F2E)
+    val Hairline = Color(0xFF3E3046)
+    val CardBorder = Color(0xFF32263A)
+    val TextPrimary = Color(0xFFF5EEF4)
+    val TextBody = Color(0xFFE7DFEA)
+    val TextMuted = Color(0xFFB6A8BF)
+    val TextSubtle = Color(0xFF8B7B96)
     val OnAmber = Color(0xFF2A1608)
-    val OnTeal = Color(0xFF04241F)
-    val Good = Color(0xFF00E4C1)
+    val OnTeal = Color(0xFF042026)
+    val Good = Color(0xFF5BCEF1)
     val Warn = Color(0xFFE8933E)
-    val Bad = Color(0xFFFD96C3)
+    val Bad = Color(0xFFF27AF3)
 }
 
 object SecureDropPalette {
