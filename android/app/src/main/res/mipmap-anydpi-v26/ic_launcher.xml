@@ -2,13 +2,11 @@
 <!--
     The adaptive icon of Trap (Android 8 and later).
 
-    The foreground is the artwork of the graffiti piece, fitted into the
-    safe zone so that the mask of the launcher never cuts a letter; the
-    background is the black field behind it, and the monochrome layer is
-    the silhouette of the piece for the themed icons.
+    The foreground carries the unmodified Trap icon artwork resized to fit
+    cleanly inside the 72dp safe zone so launcher masks never clip the
+    lettering; the dark background layer prevents legacy white-disc wrapping.
 -->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@mipmap/ic_launcher_background" />
     <foreground android:drawable="@mipmap/ic_launcher_foreground" />
-    <monochrome android:drawable="@mipmap/ic_launcher_monochrome" />
 </adaptive-icon>

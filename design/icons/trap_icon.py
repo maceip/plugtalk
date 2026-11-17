@@ -1,21 +1,15 @@
 #!/usr/bin/env python3
-"""Generate every Trap icon out of the icon bundle of the artwork.
+"""Generate every Trap icon asset by resizing the canonical Trap icon artwork.
 
     python3 design/icons/trap_icon.py           # write the files
     python3 design/icons/trap_icon.py --check   # fail when they drifted
 
-The bundle in `design/icons/android/` is the source: it carries the artwork
-of the graffiti piece, the launcher icons of every density, the three layers
-of the adaptive icon and the silhouette for the themed icons of Android 13.
-
-The script copies the bundle into the resources of the application and
-composes the few lockups of the documentation out of the same artwork, so
-the launcher icon, the mark of the interface, the icon of the listing and
-the wordmark can never drift apart.
-
-The output is byte for byte reproducible, and `--check` compares the files
-of the tree with a fresh rendering, which is what the pipeline of the
-continuous integration runs.
+The canonical artwork lives in `design/icons/src/trap-icon.webp` alongside its
+lossless RGBA decode `design/icons/src/trap-icon.png` (kept as lossless PNG so
+cross-distro `libwebp` decoder revisions can never introduce 1-LSB YUV drift in
+CI).  The artwork itself is never cropped, recoloured, masked, or modified in
+any way—only resized cleanly to each required Android launcher density, adaptive
+safe-zone foreground slot, interface mark, store listing size, and doc lockup.
 
 Only Pillow is needed; it is in the image of the builder.
 """
@@ -38,89 +32,86 @@ except ImportError as exc:  # pragma: no cover - the dependency is documented
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
-BUNDLE = HERE / "android"
+SRC_WEBP = HERE / "src" / "trap-icon.webp"
+SRC_PNG = HERE / "src" / "trap-icon.png"
 OUT = HERE / "out"
 RES = ROOT / "android" / "app" / "src" / "main" / "res"
 
-# The densities of the launcher icons of the bundle.
-DENSITIES = ("mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi")
+# Standard Android launcher icon pixel sizes per density bucket (48dp base).
+DENSITIES: dict[str, int] = {
+    "mdpi": 48,
+    "hdpi": 72,
+    "xhdpi": 96,
+    "xxhdpi": 144,
+    "xxxhdpi": 192,
+}
 
-# The canvas of an adaptive icon is 108dp and the launcher shows the central
-# 72dp of it.  The artwork has to fit into the circle that is inscribed in
-# that area, otherwise a launcher with a round mask cuts the letters of the
-# piece in half.
+# Adaptive icon canvas (108dp = 432px at xxxhdpi) and visible mask (72dp = 288px).
 ADAPTIVE_DP = 108
 ADAPTIVE_VISIBLE_DP = 72
+ADAPTIVE_CANVAS_PX = 432
+ADAPTIVE_BG_RGBA = (0x0F, 0x0F, 0x0F, 0xFF)
 
-# The share of the side of the icon that the rounded corners take.
-CORNER_RATIO = 0.22
-
-# The wordmark of the lockup.
+# The wordmark of the documentation lockup.
 WORDMARK = "Trap"
-# The font of the wordmark.  It is a subset of DejaVu Sans Bold that carries
-# the glyphs of the wordmark only; it is part of the repository, so that the
-# lockup is the same on every machine and the check cannot drift.
 FONT = HERE / "fonts" / "Trap-Bold.ttf"
-
-# The ink of the wordmark.
 INK = (0x14, 0x11, 0x0E)
 
 
-# ------------------------------------------------------------------- the bundle
+# ------------------------------------------------------------------- the source
 
 
-def _read(relative: str) -> bytes:
-    """The bytes of a file of the bundle."""
-    path = BUNDLE / relative
-    if not path.exists():
-        raise SystemExit(f"the icon bundle is incomplete: {path} is missing")
-    return path.read_bytes()
+def _source_artwork() -> Image.Image:
+    """Load the canonical unmodified RGBA Trap icon artwork."""
+    if not SRC_WEBP.exists():
+        raise SystemExit(f"the canonical source WebP is missing: {SRC_WEBP}")
+    if not SRC_PNG.exists():
+        raise SystemExit(f"the lossless source PNG is missing: {SRC_PNG}")
+    return Image.open(io.BytesIO(SRC_PNG.read_bytes())).convert("RGBA")
 
 
-def _open(relative: str) -> Image.Image:
-    """The picture of a file of the bundle."""
-    return Image.open(io.BytesIO(_read(relative))).convert("RGBA")
+def resized(image: Image.Image, side: int) -> Image.Image:
+    """Resize the square RGBA icon cleanly without modifying its artwork."""
+    if image.size == (side, side):
+        return image.copy()
+    return image.resize((side, side), Image.LANCZOS)
 
 
-# --------------------------------------------------------------- the operations
-
-
-def rounded(image: Image.Image, ratio: float = CORNER_RATIO) -> Image.Image:
-    """Round the corners of a picture."""
+def _max_alpha_radius(image: Image.Image) -> float:
+    """Maximum distance from image centre of any non-transparent pixel."""
     width, height = image.size
-    radius = int(round(min(width, height) * ratio))
-    mask = Image.new("L", (width, height), 0)
-    ImageDraw.Draw(mask).rounded_rectangle(
-        (0, 0, width - 1, height - 1), radius=radius, fill=255
-    )
-    out = image.copy()
-    out.putalpha(mask)
-    return out
+    cx = (width - 1) / 2.0
+    cy = (height - 1) / 2.0
+    alpha = image.getchannel("A").load()
+    max_r = 0.0
+    for y in range(height):
+        for x in range(width):
+            if alpha[x, y] > 0:
+                r = math.hypot(x - cx, y - cy)
+                if r > max_r:
+                    max_r = r
+    return max_r
 
 
-def circular(image: Image.Image) -> Image.Image:
-    """Cut a picture into a circle."""
-    width, height = image.size
-    mask = Image.new("L", (width, height), 0)
-    ImageDraw.Draw(mask).ellipse((0, 0, width - 1, height - 1), fill=255)
-    out = image.copy()
-    out.putalpha(mask)
-    return out
+def fitted(image: Image.Image, canvas: int, max_r: float) -> Image.Image:
+    """Centre the unmodified resized icon inside the 72dp adaptive safe zone.
 
-
-def fitted(image: Image.Image, canvas: int) -> Image.Image:
-    """Place a picture in the safe zone of an adaptive icon.
-
-    The launcher masks the canvas of 108dp down to the central 72dp and the
-    shape it uses is a circle on many devices, so the picture is scaled to
-    the square that is inscribed in that circle and centred.
+    Every non-transparent pixel stays strictly inside the circular 72dp mask
+    (with a 1px margin) so launchers never clip any edge of the artwork.
     """
-    side = int(
-        round(canvas * ADAPTIVE_VISIBLE_DP / ADAPTIVE_DP / math.sqrt(2))
-    )
-    art = image.resize((side, side), Image.LANCZOS)
+    visible_radius = (canvas * ADAPTIVE_VISIBLE_DP / ADAPTIVE_DP) / 2.0 - 1.0
+    base_half = min(image.size) / 2.0
+    if max_r <= 0.0:
+        side = int(round(visible_radius * 2.0))
+    else:
+        side = int(math.floor(visible_radius * (min(image.size) / max_r)))
+    # Keep `side` even so `(canvas - side) // 2` centres with zero subpixel shift.
+    side -= side % 2
+    side = max(2, min(canvas, side))
+    art = resized(image, side)
     out = Image.new("RGBA", (canvas, canvas), (0, 0, 0, 0))
-    out.alpha_composite(art, ((canvas - side) // 2, (canvas - side) // 2))
+    offset = (canvas - side) // 2
+    out.alpha_composite(art, (offset, offset))
     return out
 
 
@@ -134,16 +125,10 @@ def _font(size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.truetype(str(FONT), size)
 
 
-def lockup_icon(size: int) -> Image.Image:
-    """The icon of the lockup: the artwork in a rounded square."""
-    art = _open("ic_launcher_1024.png").resize((size, size), Image.LANCZOS)
-    return rounded(art)
-
-
-def lockup_png(width: int = 1024) -> Image.Image:
-    """The icon next to the wordmark."""
+def lockup_png(source: Image.Image, width: int = 1024) -> Image.Image:
+    """The unmodified resized icon next to the Trap wordmark."""
     height = int(round(width * 0.28))
-    icon = lockup_icon(height)
+    icon = resized(source, height)
     font = _font(int(height * 0.40))
     text_width = int(font.getlength(WORDMARK))
     gap = int(height * 0.16)
@@ -162,22 +147,18 @@ def lockup_png(width: int = 1024) -> Image.Image:
     return canvas
 
 
-def lockup_svg() -> str:
-    """The lockup as a vector, with the icon embedded as a raster."""
-    icon = lockup_icon(256)
+def lockup_svg(source: Image.Image) -> str:
+    """The lockup as a vector, embedding the unmodified 256px icon raster."""
+    icon = resized(source, 256)
     buffer = io.BytesIO()
     icon.save(buffer, format="PNG", optimize=True)
     encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
     font = base64.b64encode(FONT.read_bytes()).decode("ascii")
-    radius = int(round(256 * CORNER_RATIO))
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
      width="1024" height="256" viewBox="0 0 1024 256">
   <title>{WORDMARK}</title>
   <defs>
-    <clipPath id="round">
-      <rect x="0" y="0" width="256" height="256" rx="{radius}"/>
-    </clipPath>
     <style>
       @font-face {{
         font-family: "Trap";
@@ -186,10 +167,8 @@ def lockup_svg() -> str:
       .wordmark {{ font-family: "Trap", sans-serif; font-weight: bold; }}
     </style>
   </defs>
-  <g clip-path="url(#round)">
-    <image x="0" y="0" width="256" height="256"
-           xlink:href="data:image/png;base64,{encoded}"/>
-  </g>
+  <image x="0" y="0" width="256" height="256"
+         xlink:href="data:image/png;base64,{encoded}"/>
   <text x="296" y="166" class="wordmark" font-size="102" fill="#14110E">{WORDMARK}</text>
 </svg>
 """
@@ -199,7 +178,9 @@ def lockup_svg() -> str:
 
 
 def render(target_res: Path, target_out: Path) -> dict[Path, bytes]:
-    """Render every icon and return the files with their content."""
+    """Render every icon asset and return the files with their content."""
+    source = _source_artwork()
+    max_r = _max_alpha_radius(source)
     files: dict[Path, bytes] = {}
 
     def put(path: Path, data: bytes) -> None:
@@ -210,62 +191,46 @@ def render(target_res: Path, target_out: Path) -> dict[Path, bytes]:
         image.save(buffer, format="PNG", optimize=True)
         put(path, buffer.getvalue())
 
-    # The launcher icons of every density are the ones of the bundle.
-    for density in DENSITIES:
-        put(
-            target_res / f"mipmap-{density}" / "ic_launcher.png",
-            _read(f"mipmap-{density}/ic_launcher.png"),
-        )
-        # The bundle carries the round variant of the icon, but it is the
-        # square picture; the round one is cut out of the same artwork here.
-        put_png(
-            target_res / f"mipmap-{density}" / "ic_launcher_round.png",
-            circular(_open(f"mipmap-{density}/ic_launcher.png")),
-        )
+    # Legacy & round launcher icons of every density: unmodified resized artwork.
+    for density, px in DENSITIES.items():
+        launcher_png = resized(source, px)
+        buffer = io.BytesIO()
+        launcher_png.save(buffer, format="PNG", optimize=True)
+        encoded = buffer.getvalue()
+        put(target_res / f"mipmap-{density}" / "ic_launcher.png", encoded)
+        put(target_res / f"mipmap-{density}" / "ic_launcher_round.png", encoded)
 
-    # The adaptive icon: the artwork inside the safe zone, the black field
-    # behind it, and the silhouette for the themed icons of Android 13.
+    # Adaptive icon foreground (unmodified artwork resized into safe zone) + dark background.
     put_png(
         target_res / "mipmap-xxxhdpi" / "ic_launcher_foreground.png",
-        fitted(_open("adaptive/ic_launcher_foreground_432.png"), 432),
+        fitted(source, ADAPTIVE_CANVAS_PX, max_r),
     )
-    put(
+    put_png(
         target_res / "mipmap-xxxhdpi" / "ic_launcher_background.png",
-        _read("adaptive/ic_launcher_background_432.png"),
-    )
-    put_png(
-        target_res / "mipmap-xxxhdpi" / "ic_launcher_monochrome.png",
-        fitted(_open("adaptive/ic_launcher_monochrome_432.png"), 432),
+        Image.new("RGBA", (ADAPTIVE_CANVAS_PX, ADAPTIVE_CANVAS_PX), ADAPTIVE_BG_RGBA),
     )
 
-    # The mark of the interface: the artwork in a rounded square.
-    put_png(
-        target_res / "drawable-nodpi" / "ov_trap_mark.png",
-        rounded(_open("play_store_512.png")),
-    )
+    # Interface mark and store exports: unmodified resized artwork.
+    icon_512 = resized(source, 512)
+    put_png(target_res / "drawable-nodpi" / "ov_trap_mark.png", icon_512)
+    put_png(target_out / "play-store-1024.png", resized(source, 1024))
+    put_png(target_out / "play-store-512.png", icon_512)
 
-    # The icon of the listing and the exports of the themed icon.
-    put(target_out / "play-store-1024.png", _read("ic_launcher_1024.png"))
-    put(target_out / "play-store-512.png", _read("play_store_512.png"))
-    put(
-        target_out / "ic_launcher_monochrome_192.png",
-        _read("ic_launcher_monochrome_192.png"),
-    )
-    put(
-        target_out / "ic_launcher_monochrome_512.png",
-        _read("ic_launcher_monochrome_512.png"),
-    )
-
-    # The wordmark of the documentation.
-    put_png(target_out / "trap-lockup.png", lockup_png())
-    put(target_out / "trap-lockup.svg", lockup_svg().encode())
+    # Documentation wordmark lockups.
+    put_png(target_out / "trap-lockup.png", lockup_png(source))
+    put(target_out / "trap-lockup.svg", lockup_svg(source).encode("utf-8"))
 
     return files
 
 
 def stale_files() -> list[Path]:
-    """The files of the earlier artwork, which the bundle replaces."""
-    paths = [RES / "drawable" / "ic_launcher_background.xml"]
+    """Files from earlier icon pipelines that must not linger in the tree."""
+    paths = [
+        RES / "drawable" / "ic_launcher_background.xml",
+        RES / "mipmap-xxxhdpi" / "ic_launcher_monochrome.png",
+        OUT / "ic_launcher_monochrome_192.png",
+        OUT / "ic_launcher_monochrome_512.png",
+    ]
     for density in DENSITIES:
         if density == "xxxhdpi":
             continue
@@ -274,18 +239,22 @@ def stale_files() -> list[Path]:
     return paths
 
 
-def unexpected_files(expected: set[Path]) -> list[Path]:
-    """The icon files of the tree that the pipeline does not write."""
+def unexpected_files(expected_res: set[Path], expected_out: set[Path]) -> list[Path]:
+    """Icon files in `res/` or `design/icons/out/` that the pipeline does not write."""
     found: list[Path] = []
     for directory in sorted(RES.glob("mipmap-*")):
         if not directory.is_dir():
             continue
         for path in sorted(directory.glob("ic_launcher*.png")):
-            if path not in expected:
+            if path not in expected_res:
                 found.append(path)
     for path in sorted(RES.glob("drawable/ic_launcher*")):
-        if path not in expected:
+        if path not in expected_res:
             found.append(path)
+    if OUT.is_dir():
+        for path in sorted(OUT.iterdir()):
+            if path.is_file() and path not in expected_out:
+                found.append(path)
     return found
 
 
@@ -338,30 +307,27 @@ def main(argv: list[str]) -> int:
     )
     arguments = parser.parse_args(argv)
 
-    if not BUNDLE.exists():
-        raise SystemExit(f"the icon bundle is missing: {BUNDLE}")
-
     if arguments.check:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             files = render(root / "res", root / "out")
             stale: list[str] = []
             expected_res: set[Path] = set()
+            expected_out: set[Path] = set()
             for path, data in sorted(files.items()):
                 relative = path.relative_to(root)
-                current = (
-                    (RES / relative.relative_to("res"))
-                    if relative.parts[0] == "res"
-                    else (OUT / relative.relative_to("out"))
-                )
                 if relative.parts[0] == "res":
+                    current = RES / relative.relative_to("res")
                     expected_res.add(current)
+                else:
+                    current = OUT / relative.relative_to("out")
+                    expected_out.add(current)
                 if not _asset_matches(current, data):
                     stale.append(str(current.relative_to(ROOT)))
             for path in stale_files():
                 if path.exists():
                     stale.append(str(path.relative_to(ROOT)))
-            for path in unexpected_files(expected_res):
+            for path in unexpected_files(expected_res, expected_out):
                 stale.append(str(path.relative_to(ROOT)))
             if stale:
                 print("the icon lockups drifted:", file=sys.stderr)
