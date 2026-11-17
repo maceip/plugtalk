@@ -137,6 +137,7 @@ class TabSessionManager(
         var onionNavStartedElapsedMs: Long = 0L,
         var onionRetryCount: Int = 0,
         var onionAutoRetryScheduled: Boolean = false,
+        var lastBrowserLoadingState: Boolean = false,
         var pendingRetryRunnable: Runnable? = null,
     )
 
@@ -1767,6 +1768,7 @@ class TabSessionManager(
                 }
                 mainHandler.post {
                     val managed = sessions[tabId] ?: return@post
+                    managed.lastBrowserLoadingState = true
                     if (isOnionAddress(cleanUrl)) {
                         if (managed.onionAutoRetryScheduled) {
                             managed.onionAutoRetryScheduled = false
@@ -1895,6 +1897,7 @@ class TabSessionManager(
             ) {
                 mainHandler.post {
                     val managed = sessions[tabId]
+                    managed?.lastBrowserLoadingState = isLoading
                     if (!isLoading && managed?.onionAutoRetryScheduled == true) {
                         // Suppress transient isLoading=false while the 250ms .onion rendezvous
                         // auto-retry is queued so the UI never flickers out of loading state.
@@ -2307,12 +2310,53 @@ class TabSessionManager(
             candidateUrl.isNotBlank() &&
             candidateUrl != "about:blank"
         ) {
+            val retryUrl = resolveOnionRetryUrl(managed.onionOriginalTargetUrl, candidateUrl)
+            val isSpeculativeHttpsUpgradeAbort = retryUrl != candidateUrl &&
+                retryUrl.startsWith("http://", ignoreCase = true) &&
+                candidateUrl.startsWith("https://", ignoreCase = true)
+
+            if (isSpeculativeHttpsUpgradeAbort && managed.browser != null) {
+                // Chromium 156's HttpsUpgradesNavigationThrottle aborts speculative https://
+                // upgrades after 3.0s (ERR_TIMED_OUT = -7) right before issuing its own 307
+                // fallback to http://. Suppress the false error without burning a retry or
+                // interrupting Chromium's in-progress http:// fallback; only reload if
+                // Chromium actually stopped on an error page after 400ms.
+                managed.hadErrorInCurrentLoad = false
+                managed.onionAutoRetryScheduled = true
+                managed.pendingNavigationUrl = retryUrl
+                updateTabState(tabId) {
+                    it.copy(
+                        url = retryUrl,
+                        isLoading = true,
+                        loadProgress = it.loadProgress.coerceIn(15, 85),
+                        canGoBack = computeCanGoBack(managed),
+                        isOnion = true,
+                    )
+                }
+                val checkFallbackRunnable = Runnable {
+                    val live = sessions[tabId] ?: return@Runnable
+                    live.pendingRetryRunnable = null
+                    live.onionAutoRetryScheduled = false
+                    val liveBrowser = live.browser
+                    val liveBrowserUrl = runCatching { liveBrowser?.url.orEmpty() }.getOrDefault("")
+                    val fallbackAlreadyRunning = liveBrowser != null &&
+                        live.lastBrowserLoadingState &&
+                        !liveBrowserUrl.startsWith("chrome-error://")
+                    if (!fallbackAlreadyRunning) {
+                        live.pendingNavigationUrl = retryUrl
+                        reloadUrl(retryUrl)
+                    }
+                }
+                managed.pendingRetryRunnable?.let { mainHandler.removeCallbacks(it) }
+                managed.pendingRetryRunnable = checkFallbackRunnable
+                mainHandler.postDelayed(checkFallbackRunnable, 400L)
+                return
+            }
+
             val attempt = managed.onionRetryCount + 1
             managed.onionRetryCount = attempt
             managed.hadErrorInCurrentLoad = false
             managed.onionAutoRetryScheduled = true
-
-            val retryUrl = resolveOnionRetryUrl(managed.onionOriginalTargetUrl, candidateUrl)
             managed.pendingNavigationUrl = retryUrl
 
             blankErrorFrameViaZeroJsCdp(managed.browser)
