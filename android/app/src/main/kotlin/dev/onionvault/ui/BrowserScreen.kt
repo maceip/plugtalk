@@ -55,6 +55,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.onionvault.R
+import dev.onionvault.platform.SensitiveContentEffect
+import dev.onionvault.platform.SurfaceFilterMode
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -99,6 +101,7 @@ fun BrowserScreen(
     onForward: () -> Unit = {},
     onReload: () -> Unit = {},
     onNewTab: () -> Unit = {},
+    onNewPrivateTab: () -> Unit = {},
     onSelectTab: (String) -> Unit = {},
     onCloseTab: (String) -> Unit = {},
     onHome: () -> Unit = {},
@@ -109,6 +112,10 @@ fun BrowserScreen(
     onDeleteKey: (String) -> Unit = {},
     onToggleRouting: (Boolean) -> Unit = {},
     onToggleRequireBiometric: (Boolean) -> Unit = {},
+    onTogglePipOnMinimize: (Boolean) -> Unit = {},
+    onTogglePipExcludePrivateTabs: (Boolean) -> Unit = {},
+    onSelectSurfaceFilterMode: (SurfaceFilterMode) -> Unit = {},
+    onToggleHandoff: (Boolean) -> Unit = {},
     onResetTorIsolation: () -> Unit = {},
     onSelectThemeFamily: (TrapThemeFamily) -> Unit = {},
     onSelectThemeMode: (TrapThemeMode) -> Unit = {},
@@ -161,6 +168,7 @@ fun BrowserScreen(
             onForward = onForward,
             onReload = onReload,
             onNewTab = onNewTab,
+            onNewPrivateTab = onNewPrivateTab,
             onSelectTab = onSelectTab,
             onCloseTab = onCloseTab,
             onHome = onHome,
@@ -171,6 +179,10 @@ fun BrowserScreen(
             onDeleteKey = onDeleteKey,
             onToggleRouting = onToggleRouting,
             onToggleRequireBiometric = onToggleRequireBiometric,
+            onTogglePipOnMinimize = onTogglePipOnMinimize,
+            onTogglePipExcludePrivateTabs = onTogglePipExcludePrivateTabs,
+            onSelectSurfaceFilterMode = onSelectSurfaceFilterMode,
+            onToggleHandoff = onToggleHandoff,
             onResetTorIsolation = onResetTorIsolation,
             onSelectThemeFamily = onSelectThemeFamily,
             onSelectThemeMode = onSelectThemeMode,
@@ -229,6 +241,7 @@ private fun BrowserScreenContent(
     onForward: () -> Unit,
     onReload: () -> Unit,
     onNewTab: () -> Unit,
+    onNewPrivateTab: () -> Unit,
     onSelectTab: (String) -> Unit,
     onCloseTab: (String) -> Unit,
     onHome: () -> Unit,
@@ -239,6 +252,10 @@ private fun BrowserScreenContent(
     onDeleteKey: (String) -> Unit,
     onToggleRouting: (Boolean) -> Unit,
     onToggleRequireBiometric: (Boolean) -> Unit,
+    onTogglePipOnMinimize: (Boolean) -> Unit,
+    onTogglePipExcludePrivateTabs: (Boolean) -> Unit,
+    onSelectSurfaceFilterMode: (SurfaceFilterMode) -> Unit,
+    onToggleHandoff: (Boolean) -> Unit,
     onResetTorIsolation: () -> Unit,
     onSelectThemeFamily: (TrapThemeFamily) -> Unit,
     onSelectThemeMode: (TrapThemeMode) -> Unit,
@@ -280,26 +297,41 @@ private fun BrowserScreenContent(
     var securityOpen by remember { mutableStateOf(showSecurity) }
     var settingsOpen by remember { mutableStateOf(showSettings) }
     val scope = rememberCoroutineScope()
+    val chromeHiddenForPip = state.isPipChromeHidden
 
-    val anyOverlayOpen = keysOpen ||
-        legalOpen ||
-        legalDocument != null ||
-        menuOpen ||
-        tabsOpen ||
-        securityOpen ||
-        settingsOpen ||
-        state.clearnetPrompt != null ||
-        state.pgp.plaintext != null ||
-        state.pgp.encryptRequest != null ||
-        state.pgp.decryptPassphraseRequest != null ||
-        state.contextMenu != null ||
-        state.selectionPgp != null
+    LaunchedEffect(chromeHiddenForPip) {
+        if (chromeHiddenForPip) {
+            menuOpen = false
+            tabsOpen = false
+            securityOpen = false
+            settingsOpen = false
+            keysOpen = false
+            legalOpen = false
+            legalDocument = null
+        }
+    }
+
+    val anyOverlayOpen = !chromeHiddenForPip && (
+        keysOpen ||
+            legalOpen ||
+            legalDocument != null ||
+            menuOpen ||
+            tabsOpen ||
+            securityOpen ||
+            settingsOpen ||
+            state.clearnetPrompt != null ||
+            state.pgp.plaintext != null ||
+            state.pgp.encryptRequest != null ||
+            state.pgp.decryptPassphraseRequest != null ||
+            state.contextMenu != null ||
+            state.selectionPgp != null
+        )
 
     LaunchedEffect(anyOverlayOpen) {
         onOverlayOpenChanged(anyOverlayOpen)
     }
 
-    PredictiveBackHandler(enabled = state.canGoBack && !anyOverlayOpen) { backFlow ->
+    PredictiveBackHandler(enabled = state.canGoBack && !anyOverlayOpen && !chromeHiddenForPip) { backFlow ->
         try {
             backFlow.collect { event ->
                 progress = event.progress
@@ -321,17 +353,21 @@ private fun BrowserScreenContent(
         }
     }
 
+    val columnModifier = if (chromeHiddenForPip) {
+        Modifier.fillMaxSize()
+    } else {
+        Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+    }
+
     Box(
         modifier = modifier
             .fillMaxSize()
             .background(colors.background)
             .testTag("browser_screen"),
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .statusBarsPadding(),
-        ) {
+        Column(modifier = columnModifier) {
             // Full-bleed Center Viewport (no top app bar, no top address bar)
             Box(
                 modifier = Modifier
@@ -339,7 +375,7 @@ private fun BrowserScreenContent(
                     .weight(1f)
                     .background(colors.background),
             ) {
-                if (progress > 0f && state.backPreview != null) {
+                if (progress > 0f && state.backPreview != null && !chromeHiddenForPip) {
                     BackPreviewLayer(state = state, progress = progress)
                 }
 
@@ -361,12 +397,21 @@ private fun BrowserScreenContent(
                     if (state.isStartPage && progress == 0f) {
                         StartPage(
                             state = state,
-                            onOpenSecurity = { securityOpen = true },
+                            onOpenSecurity = {
+                                if (!chromeHiddenForPip) {
+                                    securityOpen = true
+                                }
+                            },
                         )
                     }
                 }
 
-                if (!state.isStartPage && state.pgp.fields.isNotEmpty() && progress == 0f) {
+                if (!chromeHiddenForPip &&
+                    !state.isScreenRecordingActive &&
+                    !state.isStartPage &&
+                    state.pgp.fields.isNotEmpty() &&
+                    progress == 0f
+                ) {
                     PgpFieldOverlay(
                         state = state,
                         onFieldAction = onFieldAction,
@@ -374,239 +419,260 @@ private fun BrowserScreenContent(
                     )
                 }
 
-                // Thin 2.dp top-edge loading indicator + transient notices
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .align(Alignment.TopCenter),
-                ) {
-                    if (state.isLoading) {
-                        OvProgressBar(
-                            progress = (state.loadProgress.coerceIn(8, 100)) / 100f,
-                            height = 2.dp,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("top_loading_bar"),
-                        )
-                    }
+                if (!chromeHiddenForPip) {
+                    // Thin 2.dp top-edge loading indicator + transient notices
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .align(Alignment.TopCenter),
+                    ) {
+                        if (state.isLoading) {
+                            OvProgressBar(
+                                progress = (state.loadProgress.coerceIn(8, 100)) / 100f,
+                                height = 2.dp,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("top_loading_bar"),
+                            )
+                        }
 
-                    if (state.viewingSnapshot) {
-                        SnapshotReloadBanner(onReloadLive = onReloadLive)
-                    }
+                        if (state.isScreenRecordingActive) {
+                            ScreenRecordingWarningBanner()
+                        }
 
-                    val bannerMessage = if (state.clearnetPrompt != null) {
-                        null
-                    } else {
-                        state.pgp.error?.takeIf { it.isNotBlank() }
-                            ?: state.status.takeIf { it.isNotBlank() }
-                            ?: if (state.blocked) {
-                                "Clearnet request refused by Hidden Service Only policy."
-                            } else {
-                                null
-                            }
-                    }
+                        if (state.viewingSnapshot) {
+                            SnapshotReloadBanner(onReloadLive = onReloadLive)
+                        }
 
-                    if (bannerMessage != null) {
-                        StatusNoticeBanner(
-                            message = bannerMessage,
-                            isAlert = state.blocked || !state.pgp.error.isNullOrBlank(),
-                            onDismiss = onDismissStatus,
-                        )
+                        val bannerMessage = if (state.clearnetPrompt != null) {
+                            null
+                        } else {
+                            state.pgp.error?.takeIf { it.isNotBlank() }
+                                ?: state.status.takeIf { it.isNotBlank() }
+                                ?: if (state.blocked) {
+                                    "Clearnet request refused by Hidden Service Only policy."
+                                } else {
+                                    null
+                                }
+                        }
+
+                        if (bannerMessage != null) {
+                            StatusNoticeBanner(
+                                message = bannerMessage,
+                                isAlert = state.blocked || !state.pgp.error.isNullOrBlank(),
+                                onDismiss = onDismissStatus,
+                            )
+                        }
                     }
                 }
             }
 
-            // Strictly single-row Bottom Control Dock (~56.dp content height)
-            BottomControlDock(
-                state = state,
-                address = address,
-                onAddressChange = { address = it },
-                onSubmitAddress = {
-                    val trimmed = address.trim()
-                    onNavigate(trimmed.ifEmpty { "about:blank" })
-                },
-                onClearAddress = { address = "" },
-                onCancelAddressEdit = {
-                    address = if (isBlankOrStartUrl(state.url)) "" else state.url
-                },
-                onSecurityClick = { securityOpen = true },
-                onBack = onBack,
-                onForward = onForward,
-                onReload = onReload,
-                onOpenTabs = { tabsOpen = true },
-                onOpenMenu = { menuOpen = true },
-            )
-        }
-
-        // Modal Sheets & Dialogs
-        val managementSheetOpen = menuOpen ||
-            tabsOpen ||
-            securityOpen ||
-            settingsOpen ||
-            keysOpen ||
-            legalOpen ||
-            legalDocument != null
-
-        if (!managementSheetOpen) {
-            state.clearnetPrompt?.let { prompt ->
-                ClearnetConsentSheet(
-                    prompt = prompt,
-                    onAllow = onAllowClearnet,
-                    onBlock = onBlockClearnet,
+            // Strictly single-row Bottom Control Dock (~56.dp content height);
+            // stripped immediately on frame 0 when transitioning into or inside PiP.
+            if (!chromeHiddenForPip) {
+                BottomControlDock(
+                    state = state,
+                    address = address,
+                    onAddressChange = { address = it },
+                    onSubmitAddress = {
+                        val trimmed = address.trim()
+                        onNavigate(trimmed.ifEmpty { "about:blank" })
+                    },
+                    onClearAddress = { address = "" },
+                    onCancelAddressEdit = {
+                        address = if (isBlankOrStartUrl(state.url)) "" else state.url
+                    },
+                    onSecurityClick = { securityOpen = true },
+                    onBack = onBack,
+                    onForward = onForward,
+                    onReload = onReload,
+                    onOpenTabs = { tabsOpen = true },
+                    onOpenMenu = { menuOpen = true },
                 )
             }
         }
 
-        if (menuOpen) {
-            BrowserMenuSheet(
-                state = state,
-                onForward = onForward,
-                onReload = onReload,
-                onNewTab = {
-                    address = ""
-                    onNewTab()
-                },
-                onStartPage = {
-                    address = ""
-                    onHome()
-                },
-                onOpenTabs = { tabsOpen = true },
-                onOpenKeyring = { keysOpen = true },
-                onOpenSecurity = { securityOpen = true },
-                onOpenSettings = { settingsOpen = true },
-                onZoomIn = onZoomIn,
-                onZoomOut = onZoomOut,
-                onOpenLegal = { legalOpen = true },
-                onDismiss = { menuOpen = false },
-            )
-        }
+        if (!chromeHiddenForPip) {
+            // Modal Sheets & Dialogs
+            val managementSheetOpen = menuOpen ||
+                tabsOpen ||
+                securityOpen ||
+                settingsOpen ||
+                keysOpen ||
+                legalOpen ||
+                legalDocument != null
 
-        if (tabsOpen) {
-            TabsSheet(
-                tabs = state.tabs,
-                onSelectTab = onSelectTab,
-                onCloseTab = onCloseTab,
-                onNewTab = {
-                    address = ""
-                    onNewTab()
-                },
-                onDismiss = { tabsOpen = false },
-            )
-        }
+            if (!managementSheetOpen) {
+                state.clearnetPrompt?.let { prompt ->
+                    ClearnetConsentSheet(
+                        prompt = prompt,
+                        onAllow = onAllowClearnet,
+                        onBlock = onBlockClearnet,
+                    )
+                }
+            }
 
-        if (securityOpen) {
-            SecurityCircuitSheet(
-                state = state,
-                onToggleHiddenServiceOnly = onToggleRouting,
-                onResetTorIsolation = onResetTorIsolation,
-                onRevokeClearnetRule = onRevokeClearnetRule,
-                onClearClearnetRules = onClearClearnetRules,
-                onDismiss = { securityOpen = false },
-            )
-        }
+            if (menuOpen) {
+                BrowserMenuSheet(
+                    state = state,
+                    onForward = onForward,
+                    onReload = onReload,
+                    onNewTab = {
+                        address = ""
+                        onNewTab()
+                    },
+                    onStartPage = {
+                        address = ""
+                        onHome()
+                    },
+                    onOpenTabs = { tabsOpen = true },
+                    onOpenKeyring = { keysOpen = true },
+                    onOpenSecurity = { securityOpen = true },
+                    onOpenSettings = { settingsOpen = true },
+                    onZoomIn = onZoomIn,
+                    onZoomOut = onZoomOut,
+                    onOpenLegal = { legalOpen = true },
+                    onDismiss = { menuOpen = false },
+                )
+            }
 
-        if (settingsOpen) {
-            SettingsSheet(
-                state = state,
-                onSelectThemeFamily = onSelectThemeFamily,
-                onSelectThemeMode = onSelectThemeMode,
-                onToggleHiddenServiceOnly = onToggleRouting,
-                onToggleRequireBiometric = onToggleRequireBiometric,
-                onSelectDefaultZoom = onSelectDefaultZoom,
-                onRevokeClearnetRule = onRevokeClearnetRule,
-                onClearClearnetRules = onClearClearnetRules,
-                onClearSession = onClearSession,
-                onOpenLegalNotices = { legalOpen = true },
-                onDismiss = { settingsOpen = false },
-            )
-        }
+            if (tabsOpen) {
+                TabsSheet(
+                    tabs = state.tabs,
+                    onSelectTab = onSelectTab,
+                    onCloseTab = onCloseTab,
+                    onNewTab = {
+                        address = ""
+                        onNewTab()
+                    },
+                    onNewPrivateTab = {
+                        address = ""
+                        onNewPrivateTab()
+                    },
+                    onDismiss = { tabsOpen = false },
+                )
+            }
 
-        if (keysOpen) {
-            KeyringSheet(
-                keys = state.keys,
-                defaultKeyFingerprint = state.defaultKeyFingerprint,
-                errorMessage = state.pgp.error,
-                onGenerateKey = onGenerateKey,
-                onImportKey = onImportKey,
-                onExportKey = onExportKey,
-                onSetDefaultKey = onSetDefaultKey,
-                onDeleteKey = onDeleteKey,
-                onDismiss = { keysOpen = false },
-            )
-        }
+            if (securityOpen) {
+                SecurityCircuitSheet(
+                    state = state,
+                    onToggleHiddenServiceOnly = onToggleRouting,
+                    onResetTorIsolation = onResetTorIsolation,
+                    onRevokeClearnetRule = onRevokeClearnetRule,
+                    onClearClearnetRules = onClearClearnetRules,
+                    onDismiss = { securityOpen = false },
+                )
+            }
 
-        state.pgp.encryptRequest?.let { req ->
-            EncryptPickerSheet(
-                request = req,
-                keys = state.keys,
-                defaultKeyFingerprint = state.defaultKeyFingerprint,
-                errorMessage = state.pgp.error,
-                onOpenKeyring = { keysOpen = true },
-                onConfirmEncrypt = { plaintext, recipientFp, signerFp, passphrase ->
-                    onConfirmEncrypt(req, plaintext, recipientFp, signerFp, passphrase)
-                },
-                onDismiss = onDismissEncrypt,
-            )
-        }
+            if (settingsOpen) {
+                SettingsSheet(
+                    state = state,
+                    onSelectThemeFamily = onSelectThemeFamily,
+                    onSelectThemeMode = onSelectThemeMode,
+                    onToggleHiddenServiceOnly = onToggleRouting,
+                    onToggleRequireBiometric = onToggleRequireBiometric,
+                    onTogglePipOnMinimize = onTogglePipOnMinimize,
+                    onTogglePipExcludePrivateTabs = onTogglePipExcludePrivateTabs,
+                    onSelectSurfaceFilterMode = onSelectSurfaceFilterMode,
+                    onToggleHandoff = onToggleHandoff,
+                    onSelectDefaultZoom = onSelectDefaultZoom,
+                    onRevokeClearnetRule = onRevokeClearnetRule,
+                    onClearClearnetRules = onClearClearnetRules,
+                    onClearSession = onClearSession,
+                    onOpenLegalNotices = { legalOpen = true },
+                    onDismiss = { settingsOpen = false },
+                )
+            }
 
-        state.pgp.decryptPassphraseRequest?.let { req ->
-            DecryptPassphraseSheet(
-                request = req,
-                onSubmitPassphrase = { passphrase -> onSubmitDecryptPassphrase(req, passphrase) },
-                onDismiss = onDismissDecryptPassphrase,
-            )
-        }
+            if (keysOpen && !state.isScreenRecordingActive) {
+                KeyringSheet(
+                    keys = state.keys,
+                    defaultKeyFingerprint = state.defaultKeyFingerprint,
+                    errorMessage = state.pgp.error,
+                    onGenerateKey = onGenerateKey,
+                    onImportKey = onImportKey,
+                    onExportKey = onExportKey,
+                    onSetDefaultKey = onSetDefaultKey,
+                    onDeleteKey = onDeleteKey,
+                    onDismiss = { keysOpen = false },
+                )
+            }
 
-        state.pgp.plaintext?.let { plaintext ->
-            PlaintextSheet(
-                plaintext = plaintext,
-                onCopy = onCopyPlaintext,
-                onInsert = onInsertPlaintext,
-                onClose = onDismissPlaintext,
-            )
-        }
+            if (!state.isScreenRecordingActive) {
+                state.pgp.encryptRequest?.let { req ->
+                    EncryptPickerSheet(
+                        request = req,
+                        keys = state.keys,
+                        defaultKeyFingerprint = state.defaultKeyFingerprint,
+                        errorMessage = state.pgp.error,
+                        onOpenKeyring = { keysOpen = true },
+                        onConfirmEncrypt = { plaintext, recipientFp, signerFp, passphrase ->
+                            onConfirmEncrypt(req, plaintext, recipientFp, signerFp, passphrase)
+                        },
+                        onDismiss = onDismissEncrypt,
+                    )
+                }
 
-        state.contextMenu?.let { menu ->
-            ContextMenuSheet(
-                menu = menu,
-                onOpenInNewTab = onContextMenuOpenNewTab,
-                onOpenInCurrentTab = onContextMenuOpenCurrentTab,
-                onCopyUrl = onCopyText,
-                onDecryptSelection = onDecryptArmoredText,
-                onImportKeySelection = { armored -> onImportKey(armored, "") },
-                onEncryptSelection = onEncryptSelectedText,
-                onDismiss = onDismissContextMenu,
-            )
-        }
+                state.pgp.decryptPassphraseRequest?.let { req ->
+                    DecryptPassphraseSheet(
+                        request = req,
+                        onSubmitPassphrase = { passphrase -> onSubmitDecryptPassphrase(req, passphrase) },
+                        onDismiss = onDismissDecryptPassphrase,
+                    )
+                }
 
-        state.selectionPgp?.let { selection ->
-            SelectionPgpSheet(
-                selection = selection,
-                onDecrypt = onDecryptArmoredText,
-                onImportKey = { armored -> onImportKey(armored, "") },
-                onEncrypt = onEncryptSelectedText,
-                onCopy = onCopyText,
-                onDismiss = onDismissSelectionPgp,
-            )
-        }
+                state.pgp.plaintext?.let { plaintext ->
+                    PlaintextSheet(
+                        plaintext = plaintext,
+                        onCopy = onCopyPlaintext,
+                        onInsert = onInsertPlaintext,
+                        onClose = onDismissPlaintext,
+                    )
+                }
+            }
 
-        if (legalOpen) {
-            LegalNoticesDialog(
-                documents = state.legalDocuments,
-                onOpenDocument = { doc ->
-                    legalOpen = false
-                    legalDocument = doc
-                },
-                onDismiss = { legalOpen = false },
-            )
-        }
+            state.contextMenu?.let { menu ->
+                ContextMenuSheet(
+                    menu = menu,
+                    onOpenInNewTab = onContextMenuOpenNewTab,
+                    onOpenInCurrentTab = onContextMenuOpenCurrentTab,
+                    onCopyUrl = onCopyText,
+                    onDecryptSelection = onDecryptArmoredText,
+                    onImportKeySelection = { armored -> onImportKey(armored, "") },
+                    onEncryptSelection = onEncryptSelectedText,
+                    onDismiss = onDismissContextMenu,
+                )
+            }
 
-        legalDocument?.let { doc ->
-            LegalDocumentDialog(
-                document = doc,
-                loadLines = { onLoadLegalLines(doc.name) },
-                onDismiss = { legalDocument = null },
-            )
+            state.selectionPgp?.let { selection ->
+                SelectionPgpSheet(
+                    selection = selection,
+                    onDecrypt = onDecryptArmoredText,
+                    onImportKey = { armored -> onImportKey(armored, "") },
+                    onEncrypt = onEncryptSelectedText,
+                    onCopy = onCopyText,
+                    onDismiss = onDismissSelectionPgp,
+                )
+            }
+
+            if (legalOpen) {
+                LegalNoticesDialog(
+                    documents = state.legalDocuments,
+                    onOpenDocument = { doc ->
+                        legalOpen = false
+                        legalDocument = doc
+                    },
+                    onDismiss = { legalOpen = false },
+                )
+            }
+
+            legalDocument?.let { doc ->
+                LegalDocumentDialog(
+                    document = doc,
+                    loadLines = { onLoadLegalLines(doc.name) },
+                    onDismiss = { legalDocument = null },
+                )
+            }
         }
     }
 }
@@ -762,6 +828,40 @@ private fun BottomControlDock(
 }
 
 @Composable
+private fun ScreenRecordingWarningBanner() {
+    val colors = TrapTheme.colors
+    val shape = RoundedCornerShape(10.dp)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .clip(shape)
+            .background(colors.dangerContainer)
+            .border(1.dp, colors.danger, shape)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .testTag("screen_recording_warning_banner"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TrapIcon(
+            glyph = TrapGlyph.Warning,
+            tint = colors.danger,
+            size = 16.dp,
+            forceVector = true,
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = "Screen recording active · PGP & credential popups paused",
+            color = colors.textPrimary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.weight(1f),
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
 private fun SnapshotReloadBanner(onReloadLive: () -> Unit) {
     val colors = TrapTheme.colors
     val shape = RoundedCornerShape(10.dp)
@@ -901,6 +1001,8 @@ private fun PgpFieldOverlay(
 ) {
     val fields = state.pgp.fields
     if (fields.isEmpty()) return
+
+    SensitiveContentEffect()
 
     BoxWithConstraints(
         modifier = Modifier

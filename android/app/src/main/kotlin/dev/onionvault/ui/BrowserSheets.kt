@@ -1,6 +1,7 @@
 package dev.onionvault.ui
 
 import androidx.compose.foundation.background
+import dev.onionvault.platform.SurfaceFilterMode
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -395,6 +396,7 @@ fun TabsSheet(
     onNewTab: () -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
+    onNewPrivateTab: () -> Unit = {},
 ) {
     val colors = TrapTheme.colors
 
@@ -403,14 +405,24 @@ fun TabsSheet(
         onDismiss = onDismiss,
         modifier = modifier.testTag("tabs_sheet"),
         headerAction = {
-            OvPrimaryButton(
-                text = "+ New Tab",
-                onClick = {
-                    onNewTab()
-                    onDismiss()
-                },
-                modifier = Modifier.testTag("tabs_new_tab"),
-            )
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                OvSecondaryButton(
+                    text = "+ Private",
+                    onClick = {
+                        onNewPrivateTab()
+                        onDismiss()
+                    },
+                    modifier = Modifier.testTag("tabs_new_private_tab"),
+                )
+                OvPrimaryButton(
+                    text = "+ New Tab",
+                    onClick = {
+                        onNewTab()
+                        onDismiss()
+                    },
+                    modifier = Modifier.testTag("tabs_new_tab"),
+                )
+            }
         },
     ) {
         Column(
@@ -465,6 +477,14 @@ fun TabsSheet(
                             fontFamily = FontFamily.Monospace,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    if (tab.isPrivate) {
+                        Spacer(Modifier.width(6.dp))
+                        OvBadge(
+                            text = "Private",
+                            accent = colors.amber,
+                            container = colors.surface,
                         )
                     }
                     if (tab.isActive) {
@@ -642,6 +662,10 @@ fun SettingsSheet(
     onSelectDefaultZoom: (Int) -> Unit,
     onRevokeClearnetRule: (String) -> Unit = {},
     onClearClearnetRules: () -> Unit = {},
+    onTogglePipOnMinimize: (Boolean) -> Unit = {},
+    onTogglePipExcludePrivateTabs: (Boolean) -> Unit = {},
+    onSelectSurfaceFilterMode: (SurfaceFilterMode) -> Unit = {},
+    onToggleHandoff: (Boolean) -> Unit = {},
     onClearSession: () -> Unit,
     onOpenLegalNotices: () -> Unit,
     onDismiss: () -> Unit,
@@ -685,6 +709,14 @@ fun SettingsSheet(
                 modifier = Modifier.testTag("settings_theme_mode"),
             )
 
+            SettingSectionLabel("Page Surface Filter")
+            OvSegmentedRow(
+                options = SurfaceFilterMode.entries.map { it to it.label },
+                selected = state.surfaceFilterMode,
+                onSelect = onSelectSurfaceFilterMode,
+                modifier = Modifier.testTag("settings_surface_filter"),
+            )
+
             ToggleSettingRow(
                 title = "Hidden Service Only",
                 subtitle = "Block all non-.onion requests in engine & SOCKS5 proxy",
@@ -706,6 +738,32 @@ fun SettingsSheet(
                 checked = state.requireBiometric,
                 onCheckedChange = onToggleRequireBiometric,
                 testTag = "settings_biometric_switch",
+            )
+
+            ToggleSettingRow(
+                title = "Picture-in-Picture on Minimize",
+                subtitle = "Automatically float active page or media when leaving Trap",
+                checked = state.pipOnMinimizeEnabled,
+                onCheckedChange = onTogglePipOnMinimize,
+                testTag = "settings_pip_on_minimize_switch",
+            )
+
+            if (state.pipOnMinimizeEnabled) {
+                ToggleSettingRow(
+                    title = "Exclude Private Tabs from PiP",
+                    subtitle = "Prevent private tabs from lingering in a floating window",
+                    checked = state.pipExcludePrivateTabs,
+                    onCheckedChange = onTogglePipExcludePrivateTabs,
+                    testTag = "settings_pip_exclude_private_switch",
+                )
+            }
+
+            ToggleSettingRow(
+                title = "Cross-Device Tab Handoff",
+                subtitle = "Opt in to resume non-private tabs across companion devices (Android 17+)",
+                checked = state.handoffEnabled,
+                onCheckedChange = onToggleHandoff,
+                testTag = "settings_handoff_switch",
             )
 
             SettingSectionLabel("Default Page Zoom (${state.defaultZoomPercent}%)")

@@ -44,6 +44,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.onionvault.platform.SensitiveContentEffect
 
 /**
  * Native modal sheet displaying decrypted PGP plaintext outside Blink's DOM
@@ -68,6 +69,7 @@ fun PlaintextSheet(
         onDismiss = onClose,
         modifier = modifier.testTag("plaintext_sheet"),
     ) {
+        SensitiveContentEffect()
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -207,6 +209,7 @@ fun DecryptPassphraseSheet(
         onDismiss = onDismiss,
         modifier = Modifier.testTag("decrypt_passphrase_sheet"),
     ) {
+        SensitiveContentEffect()
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -298,6 +301,7 @@ fun EncryptPickerSheet(
         onDismiss = onDismiss,
         modifier = Modifier.testTag("encrypt_picker_sheet"),
     ) {
+        SensitiveContentEffect()
         if (encryptCapable.isEmpty()) {
             val shape = RoundedCornerShape(12.dp)
             Column(
@@ -529,6 +533,7 @@ fun KeyringSheet(
         onDismiss = onDismiss,
         modifier = modifier.testTag("keyring_sheet"),
     ) {
+        SensitiveContentEffect()
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(12.dp),

@@ -4,6 +4,7 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.unit.IntOffset
 import dev.onionvault.OvNative
+import dev.onionvault.platform.SurfaceFilterMode
 
 /**
  * Pure immutable UI state of Trap's browser screen, sheets, and overlays.
@@ -45,6 +46,13 @@ data class BrowserUiState(
     val clearnetRules: List<OvNative.ClearnetRuleItem> = emptyList(),
     val contextMenu: ContextMenuUiState? = null,
     val selectionPgp: SelectionPgpUiState? = null,
+    val pipOnMinimizeEnabled: Boolean = true,
+    val pipExcludePrivateTabs: Boolean = true,
+    val isInPipMode: Boolean = false,
+    val isPipChromeHidden: Boolean = false,
+    val surfaceFilterMode: SurfaceFilterMode = SurfaceFilterMode.None,
+    val handoffEnabled: Boolean = false,
+    val isScreenRecordingActive: Boolean = false,
 ) {
     val tabCount: Int get() = tabs.size.coerceAtLeast(1)
 
@@ -72,6 +80,7 @@ data class TabItemState(
     val isActive: Boolean = false,
     val isLoading: Boolean = false,
     val isOnion: Boolean = false,
+    val isPrivate: Boolean = false,
 )
 
 @Immutable

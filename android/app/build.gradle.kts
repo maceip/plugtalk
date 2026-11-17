@@ -52,7 +52,7 @@ android {
     defaultConfig {
         applicationId = "dev.onionvault"
         minSdk = 29
-        targetSdk = 35
+        targetSdk = 37
         versionCode = trapResolvedVersionCode
         versionName = trapResolvedVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

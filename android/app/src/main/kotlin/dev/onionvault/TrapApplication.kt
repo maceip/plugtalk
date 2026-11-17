@@ -197,6 +197,8 @@ class TrapApplication : Application() {
             Log.e(TAG, "Cefrium initialization failed", error)
             CrashReporter.record(this, error)
         }
+
+        dev.onionvault.platform.DiagnosticProfilingController.install(this)
     }
 
     private fun initializeHardenedCefrium() {

@@ -1,16 +1,24 @@
 package dev.onionvault
 
+import android.app.HandoffActivityData
+import android.app.HandoffActivityDataRequestInfo
+import android.app.PictureInPictureUiState
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
+import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.RequiresApi
 import androidx.annotation.VisibleForTesting
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
@@ -27,6 +35,14 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
+import com.cefrium.CefriumPickerHandler
+import dev.onionvault.platform.CrossDeviceHandoffController
+import dev.onionvault.platform.LanAccessController
+import dev.onionvault.platform.MediaDisplayNormalizer
+import dev.onionvault.platform.PerformanceAndRenderController
+import dev.onionvault.platform.ScreenRecordingGuard
+import dev.onionvault.platform.SurfaceFilterMode
+import dev.onionvault.platform.WebPickersBridge
 import dev.onionvault.ui.BackPreviewState
 import dev.onionvault.ui.BrowserScreen
 import dev.onionvault.ui.BrowserUiState
@@ -80,6 +96,11 @@ class MainActivity : FragmentActivity() {
     }
 
     private lateinit var prefs: TrapPreferences
+    private lateinit var pipController: PipController
+    private lateinit var screenRecordingGuard: ScreenRecordingGuard
+    private lateinit var performanceController: PerformanceAndRenderController
+    private val mediaDisplayNormalizer = MediaDisplayNormalizer()
+    private val lanAccessController = LanAccessController()
     private val backStackManager = OnionBackStackManager()
     private lateinit var cdpController: CdpDomPgpController
     private lateinit var tabSessionManager: TabSessionManager
@@ -87,6 +108,56 @@ class MainActivity : FragmentActivity() {
 
     private var torPollingJob: Job? = null
     private var stateSyncJob: Job? = null
+
+    private var viewportSourceRect: Rect? = null
+    private var hostSurfaceFrame: FrameLayout? = null
+    private var isTransitioningToPipState: Boolean = false
+    private var pipReceiverRegistered: Boolean = false
+    private var pendingLanNavigationUrl: String? = null
+    private var pendingHandoffScrollY: Int = 0
+    private var pendingColorPickerCallback: CefriumPickerHandler.ColorCallback? = null
+    private var pendingContactsPickedCallback: ((Intent?) -> Unit)? = null
+
+    private val viewportLayoutListener =
+        View.OnLayoutChangeListener { view, _, _, _, _, _, _, _, _ ->
+            updateViewportSourceRect(view)
+        }
+    private val pipActionReceiver = PipActionReceiver { command ->
+        handlePipActionCommand(command)
+    }
+
+    private val localNetworkPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            val targetUrl = pendingLanNavigationUrl
+            pendingLanNavigationUrl = null
+            if (granted && !targetUrl.isNullOrBlank() && controllersReady) {
+                navigate(targetUrl)
+            } else if (!granted) {
+                showStatus(
+                    "Local network permission denied; LAN navigation blocked.",
+                    blocked = true,
+                )
+            }
+        }
+
+    private val eyeDropperLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val callback = pendingColorPickerCallback
+            pendingColorPickerCallback = null
+            val color = WebPickersBridge.extractEyeDropperColor(result.resultCode, result.data)
+            if (color != null) {
+                callback?.set(color)
+            } else {
+                callback?.cancel()
+            }
+        }
+
+    private val scopedContactPickerLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val callback = pendingContactsPickedCallback
+            pendingContactsPickedCallback = null
+            callback?.invoke(if (result.resultCode == RESULT_OK) result.data else null)
+        }
 
     /** Navigation queued while Arti is still binding its local 127.0.0.1 SOCKS5 port. */
     private var deferredNavigationUntilSocks: Pair<String, String>? = null
@@ -102,23 +173,56 @@ class MainActivity : FragmentActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
         prefs = TrapPreferences(this)
+        pipController = PipController(this)
+        performanceController = PerformanceAndRenderController(this)
+        screenRecordingGuard = ScreenRecordingGuard(this) { active ->
+            handleScreenRecordingStateChanged(active)
+        }
+        ContextCompat.registerReceiver(
+            this,
+            pipActionReceiver,
+            PipActionReceiver.intentFilter(),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        pipReceiverRegistered = true
         applySystemBarsAppearance(prefs.themeMode)
+        CrossDeviceHandoffController.syncActivityHandoffEnabled(this, prefs.handoffEnabled)
 
+        val initiallyInPip = isInPictureInPictureMode
         uiState = BrowserUiState(
             hiddenServiceOnly = prefs.hiddenServiceOnly,
             requireBiometric = prefs.requireBiometric,
+            pipOnMinimizeEnabled = prefs.pipOnMinimizeEnabled,
+            pipExcludePrivateTabs = prefs.pipExcludePrivateTabs,
+            handoffEnabled = prefs.handoffEnabled,
+            isInPipMode = initiallyInPip,
+            isPipChromeHidden = PipController.resolveChromeHidden(
+                isInPictureInPictureMode = initiallyInPip,
+                isTransitioningToPip = false,
+            ),
             zoomPercent = prefs.defaultZoomPercent,
             defaultZoomPercent = prefs.defaultZoomPercent,
             defaultKeyFingerprint = prefs.defaultKeyFingerprint,
             themeFamily = prefs.themeFamily,
             themeMode = prefs.themeMode,
+            surfaceFilterMode = prefs.surfaceFilterMode,
         )
+
+        val incomingHandoff = if (savedInstanceState == null) {
+            CrossDeviceHandoffController.extractIncomingHandoff(intent)
+        } else {
+            null
+        }
+        if (incomingHandoff != null) {
+            pendingHandoffScrollY = incomingHandoff.scrollY
+        }
 
         crashReport = CrashReporter.pendingReport(this)
         if (crashReport == null) {
-            val initialUrl = resolveInitialUrl(savedInstanceState, intent)
+            val initialUrl = incomingHandoff?.url ?: resolveInitialUrl(savedInstanceState, intent)
             startEngineAndSessions(initialUrl)
         }
+        syncPipParams()
 
         setContent {
             LaunchedEffect(Unit) {
@@ -207,6 +311,7 @@ class MainActivity : FragmentActivity() {
                 onForward = { goForward() },
                 onReload = { reloadCurrentOrStop() },
                 onNewTab = { createNewTab() },
+                onNewPrivateTab = { createNewTab(isPrivate = true) },
                 onSelectTab = { selectTab(it) },
                 onCloseTab = { closeTab(it) },
                 onHome = { goHome() },
@@ -217,9 +322,13 @@ class MainActivity : FragmentActivity() {
                 onDeleteKey = { fp -> deleteKey(fp) },
                 onToggleRouting = { enabled -> toggleHiddenServiceOnly(enabled) },
                 onToggleRequireBiometric = { required -> toggleRequireBiometric(required) },
+                onTogglePipOnMinimize = { enabled -> togglePipOnMinimize(enabled) },
+                onTogglePipExcludePrivateTabs = { excluded -> togglePipExcludePrivateTabs(excluded) },
+                onToggleHandoff = { enabled -> toggleHandoffEnabled(enabled) },
                 onResetTorIsolation = { resetTorIsolationAndIdentity() },
                 onSelectThemeFamily = { family -> updateThemeFamily(family) },
                 onSelectThemeMode = { mode -> updateThemeMode(mode) },
+                onSelectSurfaceFilterMode = { mode -> updateSurfaceFilterMode(mode) },
                 onSelectDefaultZoom = { zoomPct -> updateDefaultZoom(zoomPct) },
                 onClearSession = { clearEphemeralSession() },
                 onZoomIn = { stepZoom(ZOOM_STEP_PERCENT) },
@@ -287,9 +396,91 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        if (::screenRecordingGuard.isInitialized) {
+            screenRecordingGuard.onStart(this)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        syncPipParams()
+    }
+
+    override fun onStop() {
+        if (::screenRecordingGuard.isInitialized) {
+            screenRecordingGuard.onStop(this)
+        }
+        super.onStop()
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (::pipController.isInitialized) {
+            pipController.handleUserLeaveHint(this, currentPipSnapshot())
+        }
+    }
+
+    override fun onPictureInPictureUiStateChanged(pipState: PictureInPictureUiState) {
+        super.onPictureInPictureUiStateChanged(pipState)
+        if (Build.VERSION.SDK_INT >= 35 && ::pipController.isInitialized) {
+            val transitioning = pipController.isTransitioningToPipApi35(pipState)
+            isTransitioningToPipState = transitioning
+            if (transitioning) {
+                dismissTransientOverlaysForPip()
+                if (controllersReady) {
+                    tabSessionManager.setTouchSuppressed(false)
+                }
+            }
+            val hideChrome = PipController.resolveChromeHidden(
+                isInPictureInPictureMode = isInPictureInPictureMode,
+                isTransitioningToPip = transitioning,
+            )
+            if (uiState.isPipChromeHidden != hideChrome) {
+                uiState = uiState.copy(isPipChromeHidden = hideChrome)
+            }
+        }
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: Configuration,
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        if (!isInPictureInPictureMode) {
+            isTransitioningToPipState = false
+        }
+        if (isInPictureInPictureMode) {
+            dismissTransientOverlaysForPip()
+            if (controllersReady) {
+                tabSessionManager.setTouchSuppressed(false)
+            }
+        }
+        val hideChrome = PipController.resolveChromeHidden(
+            isInPictureInPictureMode = isInPictureInPictureMode,
+            isTransitioningToPip = isTransitioningToPipState,
+        )
+        uiState = uiState.copy(
+            isInPipMode = isInPictureInPictureMode,
+            isPipChromeHidden = hideChrome,
+        )
+        syncPipParams()
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        val handoff = CrossDeviceHandoffController.extractIncomingHandoff(intent)
+        if (handoff != null && crashReport == null && controllersReady) {
+            pendingHandoffScrollY = handoff.scrollY
+            if (isBlankOrStartUrl(uiState.url) && !uiState.isLoading) {
+                navigate(handoff.url)
+            } else {
+                createNewTab(handoff.url)
+            }
+            return
+        }
         val viewUrl = intent.takeIf { it.action == Intent.ACTION_VIEW }?.dataString?.trim()
         if (!viewUrl.isNullOrEmpty() && crashReport == null && controllersReady) {
             if (isBlankOrStartUrl(uiState.url) && !uiState.isLoading) {
@@ -300,16 +491,41 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    @RequiresApi(37)
+    override fun onHandoffActivityDataRequested(
+        requestInfo: HandoffActivityDataRequestInfo,
+    ): HandoffActivityData? {
+        val activeTab = if (controllersReady) tabSessionManager.activeTab() else null
+        val payload = CrossDeviceHandoffController.buildPayloadIfEligible(
+            handoffEnabled = uiState.handoffEnabled,
+            activeUrl = activeTab?.url ?: uiState.url,
+            activeTitle = activeTab?.title?.ifBlank { uiState.title } ?: uiState.title,
+            isPrivateTab = activeTab?.isPrivate == true,
+            scrollY = activeTab?.latestScrollY ?: 0,
+        ) ?: return null
+        return CrossDeviceHandoffController.buildHandoffActivityData(componentName, payload)
+    }
+
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putString(STATE_URL, uiState.url)
     }
 
     override fun onDestroy() {
+        pendingColorPickerCallback?.cancel()
+        pendingColorPickerCallback = null
+        pendingContactsPickedCallback = null
+        hostSurfaceFrame = null
+        if (pipReceiverRegistered) {
+            pipReceiverRegistered = false
+            runCatching { unregisterReceiver(pipActionReceiver) }
+        }
         torPollingJob?.cancel()
         stateSyncJob?.cancel()
         if (controllersReady) {
             tabSessionManager.destroyAll()
+        } else {
+            mediaDisplayNormalizer.releaseAll()
         }
         if (isFinishing && OvNative.isLoaded && nativeRuntimeInitialized) {
             nativeRuntimeInitialized = false
@@ -327,9 +543,11 @@ class MainActivity : FragmentActivity() {
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT,
                     )
+                    addOnLayoutChangeListener(viewportLayoutListener)
                 }
             },
             update = { hostFrame ->
+                hostSurfaceFrame = hostFrame
                 val targetSurface = if (controllersReady) {
                     tabSessionManager.surfaceContainerFor(activeTabId)
                 } else {
@@ -349,6 +567,21 @@ class MainActivity : FragmentActivity() {
                         )
                     }
                 }
+                val activeTab = if (controllersReady) tabSessionManager.activeTab() else null
+                ScreenRecordingGuard.applyContentSensitivity(
+                    view = hostFrame,
+                    sensitive = activeTab?.isPrivate == true,
+                )
+                if (::performanceController.isInitialized) {
+                    performanceController.applySurfaceFilter(hostFrame, uiState.surfaceFilterMode)
+                }
+                mediaDisplayNormalizer.applyWindowHdrHeadroom(
+                    window = window,
+                    rootSurfaceContainer = hostFrame,
+                    hasEmbeddedMedia = activeTab?.hasActiveVideo == true || activeTab?.isPlayingAudio == true,
+                    isFullscreenVideo = activeTab?.isFullscreenVideo == true,
+                )
+                updateViewportSourceRect(hostFrame)
             },
             modifier = Modifier.fillMaxSize(),
         )
@@ -416,6 +649,8 @@ class MainActivity : FragmentActivity() {
                 cdpController = cdpController,
                 backStackManager = backStackManager,
                 initialHiddenServiceOnly = prefs.hiddenServiceOnly,
+                lanAccessController = lanAccessController,
+                mediaDisplayNormalizer = mediaDisplayNormalizer,
                 onContextMenu = { target -> handleContextMenu(target) },
                 onSelectionPgpAction = { action -> handleSelectionPgpAction(action) },
                 onClearnetConsentRequired = { host, normalizedUrl, suggestedPattern ->
@@ -424,6 +659,20 @@ class MainActivity : FragmentActivity() {
                         pendingUrl = normalizedUrl,
                         suggestedPattern = suggestedPattern,
                     )
+                },
+                onLocalNetworkPermissionRequired = { targetUrl ->
+                    requestLocalNetworkAccess(targetUrl)
+                },
+                onColorPickerRequested = { initialColor, callback ->
+                    launchSystemEyeDropper(initialColor, callback)
+                },
+                onViewportInteraction = { active ->
+                    if (::performanceController.isInitialized) {
+                        performanceController.applyAdaptiveRefreshRate(
+                            window = window,
+                            isScrollingOrAnimating = active,
+                        )
+                    }
                 },
                 onUrlBlocked = { _, blockedUrl, reason ->
                     showStatus("$reason ($blockedUrl)", blocked = true)
@@ -501,6 +750,7 @@ class MainActivity : FragmentActivity() {
                             isActive = tab.id == effectiveActiveId,
                             isLoading = tab.isLoading,
                             isOnion = tab.isOnion,
+                            isPrivate = tab.isPrivate,
                         )
                     }
                 }
@@ -514,6 +764,17 @@ class MainActivity : FragmentActivity() {
                 // Clear cached snapshot overlay once live navigation finishes loading.
                 if (activeSnapshotView != null && activeTab != null && !activeTab.isLoading) {
                     activeSnapshotView = null
+                }
+
+                // Restore incoming Android 17 Cross-Device Handoff scroll position once loaded.
+                if (pendingHandoffScrollY > 0 &&
+                    activeTab != null &&
+                    !activeTab.isLoading &&
+                    !isBlankOrStartUrl(activeTab.url)
+                ) {
+                    val scrollTarget = pendingHandoffScrollY
+                    pendingHandoffScrollY = 0
+                    tabSessionManager.scrollToVerticalOffset(scrollTarget, activeTab.id)
                 }
 
                 val previousEntry = if (activeTab != null) {
@@ -538,6 +799,13 @@ class MainActivity : FragmentActivity() {
                     zoomPercent = activeTab?.zoomPercent ?: prefs.defaultZoomPercent,
                     pgp = uiState.pgp.copy(fields = liveNodes),
                 )
+                mediaDisplayNormalizer.applyWindowHdrHeadroom(
+                    window = window,
+                    rootSurfaceContainer = hostSurfaceFrame,
+                    hasEmbeddedMedia = activeTab?.hasActiveVideo == true || activeTab?.isPlayingAudio == true,
+                    isFullscreenVideo = activeTab?.isFullscreenVideo == true,
+                )
+                syncPipParams()
             }
         }
     }
@@ -548,7 +816,26 @@ class MainActivity : FragmentActivity() {
         torPollingJob = lifecycleScope.launch {
             while (isActive) {
                 pollTorStatusOnce()
-                delay(500L)
+                val activeTab = if (controllersReady) tabSessionManager.activeTab() else null
+                val headroom = if (::performanceController.isInitialized) {
+                    performanceController.sampleHeadroomIfDue(
+                        tabCount = uiState.tabCount,
+                        hasActiveMedia = activeTab?.hasActiveVideo == true ||
+                            activeTab?.isPlayingAudio == true ||
+                            activeTab?.hasWebRtcAudio == true,
+                    )
+                } else {
+                    PerformanceAndRenderController.HeadroomSnapshot()
+                }
+                if (headroom.shouldThrottleBackground && controllersReady) {
+                    tabSessionManager.throttleBackgroundTabs()
+                }
+                val delayMs = if (!uiState.tor.ready) {
+                    500L
+                } else {
+                    headroom.recommendedPollIntervalMs
+                }
+                delay(delayMs)
             }
         }
     }
@@ -805,7 +1092,10 @@ class MainActivity : FragmentActivity() {
         }
     }
 
-    private fun createNewTab(initialUrl: String = "about:blank") {
+    private fun createNewTab(
+        initialUrl: String = "about:blank",
+        isPrivate: Boolean = false,
+    ) {
         if (!controllersReady) return
         activeSnapshotView = null
         clearStatusAndPgpError()
@@ -814,6 +1104,7 @@ class MainActivity : FragmentActivity() {
             initialUrl = "about:blank",
             select = true,
             loadInitialBlank = !hasInitialTarget,
+            isPrivate = isPrivate,
         )
         if (prefs.defaultZoomPercent != 100) {
             tabSessionManager.setZoomPercent(prefs.defaultZoomPercent, tabId)
@@ -821,6 +1112,7 @@ class MainActivity : FragmentActivity() {
         if (hasInitialTarget) {
             navigate(initialUrl, tabId)
         }
+        syncPipParams()
     }
 
     private fun selectTab(tabId: String) {
@@ -828,6 +1120,7 @@ class MainActivity : FragmentActivity() {
         activeSnapshotView = null
         tabSessionManager.selectTab(tabId)
         refreshTorStatusNow()
+        syncPipParams()
     }
 
     private fun closeTab(tabId: String) {
@@ -835,6 +1128,7 @@ class MainActivity : FragmentActivity() {
         activeSnapshotView = null
         tabSessionManager.closeTab(tabId)
         refreshTorStatusNow()
+        syncPipParams()
     }
 
     private fun goHome() {
@@ -937,6 +1231,167 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    private fun togglePipOnMinimize(enabled: Boolean) {
+        if (enabled && !pipController.isDevicePipSupported()) {
+            prefs.pipOnMinimizeEnabled = false
+            uiState = uiState.copy(pipOnMinimizeEnabled = false)
+            showStatus("Picture-in-Picture is not supported on this device.", blocked = false)
+            syncPipParams()
+            return
+        }
+
+        prefs.pipOnMinimizeEnabled = enabled
+        uiState = uiState.copy(pipOnMinimizeEnabled = enabled)
+
+        if (enabled && !pipController.isPipPermissionGranted() && !isJvmUnitTestRuntime()) {
+            showStatus(
+                "Allow Picture-in-Picture in Android Settings to float pages on minimize.",
+                blocked = false,
+            )
+            val settingsIntent = pipController.buildPipSettingsIntent(packageName)
+            runCatching { startActivity(settingsIntent) }
+        }
+        syncPipParams()
+    }
+
+    private fun togglePipExcludePrivateTabs(excluded: Boolean) {
+        prefs.pipExcludePrivateTabs = excluded
+        uiState = uiState.copy(pipExcludePrivateTabs = excluded)
+        syncPipParams()
+    }
+
+    private fun updateViewportSourceRect(view: View) {
+        if (isInPictureInPictureMode || isTransitioningToPipState) {
+            return
+        }
+        val computed = PipController.computeViewportWindowRect(view) ?: return
+        if (computed != viewportSourceRect) {
+            viewportSourceRect = computed
+            syncPipParams()
+        }
+    }
+
+    private fun dismissTransientOverlaysForPip() {
+        if (uiState.contextMenu != null ||
+            uiState.selectionPgp != null ||
+            uiState.clearnetPrompt != null ||
+            uiState.pgp.encryptRequest != null ||
+            uiState.pgp.decryptPassphraseRequest != null ||
+            uiState.pgp.plaintext != null
+        ) {
+            uiState = uiState.copy(
+                contextMenu = null,
+                selectionPgp = null,
+                clearnetPrompt = null,
+                pgp = uiState.pgp.copy(
+                    encryptRequest = null,
+                    decryptPassphraseRequest = null,
+                    plaintext = null,
+                ),
+            )
+        }
+    }
+
+    private fun currentPipSnapshot(): PipController.PipSnapshot {
+        val activeTab = if (controllersReady) tabSessionManager.activeTab() else null
+        val url = activeTab?.url ?: uiState.url
+        val title = activeTab?.title?.ifBlank { uiState.title } ?: uiState.title
+        val tabCount = if (controllersReady) {
+            tabSessionManager.tabs.value.size.coerceAtLeast(1)
+        } else {
+            uiState.tabCount
+        }
+        return PipController.PipSnapshot(
+            pipOnMinimizeEnabled = uiState.pipOnMinimizeEnabled,
+            pipExcludePrivateTabs = uiState.pipExcludePrivateTabs,
+            crashScreenVisible = crashReport != null,
+            activeUrl = url,
+            activeTitle = title,
+            isActiveTabPrivate = activeTab?.isPrivate == true,
+            isFullscreenVideo = activeTab?.isFullscreenVideo == true,
+            hasActiveVideo = activeTab?.hasActiveVideo == true,
+            isPlayingAudio = activeTab?.isPlayingAudio == true,
+            hasWebRtcAudio = activeTab?.hasWebRtcAudio == true,
+            isMediaPausedByUser = activeTab?.isMediaPausedByUser == true,
+            isAudioMuted = activeTab?.isAudioMuted == true,
+            isLoading = activeTab?.isLoading ?: uiState.isLoading,
+            canGoBack = (activeTab?.canGoBack ?: uiState.canGoBack) || uiState.viewingSnapshot,
+            atDocumentBottom = activeTab?.atDocumentBottom == true,
+            tabCount = tabCount,
+            videoWidth = activeTab?.videoWidth ?: 0,
+            videoHeight = activeTab?.videoHeight ?: 0,
+            sourceRectHint = viewportSourceRect,
+        )
+    }
+
+    private fun syncPipParams() {
+        if (!::pipController.isInitialized) return
+        pipController.syncPictureInPictureParams(this, currentPipSnapshot())
+    }
+
+    private fun handlePipActionCommand(command: PipActionReceiver.Command) {
+        when (command) {
+            PipActionReceiver.Command.PLAY_PAUSE -> {
+                if (controllersReady) {
+                    tabSessionManager.toggleActiveMediaPlayPause()
+                }
+                syncPipParams()
+            }
+
+            PipActionReceiver.Command.TOGGLE_MUTE -> {
+                if (controllersReady) {
+                    tabSessionManager.toggleActiveAudioMute()
+                }
+                syncPipParams()
+            }
+
+            PipActionReceiver.Command.SEEK_FORWARD -> {
+                if (controllersReady) {
+                    tabSessionManager.seekActiveMediaForward()
+                }
+                syncPipParams()
+            }
+
+            PipActionReceiver.Command.SCROLL_VIEWPORT -> {
+                if (controllersReady) {
+                    tabSessionManager.scrollActiveViewportFromPip {
+                        syncPipParams()
+                    }
+                }
+            }
+
+            PipActionReceiver.Command.RELOAD_OR_STOP -> {
+                reloadCurrentOrStop()
+                syncPipParams()
+            }
+
+            PipActionReceiver.Command.SWITCH_TAB -> {
+                if (controllersReady) {
+                    val preferAudible = pipController.resolveOverlayModel(currentPipSnapshot()).mode ==
+                        PipController.OverlayMode.MEDIA_WEBRTC
+                    activeSnapshotView = null
+                    tabSessionManager.cycleTabFromPip(preferAudible = preferAudible)
+                }
+                syncPipParams()
+            }
+
+            PipActionReceiver.Command.HISTORY_BACK -> {
+                goBack()
+                syncPipParams()
+            }
+
+            PipActionReceiver.Command.CLOSE_PIP -> {
+                if (controllersReady) {
+                    tabSessionManager.pauseAndStopActiveMediaForPipClose()
+                }
+                syncPipParams()
+                if (!moveTaskToBack(true)) {
+                    finish()
+                }
+            }
+        }
+    }
+
     private fun resetTorIsolationAndIdentity() {
         if (!controllersReady) return
         activeSnapshotView = null
@@ -955,6 +1410,7 @@ class MainActivity : FragmentActivity() {
             blocked = false,
         )
         refreshTorStatusNow()
+        syncPipParams()
     }
 
     private fun clearEphemeralSession() {
@@ -982,6 +1438,97 @@ class MainActivity : FragmentActivity() {
             defaultZoomPercent = clamped,
             zoomPercent = clamped,
         )
+    }
+
+    private fun updateSurfaceFilterMode(mode: SurfaceFilterMode) {
+        prefs.surfaceFilterMode = mode
+        uiState = uiState.copy(surfaceFilterMode = mode)
+        hostSurfaceFrame?.let { frame ->
+            if (::performanceController.isInitialized) {
+                performanceController.applySurfaceFilter(frame, mode)
+            }
+        }
+    }
+
+    private fun toggleHandoffEnabled(enabled: Boolean) {
+        prefs.handoffEnabled = enabled
+        uiState = uiState.copy(handoffEnabled = enabled)
+        CrossDeviceHandoffController.syncActivityHandoffEnabled(this, enabled)
+        if (enabled && !CrossDeviceHandoffController.hasCompanionAssociation(this)) {
+            showStatus(
+                "Cross-device tab handoff enabled; companion devices can resume active non-private tabs.",
+                blocked = false,
+            )
+        }
+    }
+
+    private fun handleScreenRecordingStateChanged(active: Boolean) {
+        uiState = uiState.copy(
+            isScreenRecordingActive = active,
+            pgp = if (active) {
+                uiState.pgp.copy(
+                    encryptRequest = null,
+                    decryptPassphraseRequest = null,
+                    plaintext = null,
+                )
+            } else {
+                uiState.pgp
+            },
+        )
+    }
+
+    private fun requestLocalNetworkAccess(targetUrl: String) {
+        pendingLanNavigationUrl = targetUrl
+        if (isJvmUnitTestRuntime()) {
+            showStatus("Local network permission required ($targetUrl)", blocked = false)
+            return
+        }
+        runCatching {
+            localNetworkPermissionLauncher.launch(LanAccessController.PERMISSION_ACCESS_LOCAL_NETWORK)
+        }.onFailure {
+            pendingLanNavigationUrl = null
+            showStatus("Local network permission unavailable ($targetUrl)", blocked = true)
+        }
+    }
+
+    private fun launchSystemEyeDropper(
+        @Suppress("UNUSED_PARAMETER") initialColor: Int,
+        callback: CefriumPickerHandler.ColorCallback,
+    ): Boolean {
+        if (!WebPickersBridge.isEyeDropperAvailable(this)) {
+            return false
+        }
+        pendingColorPickerCallback?.cancel()
+        pendingColorPickerCallback = callback
+        return runCatching {
+            eyeDropperLauncher.launch(WebPickersBridge.buildEyeDropperIntent())
+            true
+        }.getOrElse {
+            pendingColorPickerCallback = null
+            false
+        }
+    }
+
+    fun launchScopedContactPicker(
+        requestedMimeDataFields: List<String> = listOf(
+            "vnd.android.cursor.item/name",
+            "vnd.android.cursor.item/email_v2",
+        ),
+        selectionLimit: Int = 1,
+        onResult: (Intent?) -> Unit,
+    ): Boolean {
+        val intent = WebPickersBridge.buildScopedContactPickerIntent(
+            requestedMimeDataFields = requestedMimeDataFields,
+            selectionLimit = selectionLimit,
+        )
+        pendingContactsPickedCallback = onResult
+        return runCatching {
+            scopedContactPickerLauncher.launch(intent)
+            true
+        }.getOrElse {
+            pendingContactsPickedCallback = null
+            false
+        }
     }
 
     private fun applySystemBarsAppearance(mode: TrapThemeMode) {

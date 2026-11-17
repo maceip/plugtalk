@@ -14,11 +14,18 @@ import android.view.MotionEvent
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.annotation.VisibleForTesting
+import com.cefrium.CefriumAudioHandler
 import com.cefrium.CefriumBrowser
 import com.cefrium.CefriumDisplayHandler
 import com.cefrium.CefriumLoadHandler
+import com.cefrium.CefriumPickerHandler
 import com.cefrium.CefriumRequestHandler
+import dev.onionvault.platform.LanAccessController
+import dev.onionvault.platform.MediaDisplayNormalizer
+import dev.onionvault.platform.ScreenRecordingGuard
+import dev.onionvault.platform.TouchpadPointerBridge
 import java.util.UUID
+import kotlin.math.abs
 import kotlin.math.ln
 import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -46,6 +53,8 @@ class TabSessionManager(
     private val cdpController: CdpDomPgpController,
     private val backStackManager: OnionBackStackManager,
     initialHiddenServiceOnly: Boolean = false,
+    val lanAccessController: LanAccessController = LanAccessController(),
+    val mediaDisplayNormalizer: MediaDisplayNormalizer = MediaDisplayNormalizer(),
     private val onContextMenu: (ContextMenuTarget) -> Unit = {},
     private val onSelectionPgpAction: (SelectionPgpAction) -> Unit = {},
     private val onClearnetConsentRequired: (
@@ -53,6 +62,12 @@ class TabSessionManager(
         normalizedUrl: String,
         suggestedPattern: String,
     ) -> Unit = { _, _, _ -> },
+    private val onLocalNetworkPermissionRequired: (targetUrl: String) -> Unit = {},
+    private val onColorPickerRequested: (
+        initialColor: Int,
+        callback: CefriumPickerHandler.ColorCallback,
+    ) -> Boolean = { _, _ -> false },
+    private val onViewportInteraction: (Boolean) -> Unit = {},
     private val onUrlBlocked: (tabId: String, blockedUrl: String, reason: String) -> Unit = { _, _, _ -> },
     private val onSecurityNotice: (String) -> Unit = {},
     private val onNavigationRecovered: (tabId: String) -> Unit = {},
@@ -68,9 +83,28 @@ class TabSessionManager(
         val canGoForward: Boolean,
         val zoomPercent: Int,
         val isOnion: Boolean,
+        val isPrivate: Boolean = false,
+        val isPlayingAudio: Boolean = false,
+        val isMediaPausedByUser: Boolean = false,
+        val isAudioMuted: Boolean = false,
+        val isFullscreenVideo: Boolean = false,
+        val hasWebRtcVideo: Boolean = false,
+        val hasWebRtcAudio: Boolean = false,
+        val atDocumentBottom: Boolean = false,
+        val latestScrollY: Int = 0,
+        val videoWidth: Int = 0,
+        val videoHeight: Int = 0,
         val lastBlockedUrl: String? = null,
         val lastBlockReason: String? = null,
-    )
+    ) {
+        val hasActiveVideo: Boolean
+            get() = isFullscreenVideo ||
+                hasWebRtcVideo ||
+                (videoWidth > 0 && videoHeight > 0 && isPlayingAudio)
+
+        val etldPlusOneOrigin: String
+            get() = PipController.extractEtldPlusOneOrigin(url)
+    }
 
     data class ContextMenuTarget(
         val tabId: String,
@@ -101,14 +135,28 @@ class TabSessionManager(
         ctx: Context,
         private val tabId: String,
     ) : FrameLayout(ctx) {
+        val virtualPointer = TouchpadPointerBridge.VirtualPointerState()
+
         private val refreshRunnable = Runnable {
             val browser = sessions[tabId]?.browser ?: return@Runnable
             cdpController.refreshViewportBounds(tabId, browser)
         }
 
+        private val settleArrRunnable = Runnable {
+            onViewportInteraction(false)
+        }
+
         override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
             if (touchSuppressed) {
                 return true
+            }
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN,
+                MotionEvent.ACTION_MOVE,
+                -> {
+                    removeCallbacks(settleArrRunnable)
+                    onViewportInteraction(true)
+                }
             }
             val handled = super.dispatchTouchEvent(ev)
             if (ev.actionMasked == MotionEvent.ACTION_UP ||
@@ -116,6 +164,8 @@ class TabSessionManager(
             ) {
                 removeCallbacks(refreshRunnable)
                 postDelayed(refreshRunnable, 120L)
+                removeCallbacks(settleArrRunnable)
+                postDelayed(settleArrRunnable, 350L)
             }
             return handled
         }
@@ -125,6 +175,37 @@ class TabSessionManager(
                 return true
             }
             return super.onInterceptTouchEvent(ev)
+        }
+
+        override fun onCapturedPointerEvent(event: MotionEvent): Boolean {
+            if (touchSuppressed) return true
+            if (dispatchRelativeTouchpadOrPointerMotion(event)) {
+                return true
+            }
+            return super.onCapturedPointerEvent(event)
+        }
+
+        override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+            if (touchSuppressed) return true
+            if (dispatchRelativeTouchpadOrPointerMotion(event)) {
+                return true
+            }
+            return super.onGenericMotionEvent(event)
+        }
+
+        private fun dispatchRelativeTouchpadOrPointerMotion(event: MotionEvent): Boolean {
+            val coords = TouchpadPointerBridge.accumulateRelativeMotion(
+                event = event,
+                state = virtualPointer,
+                viewportWidth = width,
+                viewportHeight = height,
+            ) ?: return false
+            val browser = sessions[tabId]?.browser ?: return false
+            removeCallbacks(settleArrRunnable)
+            onViewportInteraction(true)
+            runCatching { browser.sendMouseMove(coords.first, coords.second) }
+            postDelayed(settleArrRunnable, 350L)
+            return true
         }
     }
 
@@ -189,6 +270,7 @@ class TabSessionManager(
         initialUrl: String = "about:blank",
         select: Boolean = true,
         loadInitialBlank: Boolean = true,
+        isPrivate: Boolean = false,
     ): String {
         val tabId = "tab-${UUID.randomUUID().toString().take(8)}"
         val activity = resolveActivity(context)
@@ -204,7 +286,9 @@ class TabSessionManager(
 
         val wrapper = if (browser != null) {
             TouchGateFrameLayout(context, tabId).apply {
+                ScreenRecordingGuard.applyContentSensitivity(this, sensitive = isPrivate)
                 val cefSurface = browser.surfaceContainer
+                ScreenRecordingGuard.applyContentSensitivity(cefSurface, sensitive = isPrivate)
                 (cefSurface.parent as? ViewGroup)?.removeView(cefSurface)
                 addView(
                     cefSurface,
@@ -232,6 +316,7 @@ class TabSessionManager(
             canGoForward = false,
             zoomPercent = 100,
             isOnion = initialDecision.isOnion,
+            isPrivate = isPrivate,
         )
 
         val managed = ManagedTab(
@@ -354,6 +439,85 @@ class TabSessionManager(
         )
 
         val candidate = normalizeUserAddressInput(rawInput)
+        val lanDecision = lanAccessController.evaluateRequest(
+            pageUrl = managed.state.url,
+            targetUrl = candidate,
+            isMainFrame = true,
+            hiddenServiceOnly = _hiddenServiceOnly.value,
+            hasOsPermission = lanAccessController.hasLocalNetworkPermission(context),
+        )
+        when (lanDecision) {
+            LanAccessController.LanDecision.PROMPT_OS_PERMISSION -> {
+                onLocalNetworkPermissionRequired(candidate)
+                return OvNative.UrlPolicyResult(
+                    allowed = false,
+                    normalizedUrl = candidate,
+                    isOnion = false,
+                    reason = "Local network permission required",
+                )
+            }
+
+            LanAccessController.LanDecision.BLOCKED_HIDDEN_SERVICE_ONLY,
+            LanAccessController.LanDecision.BLOCKED_CROSS_ORIGIN_LAN_PROBE,
+            -> {
+                val reason = "Local network navigation blocked in Hidden Service Only mode"
+                updateTabState(targetTabId) {
+                    it.copy(
+                        lastBlockedUrl = candidate,
+                        lastBlockReason = reason,
+                    )
+                }
+                onUrlBlocked(targetTabId, candidate, reason)
+                return OvNative.UrlPolicyResult(
+                    allowed = false,
+                    normalizedUrl = candidate,
+                    isOnion = false,
+                    reason = reason,
+                )
+            }
+
+            LanAccessController.LanDecision.ALLOW_LAN -> {
+                if (candidate.startsWith("http://", ignoreCase = true) ||
+                    candidate.startsWith("https://", ignoreCase = true)
+                ) {
+                    val browser = managed.browser
+                    if (browser != null &&
+                        managed.state.url.isNotBlank() &&
+                        managed.state.url != "about:blank"
+                    ) {
+                        backStackManager.capture(
+                            tabId = targetTabId,
+                            browser = browser,
+                            domHtml = managed.latestDomHtml,
+                            nodes = cdpController.nodesForTab(targetTabId),
+                        )
+                    }
+                    managed.overrideDisplayUrl = null
+                    managed.pendingNavigationUrl = candidate
+                    updateTabState(targetTabId) {
+                        it.copy(
+                            url = candidate,
+                            title = it.title.ifBlank { displayTitleForUrl(candidate) },
+                            isLoading = true,
+                            loadProgress = 10,
+                            isOnion = false,
+                            lastBlockedUrl = null,
+                            lastBlockReason = null,
+                        )
+                    }
+                    browser?.loadUrl(candidate)
+                    return OvNative.UrlPolicyResult(
+                        allowed = true,
+                        normalizedUrl = candidate,
+                        isOnion = false,
+                        reason = "",
+                    )
+                }
+            }
+
+            LanAccessController.LanDecision.NOT_LAN -> Unit
+        }
+
         val decision = evaluateUrlPolicy(candidate, _hiddenServiceOnly.value)
         if (!decision.allowed) {
             if (decision.requiresClearnetConsent) {
@@ -563,12 +727,373 @@ class TabSessionManager(
         touchSuppressed = suppressed
     }
 
+    fun toggleActiveMediaPlayPause(tabId: String? = _activeTabId.value): Boolean {
+        val managed = tabId?.let { sessions[it] } ?: return false
+        val browser = managed.browser
+        val currentlyPaused = managed.state.isMediaPausedByUser
+        return if (currentlyPaused) {
+            runCatching { browser?.resumeMedia() }
+            updateTabState(managed.id) {
+                it.copy(
+                    isMediaPausedByUser = false,
+                    isPlayingAudio = true,
+                )
+            }
+            true
+        } else {
+            runCatching { browser?.suspendMedia() }
+            updateTabState(managed.id) {
+                it.copy(
+                    isMediaPausedByUser = true,
+                    isPlayingAudio = false,
+                )
+            }
+            false
+        }
+    }
+
+    fun toggleActiveAudioMute(tabId: String? = _activeTabId.value): Boolean {
+        val managed = tabId?.let { sessions[it] } ?: return false
+        val browser = managed.browser
+        val nextMuted = !managed.state.isAudioMuted
+        runCatching { browser?.setAudioMuted(nextMuted) }
+        val actualMuted = runCatching { browser?.isAudioMuted }.getOrNull() ?: nextMuted
+        updateTabState(managed.id) { it.copy(isAudioMuted = actualMuted) }
+        return actualMuted
+    }
+
+    /**
+     * Steps active HTML5 media forward (~10s) or triggers next-track via zero-JS CDP
+     * (`DOM.getDocument` -> `DOM.querySelector("video, audio")` -> `DOM.focus` ->
+     * `Input.dispatchKeyEvent` `ArrowRight` / `MediaTrackNext`).
+     */
+    fun seekActiveMediaForward(tabId: String? = _activeTabId.value) {
+        val managed = tabId?.let { sessions[it] } ?: return
+        val browser = managed.browser ?: return
+        browser.executeDevToolsMethod("DOM.getDocument", """{"depth":1}""") { docOk, docJson ->
+            val rootNodeId = if (docOk && !docJson.isNullOrBlank()) {
+                runCatching { JSONObject(docJson).getJSONObject("root").optInt("nodeId", 0) }
+                    .getOrDefault(0)
+            } else {
+                0
+            }
+            if (rootNodeId <= 0) {
+                dispatchCdpKeyTap(browser, "MediaTrackNext", "MediaTrackNext", 176)
+                return@executeDevToolsMethod
+            }
+            val queryParams = JSONObject()
+                .put("nodeId", rootNodeId)
+                .put("selector", "video, audio")
+                .toString()
+            browser.executeDevToolsMethod("DOM.querySelector", queryParams) { qOk, qJson ->
+                val mediaNodeId = if (qOk && !qJson.isNullOrBlank()) {
+                    runCatching { JSONObject(qJson).optInt("nodeId", 0) }.getOrDefault(0)
+                } else {
+                    0
+                }
+                if (mediaNodeId > 0) {
+                    val focusParams = JSONObject().put("nodeId", mediaNodeId).toString()
+                    browser.executeDevToolsMethod("DOM.focus", focusParams) { _, _ ->
+                        // Native Chromium HTML5 media controls step forward on ArrowRight (VK_RIGHT=39).
+                        dispatchCdpKeyTap(browser, "ArrowRight", "ArrowRight", 39)
+                    }
+                } else {
+                    dispatchCdpKeyTap(browser, "MediaTrackNext", "MediaTrackNext", 176)
+                }
+            }
+        }
+    }
+
+    /**
+     * Executes a smooth vertical scroll of 75% viewport height via zero-JS CDP
+     * (`Page.getLayoutMetrics` + `Input.synthesizeScrollGesture`, with `sendMouseWheel`
+     * fallback), wrapping smoothly back to the top when already at the document bottom.
+     */
+    fun scrollActiveViewportFromPip(
+        viewportFraction: Double = 0.75,
+        tabId: String? = _activeTabId.value,
+        onUpdated: () -> Unit = {},
+    ) {
+        val managed = tabId?.let { sessions[it] } ?: return
+        val browser = managed.browser ?: return
+        browser.executeDevToolsMethod("Page.getLayoutMetrics", "{}") { ok, json ->
+            if (!ok || json.isNullOrBlank()) {
+                mainHandler.post {
+                    val fallbackStep = ((managed.surfaceWrapper?.height ?: 800) * viewportFraction)
+                        .roundToInt()
+                        .coerceAtLeast(160)
+                    runCatching { browser.sendMouseWheel(200, 300, 0, -fallbackStep) }
+                    onUpdated()
+                }
+                return@executeDevToolsMethod
+            }
+
+            val parsed = runCatching {
+                val root = JSONObject(json)
+                val viewport = root.optJSONObject("cssVisualViewport")
+                    ?: root.getJSONObject("visualViewport")
+                val content = root.optJSONObject("cssContentSize")
+                    ?: root.getJSONObject("contentSize")
+                val pageY = viewport.optDouble("pageY", 0.0)
+                val clientW = viewport.optDouble("clientWidth", 360.0).coerceAtLeast(120.0)
+                val clientH = viewport.optDouble("clientHeight", 640.0).coerceAtLeast(120.0)
+                val scrollH = content.optDouble("height", clientH).coerceAtLeast(clientH)
+                QuadMetrics(pageY, clientW, clientH, scrollH)
+            }.getOrNull()
+
+            if (parsed == null) {
+                mainHandler.post { onUpdated() }
+                return@executeDevToolsMethod
+            }
+
+            val wasAtBottom = managed.state.atDocumentBottom ||
+                (parsed.pageY + parsed.clientHeight >= parsed.scrollHeight - 4.0)
+
+            val centerX = (parsed.clientWidth * 0.5).roundToInt()
+            val centerY = (parsed.clientHeight * 0.5).roundToInt()
+
+            if (wasAtBottom && parsed.pageY > 2.0) {
+                // Smoothly wrap back to top of document.
+                val scrollUpDistance = parsed.pageY.roundToInt().coerceAtLeast(1)
+                val gestureParams = JSONObject()
+                    .put("x", centerX)
+                    .put("y", centerY)
+                    .put("yDistance", scrollUpDistance)
+                    .put("speed", 2400)
+                    .toString()
+                browser.executeDevToolsMethod("Input.synthesizeScrollGesture", gestureParams) { gOk, _ ->
+                    if (!gOk) {
+                        mainHandler.post {
+                            runCatching { browser.sendMouseWheel(centerX, centerY, 0, scrollUpDistance) }
+                        }
+                    }
+                    mainHandler.post {
+                        updateTabState(managed.id) {
+                            it.copy(atDocumentBottom = false, latestScrollY = 0)
+                        }
+                        cdpController.refreshViewportBounds(managed.id, browser)
+                        onUpdated()
+                    }
+                }
+            } else {
+                val stepPx = (parsed.clientHeight * viewportFraction).roundToInt().coerceAtLeast(120)
+                val nextBottom = (parsed.pageY + stepPx + parsed.clientHeight) >= (parsed.scrollHeight - 4.0)
+                val nextScrollY = (parsed.pageY + stepPx).roundToInt().coerceAtLeast(0)
+                val gestureParams = JSONObject()
+                    .put("x", centerX)
+                    .put("y", centerY)
+                    .put("yDistance", -stepPx)
+                    .put("speed", 1400)
+                    .toString()
+                browser.executeDevToolsMethod("Input.synthesizeScrollGesture", gestureParams) { gOk, _ ->
+                    if (!gOk) {
+                        mainHandler.post {
+                            runCatching { browser.sendMouseWheel(centerX, centerY, 0, -stepPx) }
+                        }
+                    }
+                    mainHandler.post {
+                        updateTabState(managed.id) {
+                            it.copy(
+                                atDocumentBottom = nextBottom,
+                                latestScrollY = nextScrollY,
+                            )
+                        }
+                        cdpController.refreshViewportBounds(managed.id, browser)
+                        onUpdated()
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Restores vertical scroll position ([scrollY]) via zero-JS CDP when resuming
+     * a tab from Android 17 Cross-Device Handoff.
+     */
+    fun scrollToVerticalOffset(
+        scrollY: Int,
+        tabId: String? = _activeTabId.value,
+    ) {
+        if (scrollY <= 0) return
+        val managed = tabId?.let { sessions[it] } ?: return
+        val browser = managed.browser
+        if (browser == null) {
+            updateTabState(managed.id) { it.copy(latestScrollY = scrollY) }
+            return
+        }
+        browser.executeDevToolsMethod("Page.getLayoutMetrics", "{}") { ok, json ->
+            val currentY = if (ok && !json.isNullOrBlank()) {
+                runCatching {
+                    val root = JSONObject(json)
+                    val viewport = root.optJSONObject("cssVisualViewport")
+                        ?: root.getJSONObject("visualViewport")
+                    viewport.optDouble("pageY", 0.0)
+                }.getOrDefault(0.0)
+            } else {
+                0.0
+            }
+            val delta = scrollY - currentY.roundToInt()
+            if (abs(delta) > 4) {
+                val gestureParams = JSONObject()
+                    .put("x", 180)
+                    .put("y", 320)
+                    .put("yDistance", -delta)
+                    .put("speed", 2400)
+                    .toString()
+                browser.executeDevToolsMethod("Input.synthesizeScrollGesture", gestureParams) { gOk, _ ->
+                    if (!gOk) {
+                        mainHandler.post {
+                            runCatching { browser.sendMouseWheel(180, 320, 0, -delta) }
+                        }
+                    }
+                    mainHandler.post {
+                        updateTabState(managed.id) { it.copy(latestScrollY = scrollY) }
+                        cdpController.refreshViewportBounds(managed.id, browser)
+                    }
+                }
+            } else {
+                mainHandler.post {
+                    updateTabState(managed.id) { it.copy(latestScrollY = scrollY) }
+                }
+            }
+        }
+    }
+
+    /**
+     * Requests Android 17 relative pointer capture (`POINTER_CAPTURE_MODE_RELATIVE`)
+     * on the active tab's surface so foldables/tablets with trackpads deliver relative
+     * pointer deltas rather than legacy absolute finger coordinates.
+     */
+    fun requestPointerLockCapture(tabId: String? = _activeTabId.value): Boolean {
+        val wrapper = tabId?.let { sessions[it]?.surfaceWrapper } ?: return false
+        wrapper.virtualPointer.reset()
+        return TouchpadPointerBridge.requestRelativePointerCapture(wrapper)
+    }
+
+    fun releasePointerLockCapture(tabId: String? = _activeTabId.value) {
+        val wrapper = tabId?.let { sessions[it]?.surfaceWrapper } ?: return
+        wrapper.virtualPointer.reset()
+        TouchpadPointerBridge.releasePointerCapture(wrapper)
+    }
+
+    /**
+     * Proactively pauses non-active background tabs and reaps idle renderers when
+     * API 36 `SystemHealthManager` reports low CPU or GPU thermal headroom.
+     */
+    fun throttleBackgroundTabs(): Int {
+        val activeId = _activeTabId.value
+        var throttledCount = 0
+        sessions.forEach { (id, managed) ->
+            if (id != activeId) {
+                throttledCount++
+                managed.browser?.let { browser ->
+                    runCatching {
+                        browser.setPageVisible(false)
+                        browser.onPause()
+                    }
+                }
+            }
+        }
+        if (throttledCount > 0 && TrapApplication.isEngineReady) {
+            runCatching { CefriumBrowser.reapUnusedRenderers() }
+        }
+        return throttledCount
+    }
+
+    /**
+     * Cycles forward through open tabs from the PiP overlay, prioritizing the next
+     * audible/WebRTC tab when [preferAudible] is true.
+     */
+    fun cycleTabFromPip(preferAudible: Boolean = false): String? {
+        val orderedIds = sessions.keys.toList()
+        if (orderedIds.isEmpty()) return null
+        if (orderedIds.size == 1) return orderedIds.first()
+
+        val currentId = _activeTabId.value
+        val startIdx = orderedIds.indexOf(currentId).let { if (it < 0) 0 else it }
+
+        if (preferAudible) {
+            for (offset in 1 until orderedIds.size) {
+                val candidateId = orderedIds[(startIdx + offset) % orderedIds.size]
+                val candidateState = sessions[candidateId]?.state ?: continue
+                if (candidateState.isPlayingAudio ||
+                    candidateState.hasActiveVideo ||
+                    candidateState.hasWebRtcAudio
+                ) {
+                    selectTabInternal(candidateId)
+                    return candidateId
+                }
+            }
+        }
+
+        val nextId = orderedIds[(startIdx + 1) % orderedIds.size]
+        selectTabInternal(nextId)
+        return nextId
+    }
+
+    /**
+     * Cleanly pauses and tears down active HTML5 media playback and WebRTC capture
+     * across tabs when the user dismisses the PiP `"X"` close button so no orphaned
+     * background audio lingers.
+     */
+    fun pauseAndStopActiveMediaForPipClose() {
+        sessions.forEach { (id, managed) ->
+            managed.browser?.let { browser ->
+                runCatching { browser.suspendMedia() }
+                runCatching { browser.stopAllMedia() }
+                runCatching { browser.stopMediaSession() }
+                runCatching { browser.exitFullscreen() }
+            }
+            managed.state = managed.state.copy(
+                isPlayingAudio = false,
+                isMediaPausedByUser = false,
+                isFullscreenVideo = false,
+                hasWebRtcVideo = false,
+                hasWebRtcAudio = false,
+            )
+        }
+        publishTabsSnapshot()
+    }
+
+    private data class QuadMetrics(
+        val pageY: Double,
+        val clientWidth: Double,
+        val clientHeight: Double,
+        val scrollHeight: Double,
+    )
+
+    private fun dispatchCdpKeyTap(
+        browser: CefriumBrowser,
+        key: String,
+        code: String,
+        windowsVirtualKeyCode: Int,
+    ) {
+        val down = JSONObject()
+            .put("type", "rawKeyDown")
+            .put("key", key)
+            .put("code", code)
+            .put("windowsVirtualKeyCode", windowsVirtualKeyCode)
+            .put("nativeVirtualKeyCode", windowsVirtualKeyCode)
+            .toString()
+        val up = JSONObject()
+            .put("type", "keyUp")
+            .put("key", key)
+            .put("code", code)
+            .put("windowsVirtualKeyCode", windowsVirtualKeyCode)
+            .put("nativeVirtualKeyCode", windowsVirtualKeyCode)
+            .toString()
+        browser.executeDevToolsMethod("Input.dispatchKeyEvent", down) { _, _ ->
+            browser.executeDevToolsMethod("Input.dispatchKeyEvent", up) { _, _ -> }
+        }
+    }
+
     fun destroyAll() {
         val all = sessions.values.toList()
         sessions.clear()
         _activeTabId.value = null
         cdpController.clearAll()
         backStackManager.clearAll()
+        mediaDisplayNormalizer.releaseAll()
         all.forEach { teardownBrowser(it) }
         _tabs.value = emptyList()
     }
@@ -584,6 +1109,16 @@ class TabSessionManager(
         browser.setPermissionHandler { _, _, callback ->
             callback.respond(false)
         }
+
+        // Route HTML `<input type="color">` / EyeDropper requests to Android 17's
+        // zero-permission system `ACTION_OPEN_EYE_DROPPER` picker when available.
+        browser.setPickerHandler(object : CefriumPickerHandler {
+            override fun onShowColor(
+                initialColor: Int,
+                suggestions: IntArray?,
+                callback: CefriumPickerHandler.ColorCallback,
+            ): Boolean = onColorPickerRequested(initialColor, callback)
+        })
 
         // Deny hardware chooser dialogs (Bluetooth, USB, Serial).
         browser.setDeviceChooserHandler(object : CefriumBrowser.DeviceChooserHandler {
@@ -687,6 +1222,46 @@ class TabSessionManager(
                     updateTabState(tabId) { it.copy(loadProgress = pct) }
                 }
             }
+
+            override fun onMediaAccessChange(hasVideo: Boolean, hasAudio: Boolean) {
+                mainHandler.post {
+                    updateTabState(tabId) {
+                        it.copy(
+                            hasWebRtcVideo = hasVideo,
+                            hasWebRtcAudio = hasAudio,
+                        )
+                    }
+                }
+            }
+        })
+
+        browser.setAudioHandler(object : CefriumAudioHandler {
+            override fun onAudioStreamStarted(channels: Int, sampleRate: Int) {
+                mainHandler.post {
+                    mediaDisplayNormalizer.ensureAudioSessionNormalized(context)
+                    updateTabState(tabId) {
+                        it.copy(
+                            isPlayingAudio = true,
+                            isMediaPausedByUser = false,
+                        )
+                    }
+                    probePrimaryVideoBounds(tabId, browser)
+                }
+            }
+
+            override fun onAudioStreamStopped() {
+                mainHandler.post {
+                    val stillPlaying = runCatching { browser.isPlayingAudio }.getOrDefault(false)
+                    updateTabState(tabId) { it.copy(isPlayingAudio = stillPlaying) }
+                }
+            }
+
+            override fun onAudioStreamError(message: String?) {
+                mainHandler.post {
+                    val stillPlaying = runCatching { browser.isPlayingAudio }.getOrDefault(false)
+                    updateTabState(tabId) { it.copy(isPlayingAudio = stillPlaying) }
+                }
+            }
         })
 
         browser.setLoadHandler(object : CefriumLoadHandler {
@@ -751,12 +1326,19 @@ class TabSessionManager(
                     }
                     val isOnion = isOnionAddress(safeUrl)
                     updateTabState(tabId) { state ->
+                        val urlChanged = state.url != safeUrl
                         state.copy(
                             url = safeUrl,
                             title = if (safeUrl == "about:blank") "New Tab" else state.title.ifBlank { displayTitleForUrl(safeUrl) },
                             canGoBack = browser.canGoBack(),
                             canGoForward = canNavigateForward(browser),
                             isOnion = isOnion,
+                            isMediaPausedByUser = if (urlChanged) false else state.isMediaPausedByUser,
+                            atDocumentBottom = if (urlChanged) false else state.atDocumentBottom,
+                            latestScrollY = if (urlChanged) 0 else state.latestScrollY,
+                            isFullscreenVideo = if (safeUrl == "about:blank") false else state.isFullscreenVideo,
+                            videoWidth = if (safeUrl == "about:blank") 0 else state.videoWidth,
+                            videoHeight = if (safeUrl == "about:blank") 0 else state.videoHeight,
                         )
                     }
                 }
@@ -770,6 +1352,13 @@ class TabSessionManager(
                 }
             }
 
+            override fun onFullscreenChanged(isFullscreen: Boolean) {
+                mainHandler.post {
+                    updateTabState(tabId) { it.copy(isFullscreenVideo = isFullscreen) }
+                    probePrimaryVideoBounds(tabId, browser)
+                }
+            }
+
             override fun onLoadingStateChanged(
                 isLoading: Boolean,
                 canGoBack: Boolean,
@@ -779,12 +1368,14 @@ class TabSessionManager(
                     if (isLoading) {
                         sessions[tabId]?.hadErrorInCurrentLoad = false
                     }
+                    val playingAudio = runCatching { browser.isPlayingAudio }.getOrDefault(false)
                     updateTabState(tabId) {
                         it.copy(
                             isLoading = isLoading,
                             loadProgress = if (isLoading) it.loadProgress.coerceAtLeast(15) else 100,
                             canGoBack = canGoBack,
                             canGoForward = canGoForward,
+                            isPlayingAudio = playingAudio || it.isPlayingAudio,
                         )
                     }
                     if (!isLoading) {
@@ -797,6 +1388,7 @@ class TabSessionManager(
                             onNavigationRecovered(tabId)
                         }
                         cdpController.attachAndScan(tabId, browser, currentUrl)
+                        probePrimaryVideoBounds(tabId, browser)
                         if (currentUrl.isNotBlank() && currentUrl != "about:blank") {
                             mainHandler.postDelayed({
                                 val managed = sessions[tabId] ?: return@postDelayed
@@ -893,6 +1485,50 @@ class TabSessionManager(
         if (url.isBlank()) return true
         if (url == "about:blank") return false
 
+        val pageUrl = sessions[tabId]?.state?.url.orEmpty()
+        val lanDecision = lanAccessController.evaluateRequest(
+            pageUrl = pageUrl,
+            targetUrl = url,
+            isMainFrame = isMainFrame,
+            hiddenServiceOnly = _hiddenServiceOnly.value,
+            hasOsPermission = lanAccessController.hasLocalNetworkPermission(context),
+        )
+        when (lanDecision) {
+            LanAccessController.LanDecision.ALLOW_LAN -> return false
+
+            LanAccessController.LanDecision.PROMPT_OS_PERMISSION -> {
+                if (isMainFrame) {
+                    lastConsentInterceptedUrl = url
+                    mainHandler.post { onLocalNetworkPermissionRequired(url) }
+                }
+                return true
+            }
+
+            LanAccessController.LanDecision.BLOCKED_CROSS_ORIGIN_LAN_PROBE,
+            LanAccessController.LanDecision.BLOCKED_HIDDEN_SERVICE_ONLY,
+            -> {
+                if (isMainFrame || resourceType == CefriumBrowser.ResourceRequest.TYPE_SUB_FRAME) {
+                    val reason = if (lanDecision == LanAccessController.LanDecision.BLOCKED_HIDDEN_SERVICE_ONLY) {
+                        "Local network request blocked in Hidden Service Only mode"
+                    } else {
+                        "Blocked cross-origin local network probe"
+                    }
+                    mainHandler.post {
+                        updateTabState(tabId) {
+                            it.copy(
+                                lastBlockedUrl = url,
+                                lastBlockReason = reason,
+                            )
+                        }
+                        onUrlBlocked(tabId, url, reason)
+                    }
+                }
+                return true
+            }
+
+            LanAccessController.LanDecision.NOT_LAN -> Unit
+        }
+
         // Fail closed before Arti binds its local SOCKS5 proxy.
         if (_activeSocksAddr.value.isBlank() && TrapApplication.isEngineReady) {
             if (isMainFrame) {
@@ -961,9 +1597,15 @@ class TabSessionManager(
         ) {
             return trimmed
         }
-        // Hidden services default to `http://` over Tor's end-to-end encrypted v3 circuit.
+        // Hidden services and local LAN endpoints default to `http://`; clearnet defaults to `https://`.
         val hostPart = trimmed.substringBefore('/').substringBefore(':').lowercase()
-        val scheme = if (hostPart.endsWith(".onion")) "http://" else "https://"
+        val scheme = if (hostPart.endsWith(".onion") ||
+            LanAccessController.isLocalNetworkUrlOrHost(trimmed)
+        ) {
+            "http://"
+        } else {
+            "https://"
+        }
         return "$scheme$trimmed"
     }
 
@@ -1036,6 +1678,64 @@ class TabSessionManager(
         runCatching { wrapper?.removeAllViews() }
         runCatching { browser?.stopLoading() }
         runCatching { browser?.close() }
+    }
+
+    /**
+     * Queries `<video>` element dimensions through 100% zero-JavaScript CDP
+     * (`DOM.getDocument` -> `DOM.querySelector("video")` -> `DOM.getBoxModel`)
+     * so dynamic PiP aspect ratios match live HTML5 video bounds without script execution.
+     */
+    private fun probePrimaryVideoBounds(tabId: String, browser: CefriumBrowser) {
+        browser.executeDevToolsMethod("DOM.getDocument", """{"depth":1}""") { docOk, docJson ->
+            if (!docOk || docJson.isNullOrBlank()) return@executeDevToolsMethod
+            val rootNodeId = runCatching {
+                JSONObject(docJson).getJSONObject("root").optInt("nodeId", 0)
+            }.getOrDefault(0)
+            if (rootNodeId <= 0) return@executeDevToolsMethod
+
+            val queryParams = JSONObject()
+                .put("nodeId", rootNodeId)
+                .put("selector", "video")
+                .toString()
+            browser.executeDevToolsMethod("DOM.querySelector", queryParams) { qOk, qJson ->
+                val videoNodeId = if (qOk && !qJson.isNullOrBlank()) {
+                    runCatching { JSONObject(qJson).optInt("nodeId", 0) }.getOrDefault(0)
+                } else {
+                    0
+                }
+                if (videoNodeId <= 0) {
+                    mainHandler.post {
+                        updateTabState(tabId) {
+                            if (it.videoWidth == 0 && it.videoHeight == 0) {
+                                it
+                            } else {
+                                it.copy(videoWidth = 0, videoHeight = 0)
+                            }
+                        }
+                    }
+                    return@executeDevToolsMethod
+                }
+
+                val boxParams = JSONObject().put("nodeId", videoNodeId).toString()
+                browser.executeDevToolsMethod("DOM.getBoxModel", boxParams) { boxOk, boxJson ->
+                    val dims = if (boxOk && !boxJson.isNullOrBlank()) {
+                        runCatching {
+                            val model = JSONObject(boxJson).getJSONObject("model")
+                            val w = model.optInt("width", 0)
+                            val h = model.optInt("height", 0)
+                            w to h
+                        }.getOrNull()
+                    } else {
+                        null
+                    }
+                    mainHandler.post {
+                        val w = dims?.first?.coerceAtLeast(0) ?: 0
+                        val h = dims?.second?.coerceAtLeast(0) ?: 0
+                        updateTabState(tabId) { it.copy(videoWidth = w, videoHeight = h) }
+                    }
+                }
+            }
+        }
     }
 
     private fun displayTitleForUrl(url: String): String {
