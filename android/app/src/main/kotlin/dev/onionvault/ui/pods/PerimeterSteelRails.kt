@@ -24,18 +24,17 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /**
- * `3.dp` Cylindrical Brushed-Steel Viewport Frame + Matte Street Spray Overspray.
+ * `4.5.dp` (`1.5x` Scaled) Cylindrical Brushed-Steel Viewport Frame + Matte Street Spray Overspray.
  *
  * Non-negotiable physical & hit-test invariants:
- * - Left, right, and top viewport edges framed with `3.dp` steel rails flush to screen bezel:
- *   `#32373D` outer `1dp`, `#C4CCD4` specular ridge `1dp`, `#14171A` inner `1dp`.
- * - While [isLoading] is `true`, animates a `2.dp` solid acid-yellow (`#D8FF00`) pulse/line
+ * - Left, right, and top viewport edges framed with `4.5.dp` steel rails flush to screen bezel:
+ *   `#32373D` outer `1.5dp`, `#C4CCD4` specular ridge `1.5dp`, `#14171A` inner `1.5dp`.
+ * - While [isLoading] is `true`, animates a `3.dp` solid acid-yellow (`#D8FF00`) pulse/line
  *   traveling along the top steel ridge; vanishes immediately when [isLoading] is `false`.
- * - Keeps ~74% of rail bare brushed steel, rendering 4 deterministic asymmetric matte acrylic
- *   splatter clusters (`#FF1A6C`, `#00E5FF`, `#D8FF00` hard-edged `0.5dp–2.5dp` stipple dots,
- *   zero blur) + two vertical drips (`2dp` wide, `12dp–18dp` long with rounded droplet) on
- *   left/right rails, strictly clipped `<= 1.5dp` inward (`<= 4.5dp` total from bezel) so
- *   webpage text is NEVER obscured.
+ * - Keeps ~72% of rail bare brushed steel, rendering 4 deterministic asymmetric matte acrylic
+ *   splatter clusters (`#FF1A6C`, `#00E5FF`, `#D8FF00` hard-edged `1.5x` stipple dots, zero blur) +
+ *   two vertical drips (`3.dp` wide, `21dp–24dp` long with rounded droplet) on left/right rails,
+ *   strictly clipped `<= 2.dp` inward (`<= 6.5dp` total from bezel) so webpage text is NEVER obscured.
  * - **100% Hit-Test Passthrough**: Attaches ZERO `pointerInput` and ZERO `clickable` modifiers;
  *   every touch passes straight through to the webpage surface!
  */
@@ -69,123 +68,119 @@ fun PerimeterSteelRails(
             .fillMaxSize()
             .testTag("perimeter_steel_rails"),
     ) {
-        val oneDp = 1.dp.toPx()
-        val twoDp = 2.dp.toPx()
+        val bandPx = 1.5.dp.toPx()
+        val railWidthPx = 4.5.dp.toPx()
         val threeDp = 3.dp.toPx()
         val topRailYPx = topInset.toPx().coerceAtLeast(0f)
-        val maxInwardClipPx = 4.5.dp.toPx() // 3dp rail + <= 1.5dp inward overspray clip
+        val maxInwardClipPx = 6.5.dp.toPx() // 4.5dp rail + <= 2.0dp inward overspray clip
 
         val w = size.width
         val h = size.height
         if (w <= 0f || h <= 0f) return@Canvas
 
-        // 1. Left Cylindrical Brushed-Steel Rail (x = 0..3dp, full bezel height)
+        // 1. Left Cylindrical Brushed-Steel Rail (x = 0..4.5dp, full bezel height)
         drawRect(
             color = MetaToolsTokens.SteelOuterEdge,
             topLeft = Offset(0f, 0f),
-            size = Size(oneDp, h),
+            size = Size(bandPx, h),
         )
         drawRect(
             color = MetaToolsTokens.SteelSpecularRidge,
-            topLeft = Offset(oneDp, 0f),
-            size = Size(oneDp, h),
+            topLeft = Offset(bandPx, 0f),
+            size = Size(bandPx, h),
         )
         drawRect(
             color = MetaToolsTokens.SteelInnerShadow,
-            topLeft = Offset(twoDp, 0f),
-            size = Size(oneDp, h),
+            topLeft = Offset(bandPx * 2f, 0f),
+            size = Size(bandPx, h),
         )
 
-        // 2. Right Cylindrical Brushed-Steel Rail (x = w-3dp..w, full bezel height)
+        // 2. Right Cylindrical Brushed-Steel Rail (x = w-4.5dp..w, full bezel height)
         drawRect(
             color = MetaToolsTokens.SteelOuterEdge,
-            topLeft = Offset((w - oneDp).coerceAtLeast(0f), 0f),
-            size = Size(oneDp, h),
+            topLeft = Offset((w - bandPx).coerceAtLeast(0f), 0f),
+            size = Size(bandPx, h),
         )
         drawRect(
             color = MetaToolsTokens.SteelSpecularRidge,
-            topLeft = Offset((w - twoDp).coerceAtLeast(0f), 0f),
-            size = Size(oneDp, h),
+            topLeft = Offset((w - bandPx * 2f).coerceAtLeast(0f), 0f),
+            size = Size(bandPx, h),
         )
         drawRect(
             color = MetaToolsTokens.SteelInnerShadow,
-            topLeft = Offset((w - threeDp).coerceAtLeast(0f), 0f),
-            size = Size(oneDp, h),
+            topLeft = Offset((w - railWidthPx).coerceAtLeast(0f), 0f),
+            size = Size(bandPx, h),
         )
 
-        // 3. Top Cylindrical Brushed-Steel Rail (y = topRailYPx..topRailYPx+3dp)
+        // 3. Top Cylindrical Brushed-Steel Rail (y = topRailYPx..topRailYPx+4.5dp)
         drawRect(
             color = MetaToolsTokens.SteelOuterEdge,
             topLeft = Offset(0f, topRailYPx),
-            size = Size(w, oneDp),
+            size = Size(w, bandPx),
         )
         drawRect(
             color = MetaToolsTokens.SteelSpecularRidge,
-            topLeft = Offset(oneDp, topRailYPx + oneDp),
-            size = Size((w - twoDp).coerceAtLeast(0f), oneDp),
+            topLeft = Offset(bandPx, topRailYPx + bandPx),
+            size = Size((w - bandPx * 2f).coerceAtLeast(0f), bandPx),
         )
         drawRect(
             color = MetaToolsTokens.SteelInnerShadow,
-            topLeft = Offset(twoDp, topRailYPx + twoDp),
-            size = Size((w - twoDp * 2f).coerceAtLeast(0f), oneDp),
+            topLeft = Offset(bandPx * 2f, topRailYPx + bandPx * 2f),
+            size = Size((w - bandPx * 4f).coerceAtLeast(0f), bandPx),
         )
 
-        // Subtle machined brush ticks along bare steel ridge
-        val brushSpacing = 18.dp.toPx()
+        // Machined brush ticks along bare steel ridge
+        val brushSpacing = 22.dp.toPx()
         var yTick = brushSpacing
         while (yTick < h - brushSpacing) {
             drawRect(
-                color = Color(0x33FFFFFF),
-                topLeft = Offset(oneDp, yTick),
-                size = Size(oneDp, oneDp * 2f),
+                color = Color(0x38FFFFFF),
+                topLeft = Offset(bandPx, yTick),
+                size = Size(bandPx, bandPx * 1.8f),
             )
             drawRect(
-                color = Color(0x33FFFFFF),
-                topLeft = Offset((w - twoDp).coerceAtLeast(0f), yTick + brushSpacing * 0.5f),
-                size = Size(oneDp, oneDp * 2f),
+                color = Color(0x38FFFFFF),
+                topLeft = Offset((w - bandPx * 2f).coerceAtLeast(0f), yTick + brushSpacing * 0.5f),
+                size = Size(bandPx, bandPx * 1.8f),
             )
             yTick += brushSpacing
         }
 
-        // 4. Deterministic Asymmetric Matte Acrylic Splatter Clusters + 2 Vertical Drips
-        // Left rail overspray strictly clipped to [0, 4.5dp] (<= 1.5dp inward of 3dp steel rail)
+        // 4. 1.5x Deterministic Asymmetric Matte Acrylic Splatter Clusters + 2 Vertical Drips
         clipRect(left = 0f, top = 0f, right = maxInwardClipPx.coerceAtMost(w), bottom = h) {
             drawLeftRailGraffiti(splatters.leftDots, h)
-            // Left vertical drip: Street Magenta (#FF1A6C), 2dp wide, 16dp long + rounded droplet
             drawAcrylicDrip(
-                xPx = 1.1.dp.toPx(),
+                xPx = 1.4.dp.toPx(),
                 startYPx = h * 0.275f,
-                widthPx = twoDp,
-                lengthPx = 16.dp.toPx(),
+                widthPx = threeDp,
+                lengthPx = 24.dp.toPx(),
                 color = MetaToolsTokens.StreetMagenta,
             )
         }
 
-        // Right rail overspray strictly clipped to [w - 4.5dp, w] (<= 1.5dp inward of 3dp steel rail)
         clipRect(left = (w - maxInwardClipPx).coerceAtLeast(0f), top = 0f, right = w, bottom = h) {
             drawRightRailGraffiti(splatters.rightDots, w, h)
-            // Right vertical drip: Street Cyan (#00E5FF), 2dp wide, 14dp long + rounded droplet
             drawAcrylicDrip(
-                xPx = (w - 3.1.dp.toPx()).coerceAtLeast(0f),
+                xPx = (w - 4.4.dp.toPx()).coerceAtLeast(0f),
                 startYPx = h * 0.435f,
-                widthPx = twoDp,
-                lengthPx = 14.dp.toPx(),
+                widthPx = threeDp,
+                lengthPx = 21.dp.toPx(),
                 color = MetaToolsTokens.StreetCyan,
             )
         }
 
-        // 5. Top Ridge Solid 2dp Acid-Yellow (#D8FF00) Traveling Load Pulse
+        // 5. Top Ridge Solid 3dp Acid-Yellow (#D8FF00) Traveling Load Pulse
         if (isLoading) {
-            val pulseY = topRailYPx + 0.5.dp.toPx()
+            val pulseY = topRailYPx + 0.75.dp.toPx()
             val clampedProgress = (loadProgress.coerceIn(0, 100)) / 100f
             if (clampedProgress > 0f) {
                 drawRect(
-                    color = MetaToolsTokens.AcidYellow.copy(alpha = 0.45f),
+                    color = MetaToolsTokens.AcidYellow.copy(alpha = 0.48f),
                     topLeft = Offset(0f, pulseY),
-                    size = Size(w * clampedProgress, twoDp),
+                    size = Size(w * clampedProgress, threeDp),
                 )
             }
-            val segmentWidth = (w * 0.28f).coerceAtLeast(48.dp.toPx())
+            val segmentWidth = (w * 0.28f).coerceAtLeast(64.dp.toPx())
             val travelSpan = w + segmentWidth
             val pulseStart = (pulsePhase * travelSpan) - segmentWidth
             val clippedStart = pulseStart.coerceIn(0f, w)
@@ -194,7 +189,7 @@ fun PerimeterSteelRails(
                 drawRect(
                     color = MetaToolsTokens.AcidYellow,
                     topLeft = Offset(clippedStart, pulseY),
-                    size = Size(clippedEnd - clippedStart, twoDp),
+                    size = Size(clippedEnd - clippedStart, threeDp),
                 )
             }
         }
@@ -202,12 +197,11 @@ fun PerimeterSteelRails(
 }
 
 private fun DrawScope.drawLeftRailGraffiti(dots: List<StippleSpec>, viewportHeight: Float) {
-    // Solid matte acrylic body patch behind cluster 1 (y = 23%..28%)
     drawRoundRect(
         color = MetaToolsTokens.StreetMagenta,
         topLeft = Offset(0f, viewportHeight * 0.235f),
-        size = Size(2.8.dp.toPx(), viewportHeight * 0.042f),
-        cornerRadius = CornerRadius(1.dp.toPx(), 1.dp.toPx()),
+        size = Size(4.2.dp.toPx(), viewportHeight * 0.046f),
+        cornerRadius = CornerRadius(1.5.dp.toPx(), 1.5.dp.toPx()),
     )
     dots.forEach { dot ->
         drawCircle(
@@ -226,18 +220,17 @@ private fun DrawScope.drawRightRailGraffiti(
     viewportWidth: Float,
     viewportHeight: Float,
 ) {
-    // Solid matte acid-yellow & magenta cap bands on right rail (y = 13%..17.5%)
     drawRoundRect(
         color = MetaToolsTokens.AcidYellow,
-        topLeft = Offset(viewportWidth - 2.8.dp.toPx(), viewportHeight * 0.130f),
-        size = Size(2.8.dp.toPx(), viewportHeight * 0.032f),
-        cornerRadius = CornerRadius(1.dp.toPx(), 1.dp.toPx()),
+        topLeft = Offset(viewportWidth - 4.2.dp.toPx(), viewportHeight * 0.130f),
+        size = Size(4.2.dp.toPx(), viewportHeight * 0.036f),
+        cornerRadius = CornerRadius(1.5.dp.toPx(), 1.5.dp.toPx()),
     )
     drawRoundRect(
         color = MetaToolsTokens.StreetCyan,
-        topLeft = Offset(viewportWidth - 2.6.dp.toPx(), viewportHeight * 0.405f),
-        size = Size(2.6.dp.toPx(), viewportHeight * 0.034f),
-        cornerRadius = CornerRadius(1.dp.toPx(), 1.dp.toPx()),
+        topLeft = Offset(viewportWidth - 3.9.dp.toPx(), viewportHeight * 0.405f),
+        size = Size(3.9.dp.toPx(), viewportHeight * 0.038f),
+        cornerRadius = CornerRadius(1.5.dp.toPx(), 1.5.dp.toPx()),
     )
     dots.forEach { dot ->
         drawCircle(
@@ -264,7 +257,6 @@ private fun DrawScope.drawAcrylicDrip(
         size = Size(widthPx, lengthPx),
         cornerRadius = CornerRadius(widthPx / 2f, widthPx / 2f),
     )
-    // Rounded droplet bead at tip of vertical acrylic run
     val dropletRadius = widthPx * 0.68f
     drawCircle(
         color = color,
@@ -277,7 +269,7 @@ private fun DrawScope.drawAcrylicDrip(
 private data class StippleSpec(
     val yFraction: Float,
     val edgeOffsetDp: Float,
-    val radiusDp: Float, // 0.5dp..2.5dp radius -> 0.5dp..2.5dp circle size
+    val radiusDp: Float,
     val color: Color,
 )
 
@@ -288,11 +280,7 @@ private data class RailSplatterSet(
 )
 
 /**
- * Generates 4 deterministic asymmetric nozzle stipple clusters leaving >72% of rails bare steel:
- * - Cluster 1 (Left upper-mid, `0.21..0.30`): Street Magenta + Cyan
- * - Cluster 2 (Left lower-mid, `0.55..0.61`): Street Cyan + Acid Yellow
- * - Cluster 3 (Right upper, `0.11..0.19`): Acid Yellow + Street Magenta
- * - Cluster 4 (Right mid, `0.39..0.47`): Street Cyan + Street Magenta
+ * Generates 4 deterministic `1.5x`-scaled asymmetric nozzle stipple clusters leaving >70% bare steel.
  */
 private fun buildDeterministicRailSplatters(): RailSplatterSet {
     val left = mutableListOf<StippleSpec>()
@@ -316,9 +304,8 @@ private fun buildDeterministicRailSplatters(): RailSplatterSet {
             s = s * 1664525u + 1013904223u
             val u3 = ((s shr 8) and 0xFFFFu).toFloat() / 65535f
 
-            // Circle diameter between 0.5dp and 2.5dp -> radius 0.35dp..1.25dp
-            val radiusDp = 0.35f + u3 * 0.90f
-            val edgeDp = 0.4f + u2 * 3.4f
+            val radiusDp = 0.52f + u3 * 1.35f
+            val edgeDp = 0.6f + u2 * 4.8f
             target += StippleSpec(
                 yFraction = yStart + u1 * ySpan,
                 edgeOffsetDp = edgeDp,
@@ -333,7 +320,7 @@ private fun buildDeterministicRailSplatters(): RailSplatterSet {
         seedInit = 0x51A7_0001u,
         yStart = 0.215f,
         ySpan = 0.085f,
-        count = 22,
+        count = 24,
         primary = MetaToolsTokens.StreetMagenta,
         secondary = MetaToolsTokens.StreetCyan,
     )
@@ -342,7 +329,7 @@ private fun buildDeterministicRailSplatters(): RailSplatterSet {
         seedInit = 0x51A7_0002u,
         yStart = 0.555f,
         ySpan = 0.055f,
-        count = 14,
+        count = 16,
         primary = MetaToolsTokens.StreetCyan,
         secondary = MetaToolsTokens.AcidYellow,
     )
@@ -351,7 +338,7 @@ private fun buildDeterministicRailSplatters(): RailSplatterSet {
         seedInit = 0x51A7_0003u,
         yStart = 0.115f,
         ySpan = 0.075f,
-        count = 20,
+        count = 22,
         primary = MetaToolsTokens.AcidYellow,
         secondary = MetaToolsTokens.StreetMagenta,
     )
@@ -360,7 +347,7 @@ private fun buildDeterministicRailSplatters(): RailSplatterSet {
         seedInit = 0.395f.toBits().toUInt() xor 0x51A7_0004u,
         yStart = 0.395f,
         ySpan = 0.075f,
-        count = 18,
+        count = 20,
         primary = MetaToolsTokens.StreetCyan,
         secondary = MetaToolsTokens.StreetMagenta,
     )

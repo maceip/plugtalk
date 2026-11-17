@@ -283,7 +283,9 @@ private fun BrowserScreenContent(
     val scope = rememberCoroutineScope()
     val chromeHiddenForPip = state.isInPipMode || state.isPipChromeHidden
 
-    PredictiveBackHandler(enabled = state.canGoBack && !shellOverlayOpen && !chromeHiddenForPip) { backFlow ->
+    PredictiveBackHandler(
+        enabled = (state.canGoBack || !state.isStartPage) && !shellOverlayOpen && !chromeHiddenForPip,
+    ) { backFlow ->
         try {
             backFlow.collect { event ->
                 progress = event.progress
@@ -295,7 +297,11 @@ private fun BrowserScreenContent(
                     )
                 }
             }
-            onBack()
+            if (state.canGoBack) {
+                onBack()
+            } else {
+                onHome()
+            }
         } finally {
             withContext(NonCancellable) {
                 scale.animateTo(1f, animationSpec = tween(180))

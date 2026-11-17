@@ -71,11 +71,13 @@ class OnionVaultPreviewsTest {
         compose.setContent { BrowserChromePreview() }
         compose.onAllNodes(isRoot())[0].assertExists()
         compose.onNodeWithTag("metatools_browser_shell").assertIsDisplayed()
+        compose.onNodeWithTag("kpt_back_pod").assertIsDisplayed()
         compose.onNodeWithTag("tor_orb_pod").assertIsDisplayed()
         compose.onNodeWithTag("crt_address_pod").assertIsDisplayed()
         compose.onNodeWithTag("pgp_rocker_pod").assertIsDisplayed()
         compose.onNodeWithTag("side_remote_pod").assertIsDisplayed()
         compose.onNodeWithTag("start_page").assertIsDisplayed()
+        compose.onNodeWithTag("start_zine_wallpaper", useUnmergedTree = true).assertIsDisplayed()
         compose.onNodeWithTag("trusted_onion_directory").assertIsDisplayed()
         compose.onNodeWithTag("bottom_control_dock").assertDoesNotExist()
     }

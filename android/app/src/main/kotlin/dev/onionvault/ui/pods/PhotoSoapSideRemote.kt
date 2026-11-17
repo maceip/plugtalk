@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -44,7 +43,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
@@ -124,16 +122,16 @@ fun deriveRemoteTelemetryLeds(
 }
 
 /**
- * Detached Anodized Pill Remote floating on right thumb edge above the OpenPGP switch (`side_remote_pod`).
+ * `1.5x` Scaled Anodized Pill Remote docked on the right thumb edge (`side_remote_pod`).
  *
- * - **Collapsed (`48.dp` wide)**: Vertical `7.dp` recessed glass LED beads (`#00FF66` green glow /
- *   `#FFAA00` amber glow / `#121418` unlit — backed by REAL Tor bootstrap, `.onion` isolation vs
- *   clearnet rule, Keyring/PGP status, and Zero-JS lock) + tiny torn monochrome sticker detail +
- *   distressed `#B8C0C8` stencil micro-type (`ZK / TOR` or real 4-hex default key short-hash).
- * - **Expanded (`140ms` linear slide to `218.dp`, zero bounce)**: `2.dp` engraved grooves
- *   (`1.dp #0A0B0D` over `1.dp #343942`), inverted bevel + `1.dp` down-right shift + lit LED on
- *   press! Supports [RemoteMode.Menu], [RemoteMode.TorCircuit] (with 2-tap confirm on
- *   `New Tor Identity`), [RemoteMode.ContextMenu], and [RemoteMode.PgpActions].
+ * - **Collapsed (`70.dp x 154.dp`)**: Vertical `10.5.dp` recessed glass LED beads (`#00FF66` green
+ *   glow / `#FFAA00` amber glow / `#121418` unlit — backed by REAL Tor bootstrap, `.onion`
+ *   isolation vs clearnet rule, Keyring/PGP status, and Zero-JS lock) + torn monochrome street-zine
+ *   sticker + bold `#C4CCD4` stencil type (`ZK / TOR` or real 4-hex default key short-hash).
+ * - **Expanded (`140ms` linear slide to `268.dp`, zero bounce)**: `48.dp` tactile grooved buttons
+ *   (`15.sp` typography, `2.dp` engraved grooves, inverted bevel + `1.dp` down-right shift + lit
+ *   LED on press!). Includes `Forward`, `Reload`, `New Tab`, `Tabs (N)`, `Copy URL`, `Home`,
+ *   `Zoom [- 100% +]`, `Tor Circuit`, `Keyring`, `Settings`, and `Licences`.
  */
 @Composable
 fun PhotoSoapSideRemote(
@@ -181,7 +179,7 @@ fun PhotoSoapSideRemote(
     }
 
     val animatedWidth by animateDpAsState(
-        targetValue = if (expanded) 218.dp else 48.dp,
+        targetValue = if (expanded) 268.dp else 70.dp,
         animationSpec = tween(
             durationMillis = MetaToolsTokens.REMOTE_SLIDE_DURATION_MS,
             easing = LinearEasing,
@@ -189,7 +187,7 @@ fun PhotoSoapSideRemote(
         label = "side_remote_width",
     )
 
-    val pillRadius = if (expanded) 22.dp else 24.dp
+    val pillRadius = if (expanded) 24.dp else 35.dp
     val pillShape = RoundedCornerShape(pillRadius)
 
     Box(
@@ -221,7 +219,6 @@ fun PhotoSoapSideRemote(
                 leds = leds,
                 onSelectMode = onSelectMode,
                 onCollapse = onCollapse,
-                onBack = onBack,
                 onForward = onForward,
                 onReload = onReload,
                 onNewTab = onNewTab,
@@ -257,7 +254,7 @@ private fun CollapsedRemoteFace(
 ) {
     Column(
         modifier = Modifier
-            .width(48.dp)
+            .size(width = 70.dp, height = 154.dp)
             .clickable(
                 role = Role.Button,
                 onClick = onClick,
@@ -265,19 +262,22 @@ private fun CollapsedRemoteFace(
             .semantics {
                 contentDescription = "Open hardware remote menu"
             }
-            .padding(vertical = 11.dp)
+            .padding(top = 13.dp, bottom = 11.dp)
             .testTag("side_remote_collapsed_face"),
         horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.SpaceBetween,
     ) {
-        // 4 Paired 7.dp Recessed Glass LED Channels (Green OK left | Amber Warn/Active right)
+        // 4 Paired 10.5.dp Recessed Glass LED Channels (Green OK left | Amber Warn/Active right)
+        // Left column centered at x = 16.dp from pill edge so when tucked 72% into right bezel,
+        // the glowing emerald 10.5.dp LED bead column peeks cleanly out!
         Canvas(
             modifier = Modifier
-                .width(34.dp)
-                .height(66.dp),
+                .width(70.dp)
+                .height(82.dp),
         ) {
-            val beadDiameterPx = 7.dp.toPx()
-            val leftColX = size.width * 0.28f
-            val rightColX = size.width * 0.72f
+            val beadDiameterPx = 10.5.dp.toPx()
+            val leftColX = 18.dp.toPx()
+            val rightColX = 51.dp.toPx()
             val rowSpacing = size.height / 4f
             val pairs = listOf(
                 leds.torGreen to leds.torAmber,
@@ -300,24 +300,22 @@ private fun CollapsedRemoteFace(
             }
         }
 
-        // Tiny torn monochrome zine sticker detail across middle edge (matching metatools-reference.jpg)
+        // Torn monochrome street-zine sticker detail across middle flank
         Canvas(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(16.dp),
+                .height(17.dp),
         ) {
             drawTornMonochromeSticker()
         }
 
-        Spacer(Modifier.height(3.dp))
-
-        // Distressed #B8C0C8 Stencil Micro-Type (ZK / TOR or real 4-hex default key short-hash)
+        // Bold distressed #C4CCD4 stencil type (ZK / TOR or real 4-hex default key short-hash)
         Text(
             text = leds.stencilCode,
             color = MetaToolsTokens.StencilInk,
-            fontSize = 10.5.sp,
-            lineHeight = 11.5.sp,
-            fontWeight = FontWeight.ExtraBold,
+            fontSize = 13.5.sp,
+            lineHeight = 14.5.sp,
+            fontWeight = FontWeight.Black,
             fontFamily = FontFamily.Monospace,
             textAlign = TextAlign.Center,
             modifier = Modifier.testTag("side_remote_stencil"),
@@ -332,7 +330,6 @@ private fun ExpandedRemoteFace(
     leds: RemoteTelemetryLeds,
     onSelectMode: (RemoteMode) -> Unit,
     onCollapse: () -> Unit,
-    onBack: () -> Unit,
     onForward: () -> Unit,
     onReload: () -> Unit,
     onNewTab: () -> Unit,
@@ -367,28 +364,28 @@ private fun ExpandedRemoteFace(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(max = 528.dp)
-            .padding(top = 10.dp, bottom = 8.dp),
+            .heightIn(max = 620.dp)
+            .padding(top = 12.dp, bottom = 10.dp),
     ) {
-        // Engraved Hardware Header Strip (1 primary label + 1 close button -> <= 2:1 density)
+        // Engraved Hardware Header Strip (1 primary label + action keys -> <= 2:1 density)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 2.dp),
+                .padding(horizontal = 14.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Canvas(modifier = Modifier.size(10.dp)) {
+            Canvas(modifier = Modifier.size(14.dp)) {
                 drawRecessedGlassLedBead(
                     center = center,
-                    beadDiameterPx = 7.dp.toPx(),
+                    beadDiameterPx = 10.5.dp.toPx(),
                     litColor = if (leds.torGreen) MetaToolsTokens.LedGreen else MetaToolsTokens.LedAmber,
                 )
             }
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(10.dp))
             Text(
                 text = headerLabel,
                 color = MetaToolsTokens.StencilInk,
-                fontSize = 11.5.sp,
+                fontSize = 14.sp,
                 fontWeight = FontWeight.ExtraBold,
                 fontFamily = FontFamily.Monospace,
                 modifier = Modifier.weight(1f),
@@ -409,7 +406,7 @@ private fun ExpandedRemoteFace(
             )
         }
 
-        EngravedGrooveDivider(modifier = Modifier.padding(top = 6.dp))
+        EngravedGrooveDivider(modifier = Modifier.padding(top = 8.dp))
 
         Column(
             modifier = Modifier
@@ -421,7 +418,6 @@ private fun ExpandedRemoteFace(
                 RemoteMode.Menu -> RemoteMenuBody(
                     state = state,
                     onCollapse = onCollapse,
-                    onBack = onBack,
                     onForward = onForward,
                     onReload = onReload,
                     onNewTab = onNewTab,
@@ -475,7 +471,6 @@ private fun ExpandedRemoteFace(
 private fun RemoteMenuBody(
     state: BrowserUiState,
     onCollapse: () -> Unit,
-    onBack: () -> Unit,
     onForward: () -> Unit,
     onReload: () -> Unit,
     onNewTab: () -> Unit,
@@ -489,16 +484,6 @@ private fun RemoteMenuBody(
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit,
 ) {
-    RemoteEngravedRowButton(
-        label = "Back",
-        glyph = TrapGlyph.Back,
-        enabled = state.canGoBack,
-        onClick = {
-            onCollapse()
-            onBack()
-        },
-        testTag = "remote_back",
-    )
     RemoteEngravedRowButton(
         label = "Forward",
         glyph = TrapGlyph.Forward,
@@ -559,7 +544,8 @@ private fun RemoteMenuBody(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 6.dp),
+            .height(48.dp)
+            .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
@@ -571,7 +557,7 @@ private fun RemoteMenuBody(
         Text(
             text = "Zoom ${state.zoomPercent}%",
             color = MetaToolsTokens.StencilInk,
-            fontSize = 11.5.sp,
+            fontSize = 14.sp,
             fontWeight = FontWeight.Bold,
             fontFamily = FontFamily.Monospace,
             maxLines = 1,
@@ -644,12 +630,12 @@ private fun RemoteTorCircuitBody(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 8.dp)
-                .clip(RoundedCornerShape(10.dp))
+                .padding(horizontal = 12.dp, vertical = 10.dp)
+                .clip(RoundedCornerShape(12.dp))
                 .background(MetaToolsTokens.CrtBlackGlass)
-                .border(1.dp, MetaToolsTokens.GrooveHighlight, RoundedCornerShape(10.dp))
-                .padding(horizontal = 10.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(5.dp),
+                .border(1.dp, MetaToolsTokens.GrooveHighlight, RoundedCornerShape(12.dp))
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             RemoteCrtStatLine(
                 key = "ARTI",
@@ -713,26 +699,26 @@ private fun RemoteTorCircuitBody(
             Text(
                 text = "CLEARNET RULES (${state.clearnetRules.size})",
                 color = MetaToolsTokens.StencilInk,
-                fontSize = 10.sp,
+                fontSize = 11.5.sp,
                 fontWeight = FontWeight.Bold,
                 fontFamily = FontFamily.Monospace,
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
             )
             state.clearnetRules.forEach { rule: OvNative.ClearnetRuleItem ->
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 10.dp, vertical = 3.dp)
-                        .clip(RoundedCornerShape(8.dp))
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                        .clip(RoundedCornerShape(10.dp))
                         .background(MetaToolsTokens.AnodizedRecessedWell)
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = rule.pattern,
                             color = Color.White,
-                            fontSize = 11.sp,
+                            fontSize = 13.sp,
                             fontFamily = FontFamily.Monospace,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -740,12 +726,12 @@ private fun RemoteTorCircuitBody(
                         Text(
                             text = formatClearnetRuleTtl(rule, nowMs),
                             color = MetaToolsTokens.PhosphorClearnetGreen,
-                            fontSize = 10.sp,
+                            fontSize = 11.5.sp,
                             fontFamily = FontFamily.Monospace,
                             maxLines = 1,
                         )
                     }
-                    Spacer(Modifier.width(6.dp))
+                    Spacer(Modifier.width(8.dp))
                     RemoteMiniKey(
                         label = "✕",
                         onClick = { onRevokeClearnetRule(rule.pattern) },
@@ -790,16 +776,16 @@ private fun RemoteContextMenuBody(
             Text(
                 text = preview,
                 color = MetaToolsTokens.PhosphorClearnetGreen,
-                fontSize = 10.5.sp,
+                fontSize = 12.sp,
                 fontFamily = FontFamily.Monospace,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 10.dp, vertical = 6.dp)
-                    .clip(RoundedCornerShape(8.dp))
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .clip(RoundedCornerShape(10.dp))
                     .background(MetaToolsTokens.CrtBlackGlass)
-                    .padding(8.dp),
+                    .padding(10.dp),
             )
             EngravedGrooveDivider()
         }
@@ -1013,9 +999,10 @@ private fun RemotePgpActionsBody(
 }
 
 /**
- * Physical hardware button row inside expanded [PhotoSoapSideRemote]:
+ * `1.5x` Tactile Grooved Hardware Button Row inside expanded [PhotoSoapSideRemote]:
+ * - `48.dp` row height, `15.sp` typography
  * - `2.dp` engraved bottom groove (`1.dp #0A0B0D` over `1.dp #343942`)
- * - On press: inverted bevel + `1.dp` down-right shift + lit `6.dp` recessed green LED!
+ * - On press: inverted bevel + `1.dp` down-right shift + lit `8.5.dp` recessed green LED!
  * - Strict `<= 2:1` label density (1 primary label + at most 1 trailing token).
  */
 @Composable
@@ -1044,19 +1031,18 @@ private fun RemoteEngravedRowButton(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(34.dp)
-                .padding(horizontal = 6.dp, vertical = 1.5.dp)
+                .height(45.dp)
+                .padding(horizontal = 8.dp, vertical = 2.dp)
                 .drawBehind {
                     if (isPressed && enabled) {
-                        // Inverted sunken bevel on physical press
-                        val r = 7.dp.toPx()
+                        val r = 9.dp.toPx()
                         drawRoundRect(
                             color = MetaToolsTokens.AnodizedRecessedWell,
                             cornerRadius = CornerRadius(r, r),
                         )
                         drawMetallicSquircleBevel(
                             cornerRadiusPx = r,
-                            strokeWidthPx = 1.dp.toPx(),
+                            strokeWidthPx = 1.2.dp.toPx(),
                             highlightColor = MetaToolsTokens.AnodizedBevelDark,
                             shadowColor = MetaToolsTokens.AnodizedBevelLight,
                         )
@@ -1072,42 +1058,42 @@ private fun RemoteEngravedRowButton(
                         onClick()
                     },
                 )
-                .padding(horizontal = 8.dp)
+                .padding(horizontal = 10.dp)
                 .offset(x = pressShift, y = pressShift)
                 .testTag(testTag),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Canvas(modifier = Modifier.size(9.dp)) {
+            Canvas(modifier = Modifier.size(12.dp)) {
                 drawRecessedGlassLedBead(
                     center = center,
-                    beadDiameterPx = 6.dp.toPx(),
+                    beadDiameterPx = 8.5.dp.toPx(),
                     litColor = activeLedColor,
                 )
             }
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(10.dp))
             TrapIcon(
                 glyph = glyph,
                 tint = if (enabled) MetaToolsTokens.StencilInk else MetaToolsTokens.PhosphorPathDim,
-                size = 15.dp,
+                size = 19.dp,
                 enabled = enabled,
                 forceVector = true,
             )
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(10.dp))
             Text(
                 text = label,
-                color = if (enabled) Color(0xFFECEFF4) else MetaToolsTokens.PhosphorPathDim,
-                fontSize = 12.5.sp,
+                color = if (enabled) Color(0xFFF0F4F8) else MetaToolsTokens.PhosphorPathDim,
+                fontSize = 15.sp,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             if (!trailingToken.isNullOrBlank()) {
-                Spacer(Modifier.width(6.dp))
+                Spacer(Modifier.width(8.dp))
                 Text(
                     text = trailingToken,
                     color = MetaToolsTokens.PhosphorClearnetGreen,
-                    fontSize = 10.5.sp,
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     fontFamily = FontFamily.Monospace,
                     maxLines = 1,
@@ -1127,22 +1113,22 @@ private fun RemoteMiniKey(
     onClick: () -> Unit,
     testTag: String,
 ) {
-    val shape = RoundedCornerShape(6.dp)
+    val shape = RoundedCornerShape(8.dp)
     Box(
         modifier = Modifier
-            .height(24.dp)
+            .height(32.dp)
             .clip(shape)
             .background(MetaToolsTokens.AnodizedRecessedWell)
-            .border(1.dp, MetaToolsTokens.AnodizedBevelLight, shape)
+            .border(1.2.dp, MetaToolsTokens.AnodizedBevelLight, shape)
             .clickable(role = Role.Button, onClick = onClick)
-            .padding(horizontal = 7.dp)
+            .padding(horizontal = 10.dp)
             .testTag(testTag),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text = label,
             color = MetaToolsTokens.StencilInk,
-            fontSize = 10.sp,
+            fontSize = 12.5.sp,
             fontWeight = FontWeight.Bold,
             fontFamily = FontFamily.Monospace,
             maxLines = 1,
@@ -1163,7 +1149,7 @@ private fun RemoteCrtStatLine(
         Text(
             text = key,
             color = MetaToolsTokens.PhosphorPathDim,
-            fontSize = 10.sp,
+            fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
             fontFamily = FontFamily.Monospace,
             maxLines = 1,
@@ -1172,7 +1158,7 @@ private fun RemoteCrtStatLine(
         Text(
             text = value,
             color = valueColor,
-            fontSize = 10.5.sp,
+            fontSize = 12.5.sp,
             fontWeight = FontWeight.SemiBold,
             fontFamily = FontFamily.Monospace,
             textAlign = TextAlign.End,
@@ -1189,7 +1175,7 @@ internal fun EngravedGrooveDivider(modifier: Modifier = Modifier) {
         modifier = modifier
             .fillMaxWidth()
             .height(2.dp)
-            .padding(horizontal = 8.dp),
+            .padding(horizontal = 10.dp),
     ) {
         drawEngravedGroove(yPx = 0f, startXPx = 0f, endXPx = size.width)
     }
@@ -1202,11 +1188,11 @@ private fun DrawScope.drawAnodizedRemoteChassis(
 ) {
     val corner = CornerRadius(cornerRadiusPx, cornerRadiusPx)
 
-    // Cylindrical dark-anodized aluminum body
+    // Cylindrical dark-anodized gunmetal aluminum body
     drawRoundRect(
         brush = Brush.horizontalGradient(
             0.0f to MetaToolsTokens.AnodizedSurfaceTop,
-            0.28f to Color(0xFF313742),
+            0.26f to Color(0xFF343B46),
             0.68f to MetaToolsTokens.AnodizedSurface,
             1.0f to MetaToolsTokens.AnodizedSurfaceDeep,
         ),
@@ -1217,76 +1203,72 @@ private fun DrawScope.drawAnodizedRemoteChassis(
         cornerRadius = corner,
     )
 
-    // Crisp outer anodized metallic bevel
     drawMetallicSquircleBevel(
         cornerRadiusPx = cornerRadiusPx,
-        strokeWidthPx = 1.5.dp.toPx(),
+        strokeWidthPx = 2.dp.toPx(),
         highlightColor = MetaToolsTokens.AnodizedBevelLight,
         shadowColor = MetaToolsTokens.AnodizedBevelDark,
     )
 
-    // Subtle weathered edge micro-scuffs on collapsed pill matching metatools-reference.jpg
     if (isCollapsed) {
-        val scuffColor = Color(0x66C0C8D2)
+        val scuffColor = Color(0x70C4CCD6)
         drawLine(
             color = scuffColor,
-            start = Offset(size.width - 2.2.dp.toPx(), size.height * 0.24f),
-            end = Offset(size.width - 1.2.dp.toPx(), size.height * 0.27f),
-            strokeWidth = 0.9.dp.toPx(),
+            start = Offset(size.width - 3.dp.toPx(), size.height * 0.24f),
+            end = Offset(size.width - 1.5.dp.toPx(), size.height * 0.27f),
+            strokeWidth = 1.2.dp.toPx(),
         )
         drawLine(
             color = scuffColor,
-            start = Offset(size.width - 2.5.dp.toPx(), size.height * 0.36f),
-            end = Offset(size.width - 1.4.dp.toPx(), size.height * 0.38f),
-            strokeWidth = 0.8.dp.toPx(),
+            start = Offset(size.width - 3.4.dp.toPx(), size.height * 0.36f),
+            end = Offset(size.width - 1.8.dp.toPx(), size.height * 0.38f),
+            strokeWidth = 1.0.dp.toPx(),
         )
     }
 }
 
 /**
- * Renders the tiny torn monochrome wheatpaste/zine sticker across the middle left flank
- * of the collapsed anodized pill remote (matching `metatools-reference.jpg`).
+ * Renders the torn monochrome street-zine masking-tape sticker across the middle flank
+ * of the `70.dp x 154.dp` collapsed anodized pill remote.
  */
 private fun DrawScope.drawTornMonochromeSticker() {
     val h = size.height
     val w = size.width
-    val stickerW = w * 0.66f
+    val stickerW = w * 0.68f
 
     val tornScrap = Path().apply {
-        moveTo(1.5.dp.toPx(), h * 0.14f)
+        moveTo(2.dp.toPx(), h * 0.12f)
         lineTo(stickerW * 0.88f, h * 0.22f)
         lineTo(stickerW, h * 0.48f)
-        lineTo(stickerW * 0.91f, h * 0.68f)
-        lineTo(stickerW * 0.96f, h * 0.88f)
-        lineTo(1.5.dp.toPx(), h * 0.82f)
+        lineTo(stickerW * 0.91f, h * 0.70f)
+        lineTo(stickerW * 0.96f, h * 0.90f)
+        lineTo(2.dp.toPx(), h * 0.84f)
         close()
     }
     drawPath(path = tornScrap, color = MetaToolsTokens.StickerPaper)
 
-    // Crisp black zine ink bar inside the torn paper strip
     drawRect(
         color = MetaToolsTokens.StickerInk,
-        topLeft = Offset(2.5.dp.toPx(), h * 0.36f),
-        size = Size(stickerW * 0.72f, h * 0.30f),
+        topLeft = Offset(3.5.dp.toPx(), h * 0.36f),
+        size = Size(stickerW * 0.72f, h * 0.32f),
     )
     drawLine(
         color = MetaToolsTokens.StickerPaper,
-        start = Offset(4.dp.toPx(), h * 0.51f),
-        end = Offset(stickerW * 0.62f, h * 0.51f),
-        strokeWidth = 1.dp.toPx(),
+        start = Offset(5.5.dp.toPx(), h * 0.52f),
+        end = Offset(stickerW * 0.62f, h * 0.52f),
+        strokeWidth = 1.3.dp.toPx(),
     )
 
-    // Tiny secondary monochrome black corner tab on right flank
     drawRoundRect(
         color = MetaToolsTokens.StickerInk,
-        topLeft = Offset(w * 0.74f, h * 0.42f),
-        size = Size(w * 0.22f, h * 0.34f),
-        cornerRadius = CornerRadius(1.dp.toPx(), 1.dp.toPx()),
+        topLeft = Offset(w * 0.74f, h * 0.40f),
+        size = Size(w * 0.22f, h * 0.36f),
+        cornerRadius = CornerRadius(1.5.dp.toPx(), 1.5.dp.toPx()),
     )
     drawLine(
         color = MetaToolsTokens.StickerPaper,
-        start = Offset(w * 0.77f, h * 0.59f),
-        end = Offset(w * 0.92f, h * 0.59f),
-        strokeWidth = 0.9.dp.toPx(),
+        start = Offset(w * 0.77f, h * 0.58f),
+        end = Offset(w * 0.92f, h * 0.58f),
+        strokeWidth = 1.2.dp.toPx(),
     )
 }
