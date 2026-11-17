@@ -206,23 +206,26 @@ fun MetaToolsBrowserShell(
 
     val imeBottomPx = WindowInsets.ime.getBottom(density)
     val imeOpen = imeVisibleOverride ?: (imeBottomPx > 0)
-    val dockedForImeOrEdit = crtEditing || imeOpen
+    val hideClusterForImeOrEdit = crtEditing || imeOpen
 
-    val clipText = clipboardTextOverride ?: runCatching { clipboard.getText()?.text }.getOrNull()
-    val hasPgpContent = remember(state.pgp, state.selectionPgp, state.contextMenu, clipText) {
+    // Never read system ClipboardManager passively during composition (avoids unsolicited
+    // Android 13–17 "Trap pasted from your clipboard" system privacy toast). Clipboard is
+    // read ONLY on explicit user action (Paste key or OpenPGP Rocker latch pull), while
+    // honoring [clipboardTextOverride] in deterministic unit tests.
+    val hasPgpContent = remember(state.pgp, state.selectionPgp, state.contextMenu, clipboardTextOverride) {
         detectContextualPgpPresence(
             pgp = state.pgp,
             selectionPgp = state.selectionPgp,
             contextMenu = state.contextMenu,
-            clipboardText = clipText,
+            clipboardText = clipboardTextOverride,
         )
     }
-    val hasArmoredBlock = remember(state.pgp, state.selectionPgp, state.contextMenu, clipText) {
+    val hasArmoredBlock = remember(state.pgp, state.selectionPgp, state.contextMenu, clipboardTextOverride) {
         detectArmoredBlockPresent(
             pgp = state.pgp,
             selectionPgp = state.selectionPgp,
             contextMenu = state.contextMenu,
-            clipboardText = clipText,
+            clipboardText = clipboardTextOverride,
         )
     }
 
@@ -245,7 +248,7 @@ fun MetaToolsBrowserShell(
 
     // 110ms Mechanical Retraction Animations (CubicBezierEasing(0.2, 0.9, 0.3, 1.0), Zero Overshoot)
     val crtRetractOffsetY by animateDpAsState(
-        targetValue = if (retracted && !dockedForImeOrEdit) 80.dp else 0.dp,
+        targetValue = if (retracted && !hideClusterForImeOrEdit) 80.dp else 0.dp,
         animationSpec = tween(
             durationMillis = MetaToolsTokens.POD_SNAP_DURATION_MS,
             easing = MetaToolsTokens.PodSnapEasing,
@@ -264,7 +267,7 @@ fun MetaToolsBrowserShell(
     )
 
     val cornerPodScale by animateFloatAsState(
-        targetValue = if (retracted && !dockedForImeOrEdit) 0.75f else 1.0f,
+        targetValue = if (retracted && !hideClusterForImeOrEdit) 0.75f else 1.0f,
         animationSpec = tween(
             durationMillis = MetaToolsTokens.POD_SNAP_DURATION_MS,
             easing = MetaToolsTokens.PodSnapEasing,
@@ -293,7 +296,7 @@ fun MetaToolsBrowserShell(
             )
 
             // 3. Detached Right-Edge PhotoSoap Side Remote (hidden while CRT editing / IME open)
-            if (!dockedForImeOrEdit) {
+            if (!hideClusterForImeOrEdit) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
@@ -349,7 +352,7 @@ fun MetaToolsBrowserShell(
             }
 
             // 4. Bottom Detached Tri-Pod Cluster (10dp above navigationBarsPadding(), open 12dp gaps!)
-            if (dockedForImeOrEdit) {
+            if (crtEditing) {
                 // Docked 6dp above IME keyboard at 94% viewport width; Tor Orb, PGP Switch & Side Remote hidden!
                 Box(
                     modifier = Modifier
@@ -373,7 +376,7 @@ fun MetaToolsBrowserShell(
                         isImeVisibleOverride = imeVisibleOverride,
                     )
                 }
-            } else {
+            } else if (!imeOpen) {
                 Row(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
@@ -449,9 +452,11 @@ fun MetaToolsBrowserShell(
                             if (onQuickVerifyOrDecrypt != null) {
                                 onQuickVerifyOrDecrypt()
                             } else {
+                                val explicitClipText = clipboardTextOverride
+                                    ?: runCatching { clipboard.getText()?.text }.getOrNull()
                                 triggerDefaultQuickPgpAction(
                                     state = state,
-                                    clipboardText = clipText,
+                                    clipboardText = explicitClipText,
                                     onFieldAction = onFieldAction,
                                     onDecryptArmoredText = onDecryptArmoredText,
                                     onImportKey = onImportKey,

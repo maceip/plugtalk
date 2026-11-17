@@ -1509,7 +1509,13 @@ class TabSessionManager(
                 url: String,
                 method: String,
                 isMainFrame: Boolean,
-            ): Boolean = shouldBlockUrlInternal(tabId, url, isMainFrame, resourceType = -1)
+            ): Boolean = shouldBlockUrlInternal(
+                tabId = tabId,
+                url = url,
+                isMainFrame = isMainFrame,
+                resourceType = -1,
+                topLevelUrl = "",
+            )
 
             override fun shouldBlockRequest(request: CefriumBrowser.ResourceRequest): Boolean {
                 if (request.resourceType == CefriumBrowser.ResourceRequest.TYPE_PING ||
@@ -1523,6 +1529,7 @@ class TabSessionManager(
                     url = request.url ?: "",
                     isMainFrame = request.isMainFrame,
                     resourceType = request.resourceType,
+                    topLevelUrl = request.topLevelUrl ?: request.documentUrl ?: "",
                 )
             }
         })
@@ -1855,15 +1862,22 @@ class TabSessionManager(
         url: String,
         isMainFrame: Boolean,
         resourceType: Int,
+        topLevelUrl: String = "",
     ): Boolean {
         if (url.isBlank()) return true
         if (url == "about:blank") return false
 
-        val pageUrl = sessions[tabId]?.state?.url.orEmpty()
+        // In CEF, `request.isMainFrame` is true for ANY resource (images, favicons, CSS)
+        // originating inside the main frame; only `TYPE_MAIN_FRAME` (or legacy `-1`) is
+        // an actual top-level document navigation!
+        val isTopLevelNavigation = isMainFrame && (
+            resourceType < 0 || resourceType == CefriumBrowser.ResourceRequest.TYPE_MAIN_FRAME
+            )
+        val pageUrl = topLevelUrl.ifBlank { sessions[tabId]?.state?.url.orEmpty() }
         val lanDecision = lanAccessController.evaluateRequest(
             pageUrl = pageUrl,
             targetUrl = url,
-            isMainFrame = isMainFrame,
+            isMainFrame = isTopLevelNavigation,
             hiddenServiceOnly = _hiddenServiceOnly.value,
             hasOsPermission = lanAccessController.hasLocalNetworkPermission(context),
         )
@@ -1871,7 +1885,7 @@ class TabSessionManager(
             LanAccessController.LanDecision.ALLOW_LAN -> return false
 
             LanAccessController.LanDecision.PROMPT_OS_PERMISSION -> {
-                if (isMainFrame) {
+                if (isTopLevelNavigation) {
                     lastConsentInterceptedUrl = url
                     mainHandler.post { onLocalNetworkPermissionRequired(url) }
                 }
@@ -1881,7 +1895,7 @@ class TabSessionManager(
             LanAccessController.LanDecision.BLOCKED_CROSS_ORIGIN_LAN_PROBE,
             LanAccessController.LanDecision.BLOCKED_HIDDEN_SERVICE_ONLY,
             -> {
-                if (isMainFrame || resourceType == CefriumBrowser.ResourceRequest.TYPE_SUB_FRAME) {
+                if (isTopLevelNavigation || resourceType == CefriumBrowser.ResourceRequest.TYPE_SUB_FRAME) {
                     val reason = if (lanDecision == LanAccessController.LanDecision.BLOCKED_HIDDEN_SERVICE_ONLY) {
                         "Local network request blocked in Hidden Service Only mode"
                     } else {
@@ -1905,7 +1919,7 @@ class TabSessionManager(
 
         // Fail closed before Arti binds its local SOCKS5 proxy.
         if (_activeSocksAddr.value.isBlank() && TrapApplication.isEngineReady) {
-            if (isMainFrame) {
+            if (isTopLevelNavigation) {
                 mainHandler.post {
                     onUrlBlocked(tabId, url, "Blocked until Tor SOCKS5 proxy is bound")
                 }
@@ -1916,7 +1930,7 @@ class TabSessionManager(
         val decision = evaluateUrlPolicy(url, _hiddenServiceOnly.value)
         if (!decision.allowed) {
             if (decision.requiresClearnetConsent && !_hiddenServiceOnly.value) {
-                if (isMainFrame) {
+                if (isTopLevelNavigation) {
                     lastConsentInterceptedUrl = url
                     val normalized = decision.normalizedUrl.ifBlank { url }
                     val host = decision.host.ifBlank {
@@ -1930,12 +1944,19 @@ class TabSessionManager(
                     }
                     return true
                 }
-                // Non-main-frame subresources flow to Trap's local Socks5Server, which
-                // drops Chromium Google background noise and holds legitimate clearnet
-                // subresources in `pendingClearnetHost` for live consent & resume.
+                // Enforce strict .onion subresource realm isolation: never allow a .onion
+                // document to pull unconsented clearnet subresources (e.g. external favicons).
+                val pendingNav = sessions[tabId]?.pendingNavigationUrl.orEmpty()
+                val sessionUrl = sessions[tabId]?.state?.url.orEmpty()
+                if (isOnionAddress(topLevelUrl) || isOnionAddress(sessionUrl) || isOnionAddress(pendingNav)) {
+                    return true
+                }
+                // Non-main-frame subresources on clearnet pages flow to Trap's local
+                // Socks5Server, which drops Chromium Google background noise and holds
+                // legitimate clearnet subresources in `pendingClearnetHost` for live consent.
                 return false
             }
-            if (isMainFrame || resourceType == CefriumBrowser.ResourceRequest.TYPE_SUB_FRAME) {
+            if (isTopLevelNavigation || resourceType == CefriumBrowser.ResourceRequest.TYPE_SUB_FRAME) {
                 mainHandler.post {
                     updateTabState(tabId) {
                         it.copy(

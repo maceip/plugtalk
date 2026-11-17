@@ -63,6 +63,7 @@ import dev.onionvault.ui.TrapTheme
 import dev.onionvault.ui.TrapThemeFamily
 import dev.onionvault.ui.TrapThemeMode
 import dev.onionvault.ui.isBlankOrStartUrl
+import dev.onionvault.ui.pods.isOnionHostUrl
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -857,7 +858,9 @@ class MainActivity : FragmentActivity() {
 
     private suspend fun pollTorStatusOnce() {
         if (!OvNative.isLoaded) return
-        val currentUrl = uiState.url
+        val currentUrl = (if (controllersReady) tabSessionManager.activeTab()?.url else null)
+            ?.takeIf { it.isNotBlank() }
+            ?: uiState.url
         val snapshot = withContext(Dispatchers.IO) {
             val json = runCatching { OvNative.nativeTorStatusJson(currentUrl) }.getOrDefault("")
             val parsed = OvNative.parseTorStatus(json)
@@ -882,8 +885,35 @@ class MainActivity : FragmentActivity() {
         }
 
         val pendingHost = snapshot.pendingClearnetHost.trim()
-        val updatedPrompt = if (uiState.clearnetPrompt == null &&
+        val liveTabUrl = (if (controllersReady) tabSessionManager.activeTab()?.url else null)
+            ?.takeIf { it.isNotBlank() }
+            ?: uiState.url
+        val onOnionMainFrame = isOnionHostUrl(currentUrl) || isOnionHostUrl(liveTabUrl)
+        val staleSubresourceHost = if (onOnionMainFrame &&
+            uiState.clearnetPrompt != null &&
+            uiState.clearnetPrompt?.pendingUrl == null
+        ) {
+            uiState.clearnetPrompt?.host
+        } else {
+            null
+        }
+        if (onOnionMainFrame && (pendingHost.isNotEmpty() || !staleSubresourceHost.isNullOrBlank())) {
+            // Never allow or nag for passive cross-realm clearnet subresources/preconnects
+            // (e.g. clearnet favicons embedded inside DuckDuckGo .onion HTML); user-initiated
+            // clearnet link clicks still prompt via [onClearnetConsentRequired] (`pendingUrl != null`).
+            withContext(Dispatchers.IO) {
+                if (pendingHost.isNotEmpty()) {
+                    runCatching { OvNative.nativeDenyClearnet(pendingHost) }
+                }
+                if (!staleSubresourceHost.isNullOrBlank() && staleSubresourceHost != pendingHost) {
+                    runCatching { OvNative.nativeDenyClearnet(staleSubresourceHost) }
+                }
+            }
+        }
+        val basePrompt = if (staleSubresourceHost != null) null else uiState.clearnetPrompt
+        val updatedPrompt = if (basePrompt == null &&
             pendingHost.isNotEmpty() &&
+            !onOnionMainFrame &&
             !snapshot.hiddenServiceOnly
         ) {
             ClearnetPromptState(
@@ -892,7 +922,7 @@ class MainActivity : FragmentActivity() {
                 suggestedPattern = OvNative.suggestGlob(pendingHost),
             )
         } else {
-            uiState.clearnetPrompt
+            basePrompt
         }
 
         uiState = uiState.copy(

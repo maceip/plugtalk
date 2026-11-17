@@ -116,7 +116,7 @@ fun HardwareModalFrame(
 
     Box(
         modifier = modifier.fillMaxSize(),
-        contentAlignment = Alignment.BottomCenter,
+        contentAlignment = Alignment.Center,
     ) {
         // Non-blurred dark scrim (tap outside chassis dismisses)
         Box(
@@ -491,7 +491,15 @@ fun ClearnetConsentHardwarePod(
                 keyboardType = KeyboardType.Uri,
                 testTag = "clearnet_pattern_input",
             )
+        }
 
+        Spacer(Modifier.height(10.dp))
+
+        // Pinned Hardware Action Footer (always visible above IME soft keyboard)
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             // Primary 44dp CTA: Allow for 3 days (259,200s)
             HardwareBezelButton(
                 text = "Allow for 3 days",
@@ -1013,25 +1021,6 @@ fun KeyringHardwarePod(
                         singleLine = true,
                         testTag = "keygen_passphrase_input",
                     )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                    ) {
-                        HardwareBezelButton(
-                            text = "Generate Keypair",
-                            primary = true,
-                            enabled = genUserId.isNotBlank(),
-                            onClick = {
-                                val uid = genUserId.trim()
-                                val pass = genPassphrase
-                                genUserId = ""
-                                genPassphrase = ""
-                                onGenerateKey(uid, pass)
-                                section = HardwareKeyringSection.Keys
-                            },
-                            modifier = Modifier.testTag("keygen_submit_button"),
-                        )
-                    }
                 }
 
                 HardwareKeyringSection.Import -> {
@@ -1071,26 +1060,51 @@ fun KeyringHardwarePod(
                         singleLine = true,
                         testTag = "keyimport_passphrase_input",
                     )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                    ) {
-                        HardwareBezelButton(
-                            text = "Import Key",
-                            primary = true,
-                            enabled = importArmored.isNotBlank(),
-                            onClick = {
-                                val raw = importArmored.trim()
-                                val pass = importPassphrase
-                                importArmored = ""
-                                importPassphrase = ""
-                                onImportKey(raw, pass)
-                                section = HardwareKeyringSection.Keys
-                            },
-                            modifier = Modifier.testTag("keyimport_submit_button"),
-                        )
-                    }
                 }
+            }
+        }
+
+        if (section == HardwareKeyringSection.Generate) {
+            Spacer(Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                HardwareBezelButton(
+                    text = "Generate Keypair",
+                    primary = true,
+                    enabled = genUserId.isNotBlank(),
+                    onClick = {
+                        val uid = genUserId.trim()
+                        val pass = genPassphrase
+                        genUserId = ""
+                        genPassphrase = ""
+                        onGenerateKey(uid, pass)
+                        section = HardwareKeyringSection.Keys
+                    },
+                    modifier = Modifier.testTag("keygen_submit_button"),
+                )
+            }
+        } else if (section == HardwareKeyringSection.Import) {
+            Spacer(Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                HardwareBezelButton(
+                    text = "Import Key",
+                    primary = true,
+                    enabled = importArmored.isNotBlank(),
+                    onClick = {
+                        val raw = importArmored.trim()
+                        val pass = importPassphrase
+                        importArmored = ""
+                        importPassphrase = ""
+                        onImportKey(raw, pass)
+                        section = HardwareKeyringSection.Keys
+                    },
+                    modifier = Modifier.testTag("keyimport_submit_button"),
+                )
             }
         }
     }
@@ -1147,20 +1161,21 @@ fun PassphraseUnlockHardwarePod(
                 singleLine = true,
                 testTag = "decrypt_passphrase_input",
             )
+        }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-            ) {
-                HardwareBezelButton(text = "Cancel", onClick = onDismiss)
-                HardwareBezelButton(
-                    text = "Decrypt",
-                    primary = true,
-                    enabled = passphrase.isNotEmpty(),
-                    onClick = { onSubmitPassphrase(passphrase) },
-                    modifier = Modifier.testTag("decrypt_passphrase_submit"),
-                )
-            }
+        Spacer(Modifier.height(10.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+        ) {
+            HardwareBezelButton(text = "Cancel", onClick = onDismiss)
+            HardwareBezelButton(
+                text = "Decrypt",
+                primary = true,
+                enabled = passphrase.isNotEmpty(),
+                onClick = { onSubmitPassphrase(passphrase) },
+                modifier = Modifier.testTag("decrypt_passphrase_submit"),
+            )
         }
     }
 }

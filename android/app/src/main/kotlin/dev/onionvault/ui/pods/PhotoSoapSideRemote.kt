@@ -367,7 +367,7 @@ private fun ExpandedRemoteFace(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(max = 468.dp)
+            .heightIn(max = 528.dp)
             .padding(top = 10.dp, bottom = 8.dp),
     ) {
         // Engraved Hardware Header Strip (1 primary label + 1 close button -> <= 2:1 density)

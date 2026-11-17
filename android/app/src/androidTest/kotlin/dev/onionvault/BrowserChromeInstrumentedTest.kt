@@ -18,6 +18,7 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
+import androidx.test.espresso.Espresso
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.onionvault.ui.TrapPreferences
 import dev.onionvault.ui.TrapThemeFamily
@@ -148,6 +149,8 @@ class BrowserChromeInstrumentedTest {
 
             composeRule.onNodeWithText("Generate").performClick()
             composeRule.onNodeWithTag("keygen_userid_input").performTextInput("E2E Test <e2e@onion>")
+            Espresso.closeSoftKeyboard()
+            composeRule.waitForIdle()
             composeRule.onNodeWithTag("keygen_submit_button").performClick()
 
             composeRule.waitUntil(timeoutMillis = 15_000L) {
@@ -218,6 +221,8 @@ class BrowserChromeInstrumentedTest {
                 }
                 composeRule.onNodeWithTag("clearnet_pattern_input")
                     .performTextReplacement("*example.org")
+                Espresso.closeSoftKeyboard()
+                composeRule.waitForIdle()
                 composeRule.onNodeWithTag("clearnet_allow_3d_button").performClick()
                 composeRule.waitUntil(timeoutMillis = 10_000L) {
                     OvNative.parseClearnetRules(OvNative.nativeListClearnetRulesJson())
@@ -271,6 +276,8 @@ class BrowserChromeInstrumentedTest {
         composeRule.onNodeWithTag("keyring_sheet").assertIsDisplayed()
         composeRule.onNodeWithText("Generate").performClick()
         composeRule.onNodeWithTag("keygen_userid_input").performTextInput("ZeroJS Signer <zerojs@onion>")
+        Espresso.closeSoftKeyboard()
+        composeRule.waitForIdle()
         composeRule.onNodeWithTag("keygen_submit_button").performClick()
 
         composeRule.waitUntil(timeoutMillis = 15_000L) {
