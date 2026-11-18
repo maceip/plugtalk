@@ -6,6 +6,7 @@ import android.content.ContextWrapper
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.view.ActionMode
 import android.view.Menu
@@ -24,6 +25,7 @@ import dev.onionvault.platform.LanAccessController
 import dev.onionvault.platform.MediaDisplayNormalizer
 import dev.onionvault.platform.ScreenRecordingGuard
 import dev.onionvault.platform.TouchpadPointerBridge
+import dev.onionvault.ui.TrustedOnionDirectory
 import dev.onionvault.ui.isBlankOrStartUrl
 import java.util.UUID
 import kotlin.math.abs
@@ -130,6 +132,13 @@ class TabSessionManager(
         var overrideDisplayUrl: String? = null,
         var pendingNavigationUrl: String? = null,
         var hadErrorInCurrentLoad: Boolean = false,
+        var hasStartPageOrigin: Boolean = false,
+        var onionOriginalTargetUrl: String? = null,
+        var onionNavStartedElapsedMs: Long = 0L,
+        var onionRetryCount: Int = 0,
+        var onionAutoRetryScheduled: Boolean = false,
+        var lastBrowserLoadingState: Boolean = false,
+        var pendingRetryRunnable: Runnable? = null,
     )
 
     private inner class TouchGateFrameLayout(
@@ -319,6 +328,98 @@ class TabSessionManager(
 
         const val SCROLL_RETRACT_THRESHOLD_DP: Float = 12f
         const val SCROLL_RESTORE_THRESHOLD_DP: Float = 10f
+
+        const val ERR_TIMED_OUT: Int = -7
+        const val ERR_CONNECTION_CLOSED: Int = -100
+        const val ERR_CONNECTION_RESET: Int = -101
+        const val ERR_CONNECTION_TIMED_OUT: Int = -118
+        const val ERR_SOCKS_CONNECTION_FAILED: Int = -120
+        const val ERR_PROXY_CONNECTION_FAILED: Int = -130
+        const val ERR_EMPTY_RESPONSE: Int = -324
+
+        const val MAX_ONION_AUTO_RETRIES: Int = 3
+        const val MAX_ONION_RETRY_ELAPSED_MS: Long = 110_000L
+        const val ONION_AUTO_RETRY_DELAY_MS: Long = 250L
+
+        fun isTransientOnionLoadError(errorCode: Int): Boolean = when (errorCode) {
+            ERR_TIMED_OUT,
+            ERR_CONNECTION_CLOSED,
+            ERR_CONNECTION_RESET,
+            ERR_CONNECTION_TIMED_OUT,
+            ERR_SOCKS_CONNECTION_FAILED,
+            ERR_PROXY_CONNECTION_FAILED,
+            ERR_EMPTY_RESPONSE,
+            -> true
+            else -> false
+        }
+
+        internal fun resolveOnionRetryUrl(
+            originalTargetUrl: String?,
+            failedUrl: String,
+        ): String {
+            val orig = originalTargetUrl?.trim().orEmpty()
+            if (orig.startsWith("http://", ignoreCase = true) &&
+                failedUrl.startsWith("https://", ignoreCase = true)
+            ) {
+                val origHost = TrustedOnionDirectory.extractHost(orig)
+                val failedHost = TrustedOnionDirectory.extractHost(failedUrl)
+                if (origHost.isNotEmpty() && origHost == failedHost) {
+                    return orig
+                }
+            }
+            return failedUrl
+        }
+
+        /**
+         * Selects the destination index in Chromium's navigation history when stepping Back,
+         * skipping transient `chrome-error://` frames and duplicate same-`.onion`-service
+         * `HttpsUpgrades` (`https://foo.onion/` -> `http://foo.onion/`) or canonical apex/www
+         * redirects sharing the exact same normalized path + query.
+         *
+         * Returns `-1` when all preceding entries are transient artifacts with no valid prior page.
+         */
+        @VisibleForTesting
+        internal fun selectBackTargetIndex(
+            entryUrls: List<String>,
+            currentIdx: Int,
+            currentStateUrl: String,
+        ): Int {
+            if (currentIdx <= 0 || currentIdx >= entryUrls.size) return -1
+            val currentUrl = entryUrls[currentIdx].trim().ifEmpty { currentStateUrl.trim() }
+            for (idx in (currentIdx - 1) downTo 0) {
+                val candidate = entryUrls[idx].trim()
+                if (candidate.startsWith("chrome-error://", ignoreCase = true)) {
+                    continue
+                }
+                if (!isBlankOrStartUrl(candidate) &&
+                    isTransientSameOnionEntry(candidate, currentUrl)
+                ) {
+                    continue
+                }
+                return idx
+            }
+            return -1
+        }
+
+        private fun isTransientSameOnionEntry(candidateUrl: String, currentUrl: String): Boolean {
+            if (candidateUrl.isBlank() || currentUrl.isBlank()) return false
+            val firstRoot = TrustedOnionDirectory.extractRootV3OnionLabel(
+                TrustedOnionDirectory.extractHost(candidateUrl),
+            ) ?: return false
+            val secondRoot = TrustedOnionDirectory.extractRootV3OnionLabel(
+                TrustedOnionDirectory.extractHost(currentUrl),
+            ) ?: return false
+            if (firstRoot != secondRoot) return false
+            return normalizeOnionPathAndQuery(candidateUrl) == normalizeOnionPathAndQuery(currentUrl)
+        }
+
+        private fun normalizeOnionPathAndQuery(rawUrl: String): String {
+            val trimmed = rawUrl.trim()
+            val parsed = runCatching { java.net.URI(trimmed) }.getOrNull() ?: return trimmed
+            val cleanPath = (parsed.rawPath ?: "/").trim().trimEnd('/').ifEmpty { "/" }
+            val cleanQuery = parsed.rawQuery?.takeIf { it.isNotEmpty() }
+            return if (cleanQuery != null) "$cleanPath?$cleanQuery" else cleanPath
+        }
 
         /**
          * Normalizes user-entered address bar text:
@@ -580,6 +681,9 @@ class TabSessionManager(
     }
 
     @VisibleForTesting
+    internal var elapsedRealtimeClock: () -> Long = SystemClock::elapsedRealtime
+
+    @VisibleForTesting
     internal fun createTouchGateForTest(tabId: String): FrameLayout =
         TouchGateFrameLayout(context, tabId)
 
@@ -677,6 +781,9 @@ class TabSessionManager(
             surfaceWrapper = wrapper,
             state = initialState,
             pendingNavigationUrl = startUrl.takeIf { it != "about:blank" },
+            hasStartPageOrigin = startUrl == "about:blank" && loadInitialBlank,
+            onionOriginalTargetUrl = startUrl.takeIf { initialDecision.isOnion },
+            onionNavStartedElapsedMs = if (initialDecision.isOnion) elapsedRealtimeClock() else 0L,
         )
         sessions[tabId] = managed
 
@@ -925,10 +1032,24 @@ class TabSessionManager(
             )
         }
 
+        cancelOnionAutoRetry(managed, resetBudget = true)
+        if (normalized == "about:blank" || isBlankOrStartUrl(managed.state.url)) {
+            managed.hasStartPageOrigin = true
+        }
+        if (decision.isOnion) {
+            managed.onionOriginalTargetUrl = normalized
+            managed.onionNavStartedElapsedMs = elapsedRealtimeClock()
+        }
+
         managed.overrideDisplayUrl = null
         managed.pendingNavigationUrl = normalized.takeIf { it != "about:blank" }
         if (targetTabId == _activeTabId.value) {
             _podsRetracted.value = false
+        }
+        val canReturnBack = if (normalized == "about:blank") {
+            browser?.canGoBack() == true
+        } else {
+            (browser?.canGoBack() == true) || managed.hasStartPageOrigin
         }
         updateTabState(targetTabId) {
             it.copy(
@@ -936,6 +1057,7 @@ class TabSessionManager(
                 title = if (normalized == "about:blank") "New Tab" else it.title,
                 isLoading = normalized != "about:blank",
                 loadProgress = if (normalized == "about:blank") 100 else 10,
+                canGoBack = canReturnBack,
                 isOnion = decision.isOnion,
                 lastBlockedUrl = null,
                 lastBlockReason = null,
@@ -1018,6 +1140,11 @@ class TabSessionManager(
             onSecurityNotice("Tor SOCKS5 tunnel is still initializing")
             return
         }
+        cancelOnionAutoRetry(managed, resetBudget = true)
+        if (isOnionAddress(managed.state.url)) {
+            managed.onionOriginalTargetUrl = managed.state.url
+            managed.onionNavStartedElapsedMs = elapsedRealtimeClock()
+        }
         val browserUrl = managed.browser?.url?.trim().orEmpty()
         if (managed.state.url != "about:blank" &&
             (browserUrl.isEmpty() || browserUrl == "about:blank" || browserUrl.startsWith("chrome-error://"))
@@ -1034,6 +1161,7 @@ class TabSessionManager(
 
     fun stopLoading(tabId: String? = _activeTabId.value) {
         val managed = tabId?.let { sessions[it] } ?: return
+        cancelOnionAutoRetry(managed, resetBudget = true)
         managed.browser?.stopLoading()
         updateTabState(managed.id) {
             it.copy(isLoading = false, loadProgress = 100)
@@ -1042,14 +1170,103 @@ class TabSessionManager(
 
     fun goBack(tabId: String? = _activeTabId.value): Boolean {
         val managed = tabId?.let { sessions[it] } ?: return false
-        val browser = managed.browser ?: return false
-        if (!browser.canGoBack()) return false
-        if (managed.id == _activeTabId.value) {
-            _podsRetracted.value = false
+        val hadActiveRetry = managed.onionAutoRetryScheduled || managed.onionRetryCount > 0
+        cancelOnionAutoRetry(managed, resetBudget = true)
+        managed.pendingNavigationUrl = null
+        managed.overrideDisplayUrl = null
+        managed.hadErrorInCurrentLoad = false
+
+        val browser = managed.browser
+        if (browser != null && browser.canGoBack()) {
+            val entries = runCatching { browser.navigationEntries }.getOrNull()
+            val currentIdx = entries?.indexOfFirst { it.current } ?: -1
+            val targetIdx = if (entries != null && currentIdx > 0) {
+                selectBackTargetIndex(
+                    entryUrls = entries.map { it.url.orEmpty() },
+                    currentIdx = currentIdx,
+                    currentStateUrl = managed.state.url,
+                )
+            } else {
+                -2
+            }
+
+            if (targetIdx != -1) {
+                if (managed.id == _activeTabId.value) {
+                    _podsRetracted.value = false
+                    if (hadActiveRetry) {
+                        onSecurityNotice("")
+                    }
+                }
+                if (managed.state.isLoading) {
+                    runCatching { browser.stopLoading() }
+                }
+                val targetEntryUrl = if (entries != null && targetIdx >= 0) {
+                    entries[targetIdx].url?.trim().orEmpty()
+                } else {
+                    ""
+                }
+                val returningToStartPage = isBlankOrStartUrl(targetEntryUrl) && targetIdx == 0
+                if (returningToStartPage) {
+                    backStackManager.clearTab(managed.id)
+                    updateTabState(managed.id) {
+                        it.copy(
+                            url = "about:blank",
+                            title = "New Tab",
+                            isLoading = false,
+                            loadProgress = 100,
+                            canGoBack = false,
+                            canGoForward = true,
+                            isOnion = false,
+                            isFullscreenVideo = false,
+                            videoWidth = 0,
+                            videoHeight = 0,
+                        )
+                    }
+                } else {
+                    backStackManager.popNewest(managed.id)
+                }
+                val steps = if (targetIdx >= 0 && currentIdx > targetIdx) {
+                    currentIdx - targetIdx
+                } else {
+                    1
+                }
+                navigateBrowserToHistoryIndex(
+                    browser = browser,
+                    targetIdx = targetIdx,
+                    steps = steps,
+                    fallbackUrl = if (returningToStartPage) "about:blank" else targetEntryUrl,
+                )
+                return true
+            }
         }
-        backStackManager.popNewest(managed.id)
-        browser.goBack()
-        return true
+
+        if (managed.hasStartPageOrigin && !isBlankOrStartUrl(managed.state.url)) {
+            if (managed.id == _activeTabId.value) {
+                _podsRetracted.value = false
+                if (hadActiveRetry) {
+                    onSecurityNotice("")
+                }
+            }
+            runCatching { browser?.stopLoading() }
+            backStackManager.clearTab(managed.id)
+            updateTabState(managed.id) {
+                it.copy(
+                    url = "about:blank",
+                    title = "New Tab",
+                    isLoading = false,
+                    loadProgress = 100,
+                    canGoBack = false,
+                    isOnion = false,
+                    isFullscreenVideo = false,
+                    videoWidth = 0,
+                    videoHeight = 0,
+                )
+            }
+            runCatching { browser?.loadUrl("about:blank") }
+            return true
+        }
+
+        return false
     }
 
     fun goForward(tabId: String? = _activeTabId.value): Boolean {
@@ -1641,6 +1858,31 @@ class TabSessionManager(
         })
 
         browser.setLoadHandler(object : CefriumLoadHandler {
+            override fun onLoadStart(url: String?) {
+                val cleanUrl = url?.trim().orEmpty()
+                if (cleanUrl.isEmpty() ||
+                    cleanUrl == "about:blank" ||
+                    cleanUrl.startsWith("chrome-error://")
+                ) {
+                    return
+                }
+                mainHandler.post {
+                    val managed = sessions[tabId] ?: return@post
+                    managed.lastBrowserLoadingState = true
+                    if (isOnionAddress(cleanUrl)) {
+                        if (managed.onionAutoRetryScheduled) {
+                            managed.onionAutoRetryScheduled = false
+                        } else if (managed.onionNavStartedElapsedMs == 0L ||
+                            !sameOnionService(managed.onionOriginalTargetUrl, cleanUrl)
+                        ) {
+                            managed.onionOriginalTargetUrl = cleanUrl
+                            managed.onionNavStartedElapsedMs = elapsedRealtimeClock()
+                            managed.onionRetryCount = 0
+                        }
+                    }
+                }
+            }
+
             override fun onLoadError(errorCode: Int, errorText: String?, failedUrl: String?) {
                 // Ignore ERR_ABORTED (-3), which occurs during normal stop/redirect.
                 if (errorCode == -3) return
@@ -1654,18 +1896,15 @@ class TabSessionManager(
                     return
                 }
                 mainHandler.post {
-                    sessions[tabId]?.hadErrorInCurrentLoad = true
-                    updateTabState(tabId) {
-                        it.copy(isLoading = false, loadProgress = 100)
-                    }
-                    if (tabId == _activeTabId.value &&
-                        !failedUrl.isNullOrBlank() &&
-                        failedUrl != "about:blank"
-                    ) {
-                        onSecurityNotice(
-                            "Navigation failed (${errorText ?: "code $errorCode"}): $failedUrl",
-                        )
-                    }
+                    handleLoadErrorOnMainThread(
+                        tabId = tabId,
+                        errorCode = errorCode,
+                        errorText = errorText,
+                        failedUrl = failedUrl,
+                        reloadUrl = { retryTarget ->
+                            sessions[tabId]?.browser?.loadUrl(retryTarget)
+                        },
+                    )
                 }
             }
         })
@@ -1694,7 +1933,9 @@ class TabSessionManager(
                         rawSafeUrl.startsWith("chrome-error://") ->
                             pendingUrl ?: managed?.state?.url?.takeIf { it.isNotBlank() } ?: "about:blank"
                         else -> {
-                            if (rawSafeUrl != "about:blank") {
+                            if (rawSafeUrl == "about:blank") {
+                                managed?.hasStartPageOrigin = true
+                            } else {
                                 managed?.pendingNavigationUrl = null
                             }
                             rawSafeUrl
@@ -1705,10 +1946,19 @@ class TabSessionManager(
                     updateTabState(tabId) { state ->
                         val urlChanged = state.url != safeUrl
                         activeUrlChanged = urlChanged || isBlankOrStartUrl(safeUrl)
+                        val computedBack = if (managed != null) {
+                            if (isBlankOrStartUrl(safeUrl)) {
+                                browser.canGoBack()
+                            } else {
+                                browser.canGoBack() || managed.hasStartPageOrigin
+                            }
+                        } else {
+                            browser.canGoBack()
+                        }
                         state.copy(
                             url = safeUrl,
                             title = if (safeUrl == "about:blank") "New Tab" else state.title.ifBlank { displayTitleForUrl(safeUrl) },
-                            canGoBack = browser.canGoBack(),
+                            canGoBack = computedBack,
                             canGoForward = canNavigateForward(browser),
                             isOnion = isOnion,
                             isMediaPausedByUser = if (urlChanged) false else state.isMediaPausedByUser,
@@ -1746,38 +1996,57 @@ class TabSessionManager(
                 canGoForward: Boolean,
             ) {
                 mainHandler.post {
+                    val managed = sessions[tabId]
+                    managed?.lastBrowserLoadingState = isLoading
+                    if (!isLoading && managed?.onionAutoRetryScheduled == true) {
+                        // Suppress transient isLoading=false while the 250ms .onion rendezvous
+                        // auto-retry is queued so the UI never flickers out of loading state.
+                        return@post
+                    }
                     if (isLoading) {
-                        sessions[tabId]?.hadErrorInCurrentLoad = false
+                        managed?.hadErrorInCurrentLoad = false
                     }
                     val playingAudio = runCatching { browser.isPlayingAudio }.getOrDefault(false)
+                    val computedBack = if (managed != null) {
+                        computeCanGoBack(managed, canGoBack)
+                    } else {
+                        canGoBack
+                    }
                     updateTabState(tabId) {
                         it.copy(
                             isLoading = isLoading,
                             loadProgress = if (isLoading) it.loadProgress.coerceAtLeast(15) else 100,
-                            canGoBack = canGoBack,
+                            canGoBack = computedBack,
                             canGoForward = canGoForward,
                             isPlayingAudio = playingAudio || it.isPlayingAudio,
                         )
                     }
                     if (!isLoading) {
-                        val currentUrl = sessions[tabId]?.overrideDisplayUrl ?: browser.url.orEmpty()
-                        if (sessions[tabId]?.hadErrorInCurrentLoad == false &&
+                        val currentUrl = managed?.overrideDisplayUrl ?: browser.url.orEmpty()
+                        if (managed?.hadErrorInCurrentLoad == false &&
                             currentUrl.isNotBlank() &&
                             currentUrl != "about:blank" &&
                             !currentUrl.startsWith("chrome-error://")
                         ) {
+                            val hadRetries = managed.onionRetryCount > 0
+                            managed.onionRetryCount = 0
+                            managed.onionNavStartedElapsedMs = 0L
+                            managed.onionAutoRetryScheduled = false
+                            if (hadRetries && tabId == _activeTabId.value) {
+                                onSecurityNotice("")
+                            }
                             onNavigationRecovered(tabId)
                         }
                         cdpController.attachAndScan(tabId, browser, currentUrl)
                         probePrimaryVideoBounds(tabId, browser)
                         if (currentUrl.isNotBlank() && currentUrl != "about:blank") {
                             mainHandler.postDelayed({
-                                val managed = sessions[tabId] ?: return@postDelayed
-                                val liveBrowser = managed.browser ?: return@postDelayed
+                                val currentManaged = sessions[tabId] ?: return@postDelayed
+                                val liveBrowser = currentManaged.browser ?: return@postDelayed
                                 backStackManager.capture(
                                     tabId = tabId,
                                     browser = liveBrowser,
-                                    domHtml = managed.latestDomHtml,
+                                    domHtml = currentManaged.latestDomHtml,
                                     nodes = cdpController.nodesForTab(tabId),
                                 )
                             }, 180L)
@@ -2010,8 +2279,312 @@ class TabSessionManager(
         return OvNative.parseUrlPolicy(json)
     }
 
-    private fun isOnionAddress(url: String): Boolean =
-        evaluateUrlPolicy(url, hiddenServiceOnly = false).isOnion
+    private fun isOnionAddress(url: String): Boolean {
+        if (OvNative.isLoaded) {
+            return evaluateUrlPolicy(url, hiddenServiceOnly = false).isOnion
+        }
+        val host = TrustedOnionDirectory.extractHost(url)
+        return host.isNotEmpty() && TrustedOnionDirectory.extractRootV3OnionLabel(host) != null
+    }
+
+    private fun sameOnionService(firstUrl: String?, secondUrl: String?): Boolean {
+        if (firstUrl.isNullOrBlank() || secondUrl.isNullOrBlank()) return false
+        val firstRoot = TrustedOnionDirectory.extractRootV3OnionLabel(
+            TrustedOnionDirectory.extractHost(firstUrl),
+        ) ?: return false
+        val secondRoot = TrustedOnionDirectory.extractRootV3OnionLabel(
+            TrustedOnionDirectory.extractHost(secondUrl),
+        ) ?: return false
+        return firstRoot == secondRoot
+    }
+
+    private fun computeCanGoBack(
+        managed: ManagedTab,
+        browserCanGoBack: Boolean? = null,
+    ): Boolean {
+        val rawBrowserBack = browserCanGoBack ?: (managed.browser?.canGoBack() == true)
+        if (isBlankOrStartUrl(managed.state.url)) {
+            return rawBrowserBack
+        }
+        return rawBrowserBack || managed.hasStartPageOrigin
+    }
+
+    private fun cancelOnionAutoRetry(
+        managed: ManagedTab,
+        resetBudget: Boolean = true,
+    ) {
+        managed.pendingRetryRunnable?.let { mainHandler.removeCallbacks(it) }
+        managed.pendingRetryRunnable = null
+        managed.onionAutoRetryScheduled = false
+        if (resetBudget) {
+            managed.onionRetryCount = 0
+            managed.onionNavStartedElapsedMs = 0L
+            managed.onionOriginalTargetUrl = null
+        }
+    }
+
+    private fun blankErrorFrameViaZeroJsCdp(browser: CefriumBrowser?) {
+        if (browser == null) return
+        val currentBrowserUrl = runCatching { browser.url.orEmpty() }.getOrDefault("")
+        if (!currentBrowserUrl.startsWith("chrome-error://")) return
+        browser.executeDevToolsMethod("Page.getFrameTree", "{}") { treeOk, treeJson ->
+            val frameId = if (treeOk && !treeJson.isNullOrBlank()) {
+                runCatching {
+                    JSONObject(treeJson)
+                        .getJSONObject("frameTree")
+                        .getJSONObject("frame")
+                        .getString("id")
+                }.getOrNull()
+            } else {
+                null
+            }
+            if (!frameId.isNullOrBlank()) {
+                val blankHtml = "<!doctype html><html style=\"background:#08090C\"><body></body></html>"
+                val params = JSONObject()
+                    .put("frameId", frameId)
+                    .put("html", blankHtml)
+                    .toString()
+                browser.executeDevToolsMethod("Page.setDocumentContent", params) { _, _ -> }
+            }
+        }
+    }
+
+    @VisibleForTesting
+    internal fun beginOnionNavigationForTest(
+        tabId: String,
+        onionUrl: String,
+        fromStartPage: Boolean = true,
+    ) {
+        val managed = sessions[tabId] ?: return
+        cancelOnionAutoRetry(managed, resetBudget = true)
+        managed.hasStartPageOrigin = fromStartPage
+        managed.onionOriginalTargetUrl = onionUrl
+        managed.onionNavStartedElapsedMs = elapsedRealtimeClock()
+        managed.pendingNavigationUrl = onionUrl
+        updateTabState(tabId) {
+            it.copy(
+                url = onionUrl,
+                title = displayTitleForUrl(onionUrl),
+                isLoading = true,
+                loadProgress = 15,
+                canGoBack = fromStartPage,
+                isOnion = true,
+            )
+        }
+    }
+
+    @VisibleForTesting
+    internal fun handleLoadErrorOnMainThread(
+        tabId: String,
+        errorCode: Int,
+        errorText: String?,
+        failedUrl: String?,
+        reloadUrl: (String) -> Unit,
+    ) {
+        if (errorCode == -3) return
+        val managed = sessions[tabId] ?: return
+        if (isBlankOrStartUrl(managed.state.url) && managed.pendingNavigationUrl == null) {
+            // Ignore late error callbacks arriving from a cancelled navigation after returning to StartPage.
+            return
+        }
+        val candidateUrl = failedUrl?.trim()
+            ?.takeIf { it.isNotEmpty() && !it.startsWith("chrome-error://") }
+            ?: managed.pendingNavigationUrl
+            ?: managed.state.url
+
+        val isOnionTarget = isOnionAddress(candidateUrl) ||
+            isOnionAddress(managed.onionOriginalTargetUrl.orEmpty()) ||
+            managed.state.isOnion
+
+        val startedMs = managed.onionNavStartedElapsedMs
+            .takeIf { it > 0L }
+            ?: elapsedRealtimeClock().also { managed.onionNavStartedElapsedMs = it }
+        val elapsedMs = (elapsedRealtimeClock() - startedMs).coerceAtLeast(0L)
+
+        Log.w(
+            TAG,
+            "onLoadError tab=$tabId code=$errorCode (${errorText ?: "unknown"}) url=$candidateUrl " +
+                "onion=$isOnionTarget retry=${managed.onionRetryCount}/$MAX_ONION_AUTO_RETRIES elapsedMs=$elapsedMs",
+        )
+
+        if (isOnionTarget &&
+            isTransientOnionLoadError(errorCode) &&
+            managed.onionRetryCount < MAX_ONION_AUTO_RETRIES &&
+            elapsedMs < MAX_ONION_RETRY_ELAPSED_MS &&
+            candidateUrl.isNotBlank() &&
+            candidateUrl != "about:blank"
+        ) {
+            val retryUrl = resolveOnionRetryUrl(managed.onionOriginalTargetUrl, candidateUrl)
+            val isSpeculativeHttpsUpgradeAbort = retryUrl != candidateUrl &&
+                retryUrl.startsWith("http://", ignoreCase = true) &&
+                candidateUrl.startsWith("https://", ignoreCase = true)
+
+            if (isSpeculativeHttpsUpgradeAbort && managed.browser != null) {
+                // Chromium 156's HttpsUpgradesNavigationThrottle aborts speculative https://
+                // upgrades after 3.0s (ERR_TIMED_OUT = -7) right before issuing its own 307
+                // fallback to http://. Suppress the false error without burning a retry or
+                // interrupting Chromium's in-progress http:// fallback; only reload if
+                // Chromium actually stopped on an error page after 400ms.
+                managed.hadErrorInCurrentLoad = false
+                managed.onionAutoRetryScheduled = true
+                managed.pendingNavigationUrl = retryUrl
+                updateTabState(tabId) {
+                    it.copy(
+                        url = retryUrl,
+                        isLoading = true,
+                        loadProgress = it.loadProgress.coerceIn(15, 85),
+                        canGoBack = computeCanGoBack(managed),
+                        isOnion = true,
+                    )
+                }
+                val checkFallbackRunnable = Runnable {
+                    val live = sessions[tabId] ?: return@Runnable
+                    live.pendingRetryRunnable = null
+                    live.onionAutoRetryScheduled = false
+                    val liveBrowser = live.browser
+                    val fallbackAlreadyRunning = liveBrowser != null && live.lastBrowserLoadingState
+                    if (!fallbackAlreadyRunning && !isBlankOrStartUrl(live.state.url)) {
+                        live.pendingNavigationUrl = retryUrl
+                        reloadUrl(retryUrl)
+                    }
+                }
+                managed.pendingRetryRunnable?.let { mainHandler.removeCallbacks(it) }
+                managed.pendingRetryRunnable = checkFallbackRunnable
+                mainHandler.postDelayed(checkFallbackRunnable, 800L)
+                return
+            }
+
+            val attempt = managed.onionRetryCount + 1
+            managed.onionRetryCount = attempt
+            managed.hadErrorInCurrentLoad = false
+            managed.onionAutoRetryScheduled = true
+            managed.pendingNavigationUrl = retryUrl
+
+            blankErrorFrameViaZeroJsCdp(managed.browser)
+
+            updateTabState(tabId) {
+                it.copy(
+                    url = retryUrl,
+                    isLoading = true,
+                    loadProgress = it.loadProgress.coerceIn(15, 85),
+                    canGoBack = computeCanGoBack(managed),
+                    isOnion = true,
+                )
+            }
+
+            if (tabId == _activeTabId.value) {
+                onSecurityNotice("Building .onion rendezvous circuit (attempt ${attempt + 1}/4)\u2026")
+            }
+
+            val retryRunnable = Runnable {
+                val live = sessions[tabId] ?: return@Runnable
+                live.pendingRetryRunnable = null
+                if (!live.onionAutoRetryScheduled) return@Runnable
+                live.onionAutoRetryScheduled = false
+                live.pendingNavigationUrl = retryUrl
+                updateTabState(tabId) {
+                    it.copy(
+                        url = retryUrl,
+                        isLoading = true,
+                        loadProgress = it.loadProgress.coerceIn(15, 85),
+                        canGoBack = computeCanGoBack(live),
+                        isOnion = true,
+                    )
+                }
+                reloadUrl(retryUrl)
+            }
+            managed.pendingRetryRunnable?.let { mainHandler.removeCallbacks(it) }
+            managed.pendingRetryRunnable = retryRunnable
+            mainHandler.postDelayed(retryRunnable, ONION_AUTO_RETRY_DELAY_MS)
+            return
+        }
+
+        cancelOnionAutoRetry(managed, resetBudget = true)
+        managed.hadErrorInCurrentLoad = true
+        updateTabState(tabId) {
+            it.copy(
+                isLoading = false,
+                loadProgress = 100,
+                canGoBack = computeCanGoBack(managed),
+            )
+        }
+        if (tabId == _activeTabId.value &&
+            candidateUrl.isNotBlank() &&
+            candidateUrl != "about:blank"
+        ) {
+            onSecurityNotice(
+                "Navigation failed (${errorText ?: "code $errorCode"}): $candidateUrl",
+            )
+        }
+    }
+
+    @VisibleForTesting
+    internal fun simulateLoadCompletedForTest(
+        tabId: String,
+        loadedUrl: String,
+    ) {
+        val managed = sessions[tabId] ?: return
+        managed.pendingNavigationUrl = null
+        val hadRetries = managed.onionRetryCount > 0
+        managed.onionRetryCount = 0
+        managed.onionNavStartedElapsedMs = 0L
+        managed.onionAutoRetryScheduled = false
+        managed.hadErrorInCurrentLoad = false
+        updateTabState(tabId) {
+            it.copy(
+                url = loadedUrl,
+                title = displayTitleForUrl(loadedUrl),
+                isLoading = false,
+                loadProgress = 100,
+                canGoBack = computeCanGoBack(managed),
+                isOnion = isOnionAddress(loadedUrl),
+            )
+        }
+        if (hadRetries && tabId == _activeTabId.value) {
+            onSecurityNotice("")
+        }
+        onNavigationRecovered(tabId)
+    }
+
+    private fun navigateBrowserToHistoryIndex(
+        browser: CefriumBrowser,
+        targetIdx: Int,
+        steps: Int,
+        fallbackUrl: String,
+    ) {
+        if (steps <= 1) {
+            browser.goBack()
+            return
+        }
+        browser.executeDevToolsMethod("Page.getNavigationHistory", "{}") { ok, json ->
+            val entryId = if (ok && !json.isNullOrBlank()) {
+                runCatching {
+                    val entriesArr = JSONObject(json).optJSONArray("entries")
+                    if (entriesArr != null && targetIdx in 0 until entriesArr.length()) {
+                        entriesArr.getJSONObject(targetIdx).optInt("id", -1)
+                    } else {
+                        -1
+                    }
+                }.getOrDefault(-1)
+            } else {
+                -1
+            }
+            mainHandler.post {
+                if (entryId >= 0) {
+                    val params = JSONObject().put("entryId", entryId).toString()
+                    browser.executeDevToolsMethod("Page.navigateToHistoryEntry", params) { navOk, _ ->
+                        if (!navOk && fallbackUrl.isNotBlank()) {
+                            mainHandler.post { runCatching { browser.loadUrl(fallbackUrl) } }
+                        }
+                    }
+                } else if (fallbackUrl.isNotBlank()) {
+                    runCatching { browser.loadUrl(fallbackUrl) }
+                } else {
+                    browser.goBack()
+                }
+            }
+        }
+    }
 
     private fun canNavigateForward(browser: CefriumBrowser): Boolean {
         val entries = runCatching { browser.navigationEntries }.getOrNull() ?: return false
@@ -2048,6 +2621,7 @@ class TabSessionManager(
     }
 
     private fun teardownBrowser(managed: ManagedTab) {
+        cancelOnionAutoRetry(managed, resetBudget = true)
         val wrapper = managed.surfaceWrapper
         val browser = managed.browser
         runCatching { wrapper?.removeAllViews() }

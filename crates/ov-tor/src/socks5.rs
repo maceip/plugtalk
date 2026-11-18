@@ -4,12 +4,27 @@
 //! Chromium's network stack is pointed at this listener with
 //! `--proxy-server=socks5://127.0.0.1:<port>`; every browser connection is
 //! therefore tunnelled through Arti and never leaves the device in the clear.
+//!
+//! ### `.onion` Rendezvous Coalescing & Warm-Up Pool
+//! Chromium's `SOCKS5ClientSocket` enforces a hardcoded 30-second timeout
+//! waiting for the 10-byte `REP_SUCCESS` handshake reply, while a cold 6-hop
+//! Tor v3 `.onion` circuit (HsDir descriptor fetch + introduction + rendezvous)
+//! can legitimately take 31–75s on mobile networks.  [`OnionRendezvousPool`]
+//! runs every `.onion` `connect_with_prefs` inside an independent background
+//! task (`tokio::spawn`) that survives client TCP disconnects up to
+//! `connect_timeout` (`120s`) and stashes pre-connected [`DataStream`]s for up
+//! to [`ONION_STASH_TTL`] (`15s`) keyed by `(isolation_key, host, port)`.  When
+//! Chromium or `TabSessionManager` immediately retries `CONNECT host:port`, it
+//! either adopts the still-building rendezvous dial or claims the ready
+//! [`DataStream`] in `< 5ms`.
 
 use std::{
+    collections::{HashMap, VecDeque},
+    future::Future,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     time::Duration,
 };
@@ -19,7 +34,9 @@ use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::watch,
+    sync::{watch, Notify},
+    task::AbortHandle,
+    time::Instant,
 };
 
 use crate::{
@@ -27,7 +44,7 @@ use crate::{
         is_chromium_background_endpoint, now_epoch_ms, ClearnetAllowlist, PendingRegistration,
         DEFAULT_CONSENT_WAIT_TIMEOUT,
     },
-    isolation::{apex_domain, is_valid_v3_onion_host, IsolationRegistry},
+    isolation::{apex_domain, is_valid_v3_onion_host, resolve_isolation_key, IsolationRegistry},
 };
 
 /// SOCKS5 protocol version.
@@ -61,6 +78,9 @@ pub const REP_ADDRESS_TYPE_NOT_SUPPORTED: u8 = 0x08;
 
 /// Maximum length of a SOCKS5 domain name.
 const MAX_DOMAIN_LEN: u8 = 255;
+
+/// Time-to-live for an unclaimed pre-connected `.onion` stream in [`OnionRendezvousPool`].
+pub const ONION_STASH_TTL: Duration = Duration::from_secs(15);
 
 /// Errors that can occur while a SOCKS5 message is parsed.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
@@ -264,6 +284,379 @@ pub fn reply_frame(code: u8) -> Vec<u8> {
     reply
 }
 
+/// Key identifying an isolated `.onion` stream endpoint in [`OnionRendezvousPool`].
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct OnionStreamKey {
+    pub isolation_key: String,
+    pub host: String,
+    pub port: u16,
+}
+
+impl OnionStreamKey {
+    pub(crate) fn new(isolation_key: &str, host: &str, port: u16) -> Self {
+        Self {
+            isolation_key: isolation_key.to_string(),
+            host: host.trim().trim_end_matches('.').to_ascii_lowercase(),
+            port,
+        }
+    }
+}
+
+enum SlotState<S> {
+    ClaimedInFlight,
+    OrphanedInFlight,
+    Ready { stream: S, ready_at: Instant },
+    Failed(u8),
+    Done,
+}
+
+pub(crate) struct OnionDialSlot<S> {
+    state: Mutex<SlotState<S>>,
+    notify: Notify,
+    abort_handle: Mutex<Option<AbortHandle>>,
+}
+
+impl<S> OnionDialSlot<S> {
+    fn new_claimed() -> Self {
+        Self {
+            state: Mutex::new(SlotState::ClaimedInFlight),
+            notify: Notify::new(),
+            abort_handle: Mutex::new(None),
+        }
+    }
+
+    fn new_ready(stream: S) -> Self {
+        Self {
+            state: Mutex::new(SlotState::Ready {
+                stream,
+                ready_at: Instant::now(),
+            }),
+            notify: Notify::new(),
+            abort_handle: Mutex::new(None),
+        }
+    }
+
+    fn lock_state(&self) -> std::sync::MutexGuard<'_, SlotState<S>> {
+        match self.state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
+    fn cancel_and_abort(&self) {
+        *self.lock_state() = SlotState::Done;
+        self.notify.notify_waiters();
+        let handle = match self.abort_handle.lock() {
+            Ok(mut g) => g.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        if let Some(h) = handle {
+            h.abort();
+        }
+    }
+}
+
+pub(crate) enum AcquireOutcome<S> {
+    ImmediateReady { stream: S, age: Duration },
+    AdoptedInFlight(Arc<OnionDialSlot<S>>),
+    SpawnedNew(Arc<OnionDialSlot<S>>),
+}
+
+pub(crate) enum WaitSlotOutcome<S> {
+    Connected(S),
+    Failed(u8),
+    ClientDisconnected,
+    Cancelled,
+}
+
+/// Coalesces in-flight `.onion` rendezvous dials across Chromium's 30s SOCKS5
+/// socket timeout and holds unclaimed ready streams for up to `stash_ttl`.
+pub(crate) struct OnionRendezvousPool<S = DataStream> {
+    slots: Mutex<HashMap<OnionStreamKey, VecDeque<Arc<OnionDialSlot<S>>>>>,
+    stash_ttl: Duration,
+}
+
+impl<S: Send + 'static> OnionRendezvousPool<S> {
+    pub(crate) fn new(stash_ttl: Duration) -> Self {
+        Self {
+            slots: Mutex::new(HashMap::new()),
+            stash_ttl,
+        }
+    }
+
+    fn lock_slots(
+        &self,
+    ) -> std::sync::MutexGuard<'_, HashMap<OnionStreamKey, VecDeque<Arc<OnionDialSlot<S>>>>> {
+        match self.slots.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
+    fn prune_queue(queue: &mut VecDeque<Arc<OnionDialSlot<S>>>, ttl: Duration) {
+        queue.retain(|slot| {
+            let mut state = slot.lock_state();
+            match &*state {
+                SlotState::Done => false,
+                SlotState::Ready { ready_at, .. } if ready_at.elapsed() > ttl => {
+                    *state = SlotState::Done;
+                    false
+                }
+                _ => true,
+            }
+        });
+    }
+
+    fn spawn_ttl_reaper(slot: Arc<OnionDialSlot<S>>, ttl: Duration) {
+        tokio::spawn(async move {
+            tokio::time::sleep(ttl).await;
+            let mut state = slot.lock_state();
+            if let SlotState::Ready { ready_at, .. } = &*state {
+                if ready_at.elapsed() >= ttl {
+                    *state = SlotState::Done;
+                    slot.notify.notify_waiters();
+                }
+            }
+        });
+    }
+
+    /// Take a ready stashed stream, adopt an orphaned in-flight dial, or spawn
+    /// a new background dial task that survives client TCP disconnects.
+    pub(crate) fn acquire_or_spawn<F>(
+        self: &Arc<Self>,
+        key: OnionStreamKey,
+        mut pool_shutdown: watch::Receiver<bool>,
+        dial_fn: F,
+    ) -> AcquireOutcome<S>
+    where
+        F: Future<Output = Result<S, u8>> + Send + 'static,
+    {
+        let mut map = self.lock_slots();
+        let ttl = self.stash_ttl;
+
+        if map.len() > 16 {
+            map.retain(|_, q| {
+                Self::prune_queue(q, ttl);
+                !q.is_empty()
+            });
+        }
+
+        if let Some(queue) = map.get_mut(&key) {
+            Self::prune_queue(queue, ttl);
+
+            // 1. Prefer an already-connected virgin stream in the 15s warm stash.
+            for idx in 0..queue.len() {
+                let maybe_ready = {
+                    let mut state = queue[idx].lock_state();
+                    if let SlotState::Ready { ready_at, .. } = &*state {
+                        let age = ready_at.elapsed();
+                        if age <= ttl {
+                            let prev = std::mem::replace(&mut *state, SlotState::Done);
+                            if let SlotState::Ready { stream, .. } = prev {
+                                Some((stream, age))
+                            } else {
+                                None
+                            }
+                        } else {
+                            *state = SlotState::Done;
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                };
+                if let Some((stream, age)) = maybe_ready {
+                    queue.remove(idx);
+                    if queue.is_empty() {
+                        map.remove(&key);
+                    }
+                    return AcquireOutcome::ImmediateReady { stream, age };
+                }
+            }
+
+            // 2. Otherwise adopt an orphaned in-flight dial started by an earlier socket.
+            for slot in queue.iter() {
+                let mut state = slot.lock_state();
+                if matches!(*state, SlotState::OrphanedInFlight) {
+                    *state = SlotState::ClaimedInFlight;
+                    return AcquireOutcome::AdoptedInFlight(slot.clone());
+                }
+            }
+        }
+
+        // 3. Otherwise spawn a fresh background dial task.
+        let slot = Arc::new(OnionDialSlot::new_claimed());
+        map.entry(key).or_default().push_back(slot.clone());
+        drop(map);
+
+        let slot_for_task = slot.clone();
+        let task = tokio::spawn(async move {
+            let outcome = tokio::select! {
+                biased;
+                _ = pool_shutdown.changed() => {
+                    *slot_for_task.lock_state() = SlotState::Done;
+                    slot_for_task.notify.notify_waiters();
+                    return;
+                }
+                res = dial_fn => res,
+            };
+
+            let mut spawn_reaper = false;
+            {
+                let mut state = slot_for_task.lock_state();
+                match (&*state, outcome) {
+                    (SlotState::Done, _) => {}
+                    (SlotState::ClaimedInFlight, Ok(stream)) => {
+                        *state = SlotState::Ready {
+                            stream,
+                            ready_at: Instant::now(),
+                        };
+                    }
+                    (SlotState::OrphanedInFlight, Ok(stream)) => {
+                        *state = SlotState::Ready {
+                            stream,
+                            ready_at: Instant::now(),
+                        };
+                        spawn_reaper = true;
+                    }
+                    (SlotState::ClaimedInFlight, Err(code)) => {
+                        *state = SlotState::Failed(code);
+                    }
+                    (SlotState::OrphanedInFlight, Err(_)) => {
+                        *state = SlotState::Done;
+                    }
+                    (SlotState::Ready { .. } | SlotState::Failed(_), _) => {}
+                }
+            }
+            slot_for_task.notify.notify_waiters();
+            if spawn_reaper {
+                Self::spawn_ttl_reaper(slot_for_task, ttl);
+            }
+        });
+
+        if let Ok(mut guard) = slot.abort_handle.lock() {
+            *guard = Some(task.abort_handle());
+        }
+
+        AcquireOutcome::SpawnedNew(slot)
+    }
+
+    /// Stash an unused connected stream (e.g. when writing `REP_SUCCESS` failed
+    /// because the client closed the TCP socket right as the circuit completed).
+    pub(crate) fn stash_ready(&self, key: OnionStreamKey, stream: S) {
+        let slot = Arc::new(OnionDialSlot::new_ready(stream));
+        let mut map = self.lock_slots();
+        let queue = map.entry(key).or_default();
+        Self::prune_queue(queue, self.stash_ttl);
+        queue.push_back(slot.clone());
+        drop(map);
+        Self::spawn_ttl_reaper(slot, self.stash_ttl);
+    }
+
+    /// Wait for `slot` while watching `client_stream` for premature peer disconnect.
+    pub(crate) async fn wait_claimed_slot(
+        &self,
+        slot: Arc<OnionDialSlot<S>>,
+        client_stream: &mut TcpStream,
+        shutdown_rx: &mut watch::Receiver<bool>,
+    ) -> WaitSlotOutcome<S> {
+        let mut monitor_disconnect = true;
+        loop {
+            let notified = slot.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+
+            {
+                let mut state = slot.lock_state();
+                match &*state {
+                    SlotState::Ready { .. } => {
+                        let prev = std::mem::replace(&mut *state, SlotState::Done);
+                        if let SlotState::Ready { stream, .. } = prev {
+                            return WaitSlotOutcome::Connected(stream);
+                        }
+                    }
+                    SlotState::Failed(code) => {
+                        let code = *code;
+                        *state = SlotState::Done;
+                        return WaitSlotOutcome::Failed(code);
+                    }
+                    SlotState::Done => return WaitSlotOutcome::Cancelled,
+                    SlotState::ClaimedInFlight | SlotState::OrphanedInFlight => {}
+                }
+            }
+
+            let mut peek_buf = [0u8; 1];
+            tokio::select! {
+                biased;
+                _ = shutdown_rx.changed() => {
+                    slot.cancel_and_abort();
+                    return WaitSlotOutcome::Cancelled;
+                }
+                _ = &mut notified => {
+                    continue;
+                }
+                peek_res = client_stream.peek(&mut peek_buf), if monitor_disconnect => {
+                    match peek_res {
+                        Ok(0) | Err(_) => {
+                            let mut spawn_reaper = false;
+                            {
+                                let mut state = slot.lock_state();
+                                match &*state {
+                                    SlotState::ClaimedInFlight => {
+                                        *state = SlotState::OrphanedInFlight;
+                                    }
+                                    SlotState::Ready { .. } => {
+                                        spawn_reaper = true;
+                                    }
+                                    SlotState::Failed(_) => {
+                                        *state = SlotState::Done;
+                                    }
+                                    SlotState::OrphanedInFlight | SlotState::Done => {}
+                                }
+                            }
+                            if spawn_reaper {
+                                Self::spawn_ttl_reaper(slot.clone(), self.stash_ttl);
+                            }
+                            return WaitSlotOutcome::ClientDisconnected;
+                        }
+                        Ok(_) => {
+                            // Client pipelined application bytes without closing; keep waiting.
+                            monitor_disconnect = false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Evict and abort all stashed or orphaned `.onion` streams matching
+    /// `target_url_or_empty` (`""` clears the entire pool).
+    pub(crate) fn clear_for_target(&self, target_url_or_empty: &str) {
+        let mut map = self.lock_slots();
+        match resolve_isolation_key(target_url_or_empty) {
+            None => {
+                for (_, queue) in map.drain() {
+                    for slot in queue {
+                        slot.cancel_and_abort();
+                    }
+                }
+            }
+            Some(iso_key) => {
+                map.retain(|k, queue| {
+                    if k.isolation_key == iso_key {
+                        for slot in queue.drain(..) {
+                            slot.cancel_and_abort();
+                        }
+                        false
+                    } else {
+                        true
+                    }
+                });
+            }
+        }
+    }
+}
+
 /// The SOCKS5 listener.
 pub struct Socks5Server {
     local_addr: SocketAddr,
@@ -271,6 +664,7 @@ pub struct Socks5Server {
     accept_task: tokio::task::JoinHandle<()>,
     allow_clearnet: Arc<AtomicBool>,
     clearnet: Arc<ClearnetAllowlist>,
+    onion_pool: Arc<OnionRendezvousPool<DataStream>>,
 }
 
 impl Socks5Server {
@@ -308,11 +702,13 @@ impl Socks5Server {
         let local_addr = listener.local_addr()?;
         let (shutdown, mut shutdown_rx) = watch::channel(false);
         let allow_clearnet = Arc::new(AtomicBool::new(allow_clearnet));
+        let onion_pool = Arc::new(OnionRendezvousPool::new(ONION_STASH_TTL));
 
         let accept_task = {
             let shutdown = shutdown.clone();
             let allow_clearnet = allow_clearnet.clone();
             let clearnet = clearnet.clone();
+            let onion_pool = onion_pool.clone();
             tokio::spawn(async move {
                 loop {
                     tokio::select! {
@@ -327,6 +723,7 @@ impl Socks5Server {
                             let shutdown = shutdown.subscribe();
                             let allow_clearnet = allow_clearnet.clone();
                             let clearnet = clearnet.clone();
+                            let onion_pool = onion_pool.clone();
                             tokio::spawn(async move {
                                 if let Err(err) = handle_connection(
                                     stream,
@@ -334,6 +731,7 @@ impl Socks5Server {
                                     isolation,
                                     allow_clearnet,
                                     clearnet,
+                                    onion_pool,
                                     connect_timeout,
                                     consent_timeout,
                                     shutdown,
@@ -355,6 +753,7 @@ impl Socks5Server {
             accept_task,
             allow_clearnet,
             clearnet,
+            onion_pool,
         }))
     }
 
@@ -383,10 +782,16 @@ impl Socks5Server {
         }
     }
 
-    /// Stop accepting new connections and wake any pending clearnet waiters.
+    /// Evict stashed or orphaned in-flight `.onion` streams (`""` clears all).
+    pub fn clear_onion_pool(&self, target_url_or_empty: &str) {
+        self.onion_pool.clear_for_target(target_url_or_empty);
+    }
+
+    /// Stop accepting new connections, cancel warm-up dials, and wake clearnet waiters.
     pub fn shutdown(&self) {
         let _ = self.shutdown.send(true);
         self.clearnet.clear_pending();
+        self.onion_pool.clear_for_target("");
         self.accept_task.abort();
     }
 }
@@ -395,6 +800,7 @@ impl Drop for Socks5Server {
     fn drop(&mut self) {
         let _ = self.shutdown.send(true);
         self.clearnet.clear_pending();
+        self.onion_pool.clear_for_target("");
         self.accept_task.abort();
     }
 }
@@ -407,6 +813,7 @@ async fn handle_connection(
     isolation: Arc<IsolationRegistry>,
     allow_clearnet: Arc<AtomicBool>,
     clearnet: Arc<ClearnetAllowlist>,
+    onion_pool: Arc<OnionRendezvousPool<DataStream>>,
     connect_timeout: Duration,
     consent_timeout: Duration,
     mut shutdown: watch::Receiver<bool>,
@@ -448,7 +855,8 @@ async fn handle_connection(
     }
 
     // Enforce interactive ClearnetAllowlist consent on EVERY non-`.onion` connection:
-    if !request.is_onion() {
+    let is_onion = request.is_onion();
+    if !is_onion {
         let now_ms = now_epoch_ms();
         if !clearnet.is_allowed(&request.host, now_ms) {
             if is_chromium_background_endpoint(&request.host) {
@@ -528,6 +936,11 @@ async fn handle_connection(
     }
 
     let key = isolation_key(&request.host, &username);
+    let iso_label = if key.is_empty() {
+        "clearnet".to_string()
+    } else {
+        format!("iso-{key}")
+    };
     let (client, maybe_token) = isolation.client_and_token_for(&key);
 
     let mut prefs = StreamPrefs::new();
@@ -535,6 +948,153 @@ async fn handle_connection(
         prefs.set_isolation(token);
     }
 
+    let request_started = Instant::now();
+    if is_onion {
+        let onion_key = OnionStreamKey::new(&key, &request.host, request.port);
+        let host_for_dial = request.host.clone();
+        let port_for_dial = request.port;
+        let iso_for_dial = iso_label.clone();
+
+        let acquired =
+            onion_pool.acquire_or_spawn(onion_key.clone(), shutdown.clone(), async move {
+                let dial_started = Instant::now();
+                log::info!(
+                    "connecting to {}:{} (iso={})",
+                    host_for_dial,
+                    port_for_dial,
+                    iso_for_dial
+                );
+                match tokio::time::timeout(
+                    connect_timeout,
+                    client.connect_with_prefs((host_for_dial.as_str(), port_for_dial), &prefs),
+                )
+                .await
+                {
+                    Ok(Ok(tor_stream)) => {
+                        log::info!(
+                            "connected to {}:{} (iso={}) in {:.1}s",
+                            host_for_dial,
+                            port_for_dial,
+                            iso_for_dial,
+                            dial_started.elapsed().as_secs_f64()
+                        );
+                        Ok(tor_stream)
+                    }
+                    Ok(Err(err)) => {
+                        let report = anyhow::Error::new(err);
+                        log::warn!(
+                            "failed {}:{} (iso={}) after {:.1}s: {report:#}",
+                            host_for_dial,
+                            port_for_dial,
+                            iso_for_dial,
+                            dial_started.elapsed().as_secs_f64()
+                        );
+                        Err(REP_HOST_UNREACHABLE)
+                    }
+                    Err(_) => {
+                        log::warn!(
+                            "failed {}:{} (iso={}) after {:.1}s: connect_timeout ({:.0}s) elapsed",
+                            host_for_dial,
+                            port_for_dial,
+                            iso_for_dial,
+                            dial_started.elapsed().as_secs_f64(),
+                            connect_timeout.as_secs_f64()
+                        );
+                        Err(REP_GENERAL_FAILURE)
+                    }
+                }
+            });
+
+        let tor_stream = match acquired {
+            AcquireOutcome::ImmediateReady {
+                stream: ready_stream,
+                age,
+            } => {
+                log::info!(
+                    "reused warm .onion stream to {}:{} (iso={}, stash_age={:.1}s)",
+                    request.host,
+                    request.port,
+                    iso_label,
+                    age.as_secs_f64()
+                );
+                ready_stream
+            }
+            AcquireOutcome::AdoptedInFlight(slot) => {
+                log::info!(
+                    "attached to in-flight .onion rendezvous dial for {}:{} (iso={})",
+                    request.host,
+                    request.port,
+                    iso_label
+                );
+                match onion_pool
+                    .wait_claimed_slot(slot, &mut stream, &mut shutdown)
+                    .await
+                {
+                    WaitSlotOutcome::Connected(s) => s,
+                    WaitSlotOutcome::Failed(code) => {
+                        write_reply(&mut stream, code).await?;
+                        return Ok(());
+                    }
+                    WaitSlotOutcome::ClientDisconnected => {
+                        log::info!(
+                            "client closed SOCKS5 socket after {:.1}s while adopted .onion rendezvous to {}:{} (iso={}) continues in background",
+                            request_started.elapsed().as_secs_f64(),
+                            request.host,
+                            request.port,
+                            iso_label
+                        );
+                        return Ok(());
+                    }
+                    WaitSlotOutcome::Cancelled => return Ok(()),
+                }
+            }
+            AcquireOutcome::SpawnedNew(slot) => {
+                match onion_pool
+                    .wait_claimed_slot(slot, &mut stream, &mut shutdown)
+                    .await
+                {
+                    WaitSlotOutcome::Connected(s) => s,
+                    WaitSlotOutcome::Failed(code) => {
+                        write_reply(&mut stream, code).await?;
+                        return Ok(());
+                    }
+                    WaitSlotOutcome::ClientDisconnected => {
+                        log::info!(
+                            "client closed SOCKS5 socket after {:.1}s while .onion rendezvous to {}:{} (iso={}) continues in background",
+                            request_started.elapsed().as_secs_f64(),
+                            request.host,
+                            request.port,
+                            iso_label
+                        );
+                        return Ok(());
+                    }
+                    WaitSlotOutcome::Cancelled => return Ok(()),
+                }
+            }
+        };
+
+        if let Err(err) = write_reply(&mut stream, REP_SUCCESS).await {
+            log::info!(
+                "client closed SOCKS5 socket before REP_SUCCESS for {}:{} (iso={}); stashing warm stream for {}s",
+                request.host,
+                request.port,
+                iso_label,
+                ONION_STASH_TTL.as_secs()
+            );
+            onion_pool.stash_ready(onion_key, tor_stream);
+            return Err(err);
+        }
+
+        return relay(stream, tor_stream).await;
+    }
+
+    // Clearnet destination path:
+    log::info!(
+        "connecting to {}:{} (iso={})",
+        request.host,
+        request.port,
+        iso_label
+    );
     let target = (request.host.as_str(), request.port);
     let tor_stream = tokio::select! {
         biased;
@@ -544,14 +1104,37 @@ async fn handle_connection(
         }
         result = tokio::time::timeout(connect_timeout, client.connect_with_prefs(target, &prefs)) => {
             match result {
-                Ok(Ok(stream)) => stream,
+                Ok(Ok(tor_stream)) => {
+                    log::info!(
+                        "connected to {}:{} (iso={}) in {:.1}s",
+                        request.host,
+                        request.port,
+                        iso_label,
+                        request_started.elapsed().as_secs_f64()
+                    );
+                    tor_stream
+                }
                 Ok(Err(err)) => {
-                    log::warn!("cannot reach {}:{}: {err}", request.host, request.port);
+                    let report = anyhow::Error::new(err);
+                    log::warn!(
+                        "failed {}:{} (iso={}) after {:.1}s: {report:#}",
+                        request.host,
+                        request.port,
+                        iso_label,
+                        request_started.elapsed().as_secs_f64()
+                    );
                     write_reply(&mut stream, REP_HOST_UNREACHABLE).await?;
                     return Ok(());
                 }
                 Err(_) => {
-                    log::warn!("timeout while connecting to {}:{}", request.host, request.port);
+                    log::warn!(
+                        "failed {}:{} (iso={}) after {:.1}s: connect_timeout ({:.0}s) elapsed",
+                        request.host,
+                        request.port,
+                        iso_label,
+                        request_started.elapsed().as_secs_f64(),
+                        connect_timeout.as_secs_f64()
+                    );
                     write_reply(&mut stream, REP_GENERAL_FAILURE).await?;
                     return Ok(());
                 }
@@ -687,4 +1270,158 @@ async fn write_reply(stream: &mut TcpStream, code: u8) -> anyhow::Result<()> {
     stream.write_all(&reply_frame(code)).await?;
     stream.flush().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicUsize;
+
+    use super::*;
+
+    const TEST_ONION: &str = "duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion";
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn orphaned_onion_dial_survives_client_disconnect_and_serves_retry_from_stash(
+    ) -> anyhow::Result<()> {
+        let pool = Arc::new(OnionRendezvousPool::<tokio::io::DuplexStream>::new(
+            Duration::from_secs(5),
+        ));
+        let (_shutdown_tx, mut shutdown_rx) = watch::channel(false);
+        let dial_count = Arc::new(AtomicUsize::new(0));
+        let key = OnionStreamKey::new("duckduckgogg42xj", TEST_ONION, 443);
+
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+        let addr = listener.local_addr()?;
+
+        // Simulate Chromium opening socket #1 and timing out at 40ms while Tor takes 120ms:
+        let client1 = TcpStream::connect(addr).await?;
+        let (mut server_side1, _) = listener.accept().await?;
+
+        let dials_clone = dial_count.clone();
+        let acquired1 = pool.acquire_or_spawn(key.clone(), shutdown_rx.clone(), async move {
+            dials_clone.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(120)).await;
+            let (mut remote, local) = tokio::io::duplex(1024);
+            tokio::spawn(async move {
+                let _ = remote.write_all(b"HTTP/1.1 200 OK\r\n\r\n").await;
+            });
+            Ok(local)
+        });
+
+        let AcquireOutcome::SpawnedNew(slot1) = acquired1 else {
+            panic!("expected SpawnedNew on cold .onion key");
+        };
+
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            drop(client1);
+        });
+
+        let wait1 = pool
+            .wait_claimed_slot(slot1, &mut server_side1, &mut shutdown_rx)
+            .await;
+        assert!(
+            matches!(wait1, WaitSlotOutcome::ClientDisconnected),
+            "first socket must detect client disconnect without cancelling background dial"
+        );
+
+        // Wait until the 120ms dial finishes and enters the 15s Ready stash:
+        tokio::time::sleep(Duration::from_millis(110)).await;
+
+        // Retry arrives 30ms after completion -> must claim the Ready stream in < 10ms without re-dialing!
+        let retry_started = Instant::now();
+        let dials_clone2 = dial_count.clone();
+        let acquired2 = pool.acquire_or_spawn(key, shutdown_rx.clone(), async move {
+            dials_clone2.fetch_add(1, Ordering::SeqCst);
+            Err(REP_GENERAL_FAILURE)
+        });
+
+        let AcquireOutcome::ImmediateReady { mut stream, .. } = acquired2 else {
+            panic!("expected ImmediateReady from warm .onion stash");
+        };
+        assert!(retry_started.elapsed() < Duration::from_millis(20));
+        assert_eq!(
+            dial_count.load(Ordering::SeqCst),
+            1,
+            "must not launch a second dial"
+        );
+
+        let mut buf = Vec::new();
+        stream.read_to_end(&mut buf).await?;
+        assert_eq!(buf, b"HTTP/1.1 200 OK\r\n\r\n");
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn retry_while_orphaned_dial_still_in_flight_coalesces_onto_same_dial(
+    ) -> anyhow::Result<()> {
+        let pool = Arc::new(OnionRendezvousPool::<u64>::new(Duration::from_secs(5)));
+        let (_shutdown_tx, mut shutdown_rx) = watch::channel(false);
+        let dial_count = Arc::new(AtomicUsize::new(0));
+        let key = OnionStreamKey::new("duckduckgogg42xj", TEST_ONION, 80);
+
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+        let addr = listener.local_addr()?;
+
+        let client1 = TcpStream::connect(addr).await?;
+        let (mut server_side1, _) = listener.accept().await?;
+
+        let dials_clone = dial_count.clone();
+        let AcquireOutcome::SpawnedNew(slot1) =
+            pool.acquire_or_spawn(key.clone(), shutdown_rx.clone(), async move {
+                dials_clone.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(160)).await;
+                Ok(42_u64)
+            })
+        else {
+            panic!("expected SpawnedNew");
+        };
+
+        // Client #1 disconnects at 30ms while dial is still at 30/160ms:
+        drop(client1);
+        let wait1 = pool
+            .wait_claimed_slot(slot1, &mut server_side1, &mut shutdown_rx)
+            .await;
+        assert!(matches!(wait1, WaitSlotOutcome::ClientDisconnected));
+
+        // Client #2 retries immediately at ~35ms -> adopts the in-flight dial!
+        let _client2 = TcpStream::connect(addr).await?;
+        let (mut server_side2, _) = listener.accept().await?;
+        let dials_clone2 = dial_count.clone();
+        let acquired2 = pool.acquire_or_spawn(key.clone(), shutdown_rx.clone(), async move {
+            dials_clone2.fetch_add(1, Ordering::SeqCst);
+            Ok(99_u64)
+        });
+        let AcquireOutcome::AdoptedInFlight(slot2) = acquired2 else {
+            panic!("expected AdoptedInFlight while background dial is still running");
+        };
+
+        let wait2 = pool
+            .wait_claimed_slot(slot2, &mut server_side2, &mut shutdown_rx)
+            .await;
+        assert!(matches!(wait2, WaitSlotOutcome::Connected(42)));
+        assert_eq!(dial_count.load(Ordering::SeqCst), 1);
+
+        // Verify clear_for_target leaves unrelated identities intact and evicts matching ones:
+        pool.stash_ready(key.clone(), 77_u64);
+        pool.clear_for_target("2gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wid.onion");
+        let untargeted =
+            pool.acquire_or_spawn(key.clone(), shutdown_rx.clone(), async { Ok(66_u64) });
+        assert!(
+            matches!(
+                untargeted,
+                AcquireOutcome::ImmediateReady { stream: 77, .. }
+            ),
+            "untargeted identity reset must preserve stashed stream"
+        );
+
+        pool.stash_ready(key.clone(), 78_u64);
+        pool.clear_for_target(TEST_ONION);
+        let acquired3 = pool.acquire_or_spawn(key, shutdown_rx.clone(), async { Ok(88_u64) });
+        assert!(
+            matches!(acquired3, AcquireOutcome::SpawnedNew(_)),
+            "clear_for_target must evict stashed stream on identity reset"
+        );
+        Ok(())
+    }
 }

@@ -2,6 +2,7 @@ package dev.onionvault.ui
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.os.Looper
 import android.view.View
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
@@ -11,7 +12,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsProperties
-import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -23,9 +23,13 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.height
+import dev.onionvault.CdpDomPgpController
+import dev.onionvault.OnionBackStackManager
+import dev.onionvault.TabSessionManager
 import java.io.File
 import java.net.URI
 import java.security.MessageDigest
+import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -36,6 +40,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
@@ -130,9 +135,11 @@ class TrustedOnionDirectoryTest {
             )
         }
 
-        // ProPublica exact display truncation contract from spec: p53lf5…u5uqd.onion
-        val proPublica = entries.first { it.id == "propublica" }
-        assertEquals("p53lf5\u2026u5uqd.onion", proPublica.shortOnionKey)
+        // Exact 18-char display truncation contract: <first6>…<last5>.onion
+        val duckDuckGo = entries.first { it.id == "duckduckgo" }
+        assertEquals("duckdu\u2026zczad.onion", duckDuckGo.shortOnionKey)
+        val bellingcat = entries.first { it.id == "bellingcat" }
+        assertEquals("bellca\u2026tbzad.onion", bellingcat.shortOnionKey)
     }
 
     @Test
@@ -323,6 +330,144 @@ class TrustedOnionDirectoryTest {
         compose.onNodeWithTag("start_tor_status").performScrollTo()
         compose.onNodeWithText("Connecting to Tor \u00B7 45%").assertIsDisplayed()
         captureStartPageBitmap("start-page-zine-light")
+    }
+
+    @Test
+    fun onion_rendezvous_auto_retry_and_start_page_back_navigation_work_end_to_end() {
+        var fakeClockMs = 1_000L
+        val notices = mutableListOf<String>()
+        val recoveredTabs = mutableListOf<String>()
+        val reloadedUrls = mutableListOf<String>()
+
+        val manager = TabSessionManager(
+            context = compose.activity,
+            cdpController = CdpDomPgpController(),
+            backStackManager = OnionBackStackManager(),
+            onSecurityNotice = { notices += it },
+            onNavigationRecovered = { recoveredTabs += it },
+        )
+        manager.elapsedRealtimeClock = { fakeClockMs }
+
+        val tabId = manager.ensureInitialTab("about:blank")
+        assertEquals("about:blank", manager.activeTab()?.url)
+        assertFalse("StartPage root must have canGoBack=false", manager.activeTab()!!.canGoBack)
+
+        // Verify all transient Chromium .onion SOCKS/timeout codes are recognized:
+        for (transientCode in listOf(-7, -100, -101, -118, -120, -130, -324)) {
+            assertTrue(
+                "Error $transientCode must be transient for .onion auto-retry",
+                TabSessionManager.isTransientOnionLoadError(transientCode),
+            )
+        }
+        assertFalse(TabSessionManager.isTransientOnionLoadError(-202)) // ERR_CERT_AUTHORITY_INVALID
+
+        // Navigate from StartPage to an http:// .onion service (e.g. Riseup):
+        val riseupHttp = "http://vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion/"
+        val riseupHttpsUpgrade = "https://vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion/"
+        manager.beginOnionNavigationForTest(tabId, riseupHttp, fromStartPage = true)
+        assertTrue("Navigating from StartPage must enable canGoBack", manager.activeTab()!!.canGoBack)
+        assertTrue(manager.activeTab()!!.isLoading)
+
+        // Simulate Chromium 30s SOCKS5 timeout + HttpsUpgrades URL rewrite -> Retry #1 (attempt 2/4):
+        fakeClockMs += 30_000L
+        manager.handleLoadErrorOnMainThread(
+            tabId = tabId,
+            errorCode = TabSessionManager.ERR_SOCKS_CONNECTION_FAILED,
+            errorText = "ERR_SOCKS_CONNECTION_FAILED",
+            failedUrl = riseupHttpsUpgrade,
+            reloadUrl = { reloadedUrls += it },
+        )
+        assertTrue("Tab must stay isLoading=true during auto-retry", manager.activeTab()!!.isLoading)
+        assertEquals("Building .onion rendezvous circuit (attempt 2/4)\u2026", notices.last())
+        assertTrue(reloadedUrls.isEmpty())
+
+        shadowOf(Looper.getMainLooper()).idleFor(300, TimeUnit.MILLISECONDS)
+        assertEquals(
+            "Retry must preserve original http:// .onion scheme across HttpsUpgrades",
+            listOf(riseupHttp),
+            reloadedUrls,
+        )
+
+        // Retry #2 (attempt 3/4) at 60s elapsed:
+        fakeClockMs += 30_000L
+        manager.handleLoadErrorOnMainThread(
+            tabId = tabId,
+            errorCode = TabSessionManager.ERR_TIMED_OUT,
+            errorText = "ERR_TIMED_OUT",
+            failedUrl = riseupHttp,
+            reloadUrl = { reloadedUrls += it },
+        )
+        assertEquals("Building .onion rendezvous circuit (attempt 3/4)\u2026", notices.last())
+        shadowOf(Looper.getMainLooper()).idleFor(300, TimeUnit.MILLISECONDS)
+        assertEquals(2, reloadedUrls.size)
+
+        // Warm rendezvous circuit completes -> status clears and isLoading becomes false:
+        manager.simulateLoadCompletedForTest(tabId, riseupHttp)
+        assertFalse(manager.activeTab()!!.isLoading)
+        assertEquals("", notices.last())
+        assertEquals(listOf(tabId), recoveredTabs)
+        assertTrue("canGoBack must remain true to return to StartPage", manager.activeTab()!!.canGoBack)
+
+        // Pressing Back cleanly returns to StartPage (about:blank):
+        assertTrue(manager.goBack(tabId))
+        assertEquals("about:blank", manager.activeTab()!!.url)
+        assertFalse(manager.activeTab()!!.canGoBack)
+
+        // Late cancelled-load errors arriving after returning to StartPage must be ignored:
+        val noticeCountBeforeLateErr = notices.size
+        manager.handleLoadErrorOnMainThread(
+            tabId = tabId,
+            errorCode = TabSessionManager.ERR_SOCKS_CONNECTION_FAILED,
+            errorText = "ERR_SOCKS_CONNECTION_FAILED",
+            failedUrl = riseupHttpsUpgrade,
+            reloadUrl = { reloadedUrls += it },
+        )
+        assertEquals(noticeCountBeforeLateErr, notices.size)
+
+        // Verify selectBackTargetIndex skips intermediate HttpsUpgrades & apex->www entries
+        // while preserving distinct subpage navigations:
+        val bellingcatHttps = "https://bellcatmbguthn3age23lrbseln2lryzv3mt7whis7ktjw4qrestbzad.onion/"
+        val bellingcatWwwHttp = "http://www.bellcatmbguthn3age23lrbseln2lryzv3mt7whis7ktjw4qrestbzad.onion/"
+        val bellingcatArticle = "http://www.bellcatmbguthn3age23lrbseln2lryzv3mt7whis7ktjw4qrestbzad.onion/news/2026/story/"
+        assertEquals(
+            0,
+            TabSessionManager.selectBackTargetIndex(
+                entryUrls = listOf("about:blank", bellingcatHttps, bellingcatWwwHttp),
+                currentIdx = 2,
+                currentStateUrl = bellingcatWwwHttp,
+            ),
+        )
+        assertEquals(
+            -1,
+            TabSessionManager.selectBackTargetIndex(
+                entryUrls = listOf("chrome-error://chromewebdata/", bellingcatHttps, bellingcatWwwHttp),
+                currentIdx = 2,
+                currentStateUrl = bellingcatWwwHttp,
+            ),
+        )
+        assertEquals(
+            2,
+            TabSessionManager.selectBackTargetIndex(
+                entryUrls = listOf("about:blank", bellingcatHttps, bellingcatWwwHttp, bellingcatArticle),
+                currentIdx = 3,
+                currentStateUrl = bellingcatArticle,
+            ),
+        )
+
+        // Verify >= 110_000 ms elapsed budget stops retrying and surfaces real failure:
+        val bbcUrl = "https://www.bbcnewsd73hkzno2ini43t4gblxvycyac5aw4gnv7t2rccijh7745uqd.onion/news"
+        manager.beginOnionNavigationForTest(tabId, bbcUrl, fromStartPage = true)
+        fakeClockMs += 115_000L
+        manager.handleLoadErrorOnMainThread(
+            tabId = tabId,
+            errorCode = TabSessionManager.ERR_CONNECTION_TIMED_OUT,
+            errorText = "ERR_CONNECTION_TIMED_OUT",
+            failedUrl = bbcUrl,
+            reloadUrl = { reloadedUrls += it },
+        )
+        assertFalse(manager.activeTab()!!.isLoading)
+        assertTrue(notices.last().startsWith("Navigation failed (ERR_CONNECTION_TIMED_OUT):"))
+        manager.destroyAll()
     }
 
     private fun assertRowObeysTwoToOneLabelDensity(entryId: String) {

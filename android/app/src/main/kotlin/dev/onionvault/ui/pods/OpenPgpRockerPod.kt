@@ -46,18 +46,18 @@ import kotlin.math.abs
 import kotlinx.coroutines.launch
 
 /**
- * `54.dp x 62.dp` Tilted (`-8deg`) Right Floating Hardware Island —
+ * `80.dp x 92.dp` (`1.5x` Scaled) Tilted (`-8deg`) Right-Bezel Hardware Tool Pod —
  * Translucent Ruby-Orange Polycarbonate OpenPGP Rocker Switch (`pgp_rocker_pod`).
  *
  * Visual & Tactile Spec:
  * - Translucent ruby-orange polycarbonate casing (`#E63900` at `88%` alpha over dark metallic
- *   plate, `2.dp` `#5C1000` seam, crisp internal refraction highlights, center channel steel
- *   coil spring + ribbed `#AEB5BD` aluminum slider latch matching `metatools-reference.jpg`).
- * - **Contextual LED Glow**: Bright internal orange/emerald LED illuminates behind the translucent
+ *   plate, `2.5.dp` `#5C1000` seam, crisp internal refraction highlights, 4 molded corner screw
+ *   bosses, center channel helical steel coil spring + ribbed `#AEB5BD` aluminum slider latch).
+ * - **Contextual LED Glow**: Bright internal emerald/amber LED illuminates behind the translucent
  *   block whenever [hasPgpContent] is `true` (page DOM, selection, or clipboard contains
  *   `-----BEGIN PGP...` or an editable PGP field)!
  * - **Tap** invokes [onOpenPgpTools] (Keyring / PGP Tools Pod).
- * - **Dragging the aluminum latch upward** (`dy < -18.dp`) triggers [onQuickVerifyOrDecrypt] +
+ * - **Dragging the aluminum latch upward** (`dy <= -18.dp`) triggers [onQuickVerifyOrDecrypt] +
  *   mechanical spring-return!
  */
 @Composable
@@ -73,7 +73,7 @@ fun OpenPgpRockerPod(
     val scope = rememberCoroutineScope()
     val latchOffsetPx = remember { Animatable(0f) }
 
-    val maxUpwardTravelPx = with(density) { 21.dp.toPx() }
+    val maxUpwardTravelPx = with(density) { 30.dp.toPx() }
     val triggerThresholdPx = with(density) { 18.dp.toPx() }
 
     val internalLedPulse = if (hasPgpContent) {
@@ -92,7 +92,7 @@ fun OpenPgpRockerPod(
         0f
     }
 
-    val cornerRadius = 11.dp
+    val cornerRadius = 16.dp
     val podShape = RoundedCornerShape(cornerRadius)
     val a11yDescription = if (hasPgpContent) {
         "OpenPGP active on page. Tap for keyring, slide latch up to decrypt or verify"
@@ -102,7 +102,7 @@ fun OpenPgpRockerPod(
 
     Box(
         modifier = modifier
-            .size(width = 54.dp, height = 62.dp)
+            .size(width = 80.dp, height = 92.dp)
             .metaToolsDropShadow(cornerRadius = cornerRadius, rotationDegrees = -8f)
             .graphicsLayer {
                 rotationZ = -8f
@@ -151,7 +151,6 @@ fun OpenPgpRockerPod(
                         }
                     }
 
-                    // Mechanical coil spring snap-back to resting stop
                     scope.launch {
                         latchOffsetPx.animateTo(
                             targetValue = 0f,
@@ -173,7 +172,7 @@ fun OpenPgpRockerPod(
         Canvas(modifier = Modifier.fillMaxSize()) {
             val rPx = cornerRadius.toPx()
             val corner = CornerRadius(rPx, rPx)
-            val twoDp = 2.dp.toPx()
+            val seamPx = 2.5.dp.toPx()
 
             // 1. Dark Machined Backplate (#181A1F) beneath Translucent Polycarbonate
             drawRoundRect(
@@ -190,20 +189,20 @@ fun OpenPgpRockerPod(
                 }
                 drawRoundRect(
                     brush = Brush.radialGradient(
-                        0.0f to Color.White.copy(alpha = 0.82f * internalLedPulse),
-                        0.28f to ledPrimary.copy(alpha = 0.85f * internalLedPulse),
-                        0.68f to MetaToolsTokens.PgpInternalLedAmber.copy(alpha = 0.55f * internalLedPulse),
+                        0.0f to Color.White.copy(alpha = 0.85f * internalLedPulse),
+                        0.30f to ledPrimary.copy(alpha = 0.88f * internalLedPulse),
+                        0.70f to MetaToolsTokens.PgpInternalLedAmber.copy(alpha = 0.58f * internalLedPulse),
                         1.0f to Color.Transparent,
                         center = Offset(size.width * 0.5f, size.height * 0.34f),
-                        radius = size.maxDimension * 0.62f,
+                        radius = size.maxDimension * 0.64f,
                     ),
                     cornerRadius = corner,
                 )
             }
 
-            // 3. Internal Molded Corner Bosses & Structural Ribs (visible through 88% Ruby Plastic)
-            val bossOffset = 8.dp.toPx()
-            val bossRadius = 2.6.dp.toPx()
+            // 3. Internal Molded Structural Ribs & 4 Corner Screw Bosses (1.5x scaled)
+            val bossOffset = 12.dp.toPx()
+            val bossRadius = 3.8.dp.toPx()
             val bosses = listOf(
                 Offset(bossOffset, bossOffset),
                 Offset(size.width - bossOffset, bossOffset),
@@ -212,22 +211,22 @@ fun OpenPgpRockerPod(
             )
             bosses.forEach { boss ->
                 drawCircle(
-                    color = Color(0x55290800),
+                    color = Color(0x66290800),
                     radius = bossRadius,
                     center = boss,
                 )
                 drawCircle(
-                    color = Color(0x44FF9068),
+                    color = Color(0x50FF9068),
                     radius = bossRadius,
                     center = boss,
-                    style = Stroke(width = 0.8.dp.toPx()),
+                    style = Stroke(width = 1.1.dp.toPx()),
                 )
             }
 
             // 4. Translucent Ruby-Orange Polycarbonate Block (#E63900 at 88% alpha)
-            val rubyTop = if (hasPgpContent) Color(0xE0FF5C1A) else Color(0xE0D43200)
-            val rubyMid = if (hasPgpContent) MetaToolsTokens.PolycarbonateRuby else Color(0xE0A82200)
-            val rubyDeep = if (hasPgpContent) Color(0xD88F1D00) else Color(0xE05E0F00)
+            val rubyTop = if (hasPgpContent) Color(0xE4FF5E1E) else Color(0xE0D83400)
+            val rubyMid = if (hasPgpContent) MetaToolsTokens.PolycarbonateRuby else Color(0xE0AA2300)
+            val rubyDeep = if (hasPgpContent) Color(0xDC911E00) else Color(0xE05E0F00)
             drawRoundRect(
                 brush = Brush.linearGradient(
                     0.0f to rubyTop,
@@ -239,32 +238,32 @@ fun OpenPgpRockerPod(
                 cornerRadius = corner,
             )
 
-            // 2.dp #5C1000 Outer Mold Seam
+            // 2.5.dp #5C1000 Outer Mold Seam
             drawRoundRect(
                 color = MetaToolsTokens.PolycarbonateSeam,
-                topLeft = Offset(twoDp / 2f, twoDp / 2f),
-                size = Size(size.width - twoDp, size.height - twoDp),
-                cornerRadius = CornerRadius(rPx - twoDp / 2f, rPx - twoDp / 2f),
-                style = Stroke(width = twoDp),
+                topLeft = Offset(seamPx / 2f, seamPx / 2f),
+                size = Size(size.width - seamPx, size.height - seamPx),
+                cornerRadius = CornerRadius(rPx - seamPx / 2f, rPx - seamPx / 2f),
+                style = Stroke(width = seamPx),
             )
 
             // Crisp internal polycarbonate refraction highlight bevel
-            val refractInset = 2.6.dp.toPx()
+            val refractInset = 3.8.dp.toPx()
             drawRoundRect(
                 brush = Brush.linearGradient(
                     0.0f to MetaToolsTokens.PolycarbonateRefraction,
-                    0.4f to Color(0x28FF8A5C),
-                    1.0f to Color(0x55360700),
+                    0.42f to Color(0x32FF8A5C),
+                    1.0f to Color(0x5C360700),
                     start = Offset.Zero,
                     end = Offset(size.width, size.height),
                 ),
                 topLeft = Offset(refractInset, refractInset),
                 size = Size(size.width - refractInset * 2f, size.height - refractInset * 2f),
                 cornerRadius = CornerRadius(
-                    (rPx - refractInset).coerceAtLeast(2f),
-                    (rPx - refractInset).coerceAtLeast(2f),
+                    (rPx - refractInset).coerceAtLeast(3f),
+                    (rPx - refractInset).coerceAtLeast(3f),
                 ),
-                style = Stroke(width = 1.2.dp.toPx()),
+                style = Stroke(width = 1.8.dp.toPx()),
             )
 
             // 5. Recessed Center Metallic Channel + Helical Coil Spring + Ribbed Aluminum Slider Latch
@@ -277,81 +276,80 @@ fun OpenPgpRockerPod(
 }
 
 private fun DrawScope.drawSpringAndAluminumLatch(
-    latchUpwardShiftPx: Float, // 0f at rest, negative when dragged upward
+    latchUpwardShiftPx: Float,
     maxTravelPx: Float,
 ) {
-    val channelW = 20.dp.toPx()
-    val channelH = 40.dp.toPx()
+    val channelW = 30.dp.toPx()
+    val channelH = 60.dp.toPx()
     val channelLeft = (size.width - channelW) / 2f
     val channelTop = (size.height - channelH) / 2f
-    val channelRadius = 3.5.dp.toPx()
+    val channelRadius = 5.dp.toPx()
 
-    // Brushed steel outer bezel frame around center channel
+    // Brushed steel outer bezel frame around center channel (1.5x scaled)
+    val bezelPad = 2.6.dp.toPx()
     drawRoundRect(
         brush = Brush.linearGradient(
-            0.0f to Color(0xFFC8D0D8),
+            0.0f to Color(0xFFD2DAE2),
             0.5f to Color(0xFF707780),
-            1.0f to Color(0xFF2D3138),
+            1.0f to Color(0xFF282C33),
             start = Offset(channelLeft, channelTop),
             end = Offset(channelLeft + channelW, channelTop + channelH),
         ),
-        topLeft = Offset(channelLeft - 1.8.dp.toPx(), channelTop - 1.8.dp.toPx()),
-        size = Size(channelW + 3.6.dp.toPx(), channelH + 3.6.dp.toPx()),
-        cornerRadius = CornerRadius(channelRadius + 1.5.dp.toPx(), channelRadius + 1.5.dp.toPx()),
+        topLeft = Offset(channelLeft - bezelPad, channelTop - bezelPad),
+        size = Size(channelW + bezelPad * 2f, channelH + bezelPad * 2f),
+        cornerRadius = CornerRadius(channelRadius + 2.dp.toPx(), channelRadius + 2.dp.toPx()),
     )
 
     // Deep dark recessed channel slot
     drawRoundRect(
-        color = Color(0xFF0B0D10),
+        color = Color(0xFF0A0C0F),
         topLeft = Offset(channelLeft, channelTop),
         size = Size(channelW, channelH),
         cornerRadius = CornerRadius(channelRadius, channelRadius),
     )
 
-    // Ribbed #AEB5BD Aluminum Slider Latch (resting near bottom of channel, sliding up on drag)
-    val latchW = 17.5.dp.toPx()
-    val latchH = 15.dp.toPx()
+    // Ribbed #AEB5BD Aluminum Slider Latch (26.dp x 22.dp)
+    val latchW = 26.dp.toPx()
+    val latchH = 22.5.dp.toPx()
     val latchLeft = (size.width - latchW) / 2f
-    val restingLatchTop = channelTop + channelH - latchH - 1.8.dp.toPx()
+    val restingLatchTop = channelTop + channelH - latchH - 2.5.dp.toPx()
     val currentLatchTop = (restingLatchTop + latchUpwardShiftPx)
-        .coerceIn(channelTop + 5.dp.toPx(), restingLatchTop)
+        .coerceIn(channelTop + 7.dp.toPx(), restingLatchTop)
 
-    // Steel Coil Spring occupying space between channelTop + 3dp and currentLatchTop - 2.2dp
-    val springTop = channelTop + 3.dp.toPx()
-    val springBottom = (currentLatchTop - 2.2.dp.toPx()).coerceAtLeast(springTop + 3.dp.toPx())
+    // Helical Steel Coil Spring (6 turns) above the aluminum slider latch
+    val springTop = channelTop + 4.5.dp.toPx()
+    val springBottom = (currentLatchTop - 3.dp.toPx()).coerceAtLeast(springTop + 4.5.dp.toPx())
     val springHeight = springBottom - springTop
-    val coilCount = 5
-    val coilLeft = channelLeft + 4.4.dp.toPx()
-    val coilRight = channelLeft + channelW - 4.4.dp.toPx()
+    val coilCount = 6
+    val coilLeft = channelLeft + 6.2.dp.toPx()
+    val coilRight = channelLeft + channelW - 6.2.dp.toPx()
     val stepY = springHeight / coilCount
 
     for (i in 0 until coilCount) {
         val y0 = springTop + i * stepY
-        val y1 = y0 + stepY * 0.52f
-        // Back dark wire turn
+        val y1 = y0 + stepY * 0.54f
         drawLine(
-            color = Color(0xFF2E333B),
+            color = Color(0xFF2C3139),
             start = Offset(coilRight, y0 + stepY * 0.18f),
             end = Offset(coilLeft, y1 + stepY * 0.22f),
-            strokeWidth = 1.1.dp.toPx(),
+            strokeWidth = 1.6.dp.toPx(),
             cap = StrokeCap.Round,
         )
-        // Front specular steel wire turn
         drawLine(
-            color = Color(0xFFD8E0E8),
+            color = Color(0xFFDCE4EC),
             start = Offset(coilLeft, y0),
             end = Offset(coilRight, y1),
-            strokeWidth = 1.35.dp.toPx(),
+            strokeWidth = 2.0.dp.toPx(),
             cap = StrokeCap.Round,
         )
     }
 
     // Cast shadow immediately beneath aluminum latch inside channel
     drawRoundRect(
-        color = Color.Black.copy(alpha = 0.72f),
-        topLeft = Offset(latchLeft + 0.8.dp.toPx(), currentLatchTop + 1.8.dp.toPx()),
+        color = Color.Black.copy(alpha = 0.76f),
+        topLeft = Offset(latchLeft + 1.dp.toPx(), currentLatchTop + 2.4.dp.toPx()),
         size = Size(latchW, latchH),
-        cornerRadius = CornerRadius(2.5.dp.toPx(), 2.5.dp.toPx()),
+        cornerRadius = CornerRadius(3.8.dp.toPx(), 3.8.dp.toPx()),
     )
 
     // Machined #AEB5BD Aluminum Slider Latch Body
@@ -366,35 +364,35 @@ private fun DrawScope.drawSpringAndAluminumLatch(
         ),
         topLeft = Offset(latchLeft, currentLatchTop),
         size = Size(latchW, latchH),
-        cornerRadius = CornerRadius(2.5.dp.toPx(), 2.5.dp.toPx()),
+        cornerRadius = CornerRadius(3.8.dp.toPx(), 3.8.dp.toPx()),
     )
     drawRoundRect(
         color = if (compressionRatio > 0.7f) {
-            MetaToolsTokens.PgpInternalLedEmerald.copy(alpha = 0.75f)
+            MetaToolsTokens.PgpInternalLedEmerald.copy(alpha = 0.78f)
         } else {
             MetaToolsTokens.AluminumLatchLight
         },
-        topLeft = Offset(latchLeft + 0.5.dp.toPx(), currentLatchTop + 0.5.dp.toPx()),
-        size = Size(latchW - 1.dp.toPx(), latchH - 1.dp.toPx()),
-        cornerRadius = CornerRadius(2.2.dp.toPx(), 2.2.dp.toPx()),
-        style = Stroke(width = 0.9.dp.toPx()),
+        topLeft = Offset(latchLeft + 0.7.dp.toPx(), currentLatchTop + 0.7.dp.toPx()),
+        size = Size(latchW - 1.4.dp.toPx(), latchH - 1.4.dp.toPx()),
+        cornerRadius = CornerRadius(3.2.dp.toPx(), 3.2.dp.toPx()),
+        style = Stroke(width = 1.2.dp.toPx()),
     )
 
-    // 4 Horizontal Machined Grip Ridges on Aluminum Slider Latch
-    val ridgeMarginX = 2.6.dp.toPx()
-    for (r in 0 until 4) {
-        val ry = currentLatchTop + 3.4.dp.toPx() + r * 2.9.dp.toPx()
+    // 5 Horizontal Machined Grip Ridges on Aluminum Slider Latch
+    val ridgeMarginX = 3.8.dp.toPx()
+    for (r in 0 until 5) {
+        val ry = currentLatchTop + 4.2.dp.toPx() + r * 3.5.dp.toPx()
         drawLine(
             color = Color(0xFF424850),
             start = Offset(latchLeft + ridgeMarginX, ry),
             end = Offset(latchLeft + latchW - ridgeMarginX, ry),
-            strokeWidth = 0.9.dp.toPx(),
+            strokeWidth = 1.2.dp.toPx(),
         )
         drawLine(
             color = Color(0xFFE8EEF5),
-            start = Offset(latchLeft + ridgeMarginX, ry + 0.9.dp.toPx()),
-            end = Offset(latchLeft + latchW - ridgeMarginX, ry + 0.9.dp.toPx()),
-            strokeWidth = 0.8.dp.toPx(),
+            start = Offset(latchLeft + ridgeMarginX, ry + 1.1.dp.toPx()),
+            end = Offset(latchLeft + latchW - ridgeMarginX, ry + 1.1.dp.toPx()),
+            strokeWidth = 1.0.dp.toPx(),
         )
     }
 }

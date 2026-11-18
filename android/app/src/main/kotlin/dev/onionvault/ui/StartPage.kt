@@ -6,6 +6,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -62,14 +63,9 @@ const val DUCKDUCKGO_ONION_URL: String = TrustedOnionDirectory.DUCKDUCKGO_ONION_
 
 @Immutable
 private data class ZineSheetColors(
-    val canvas: Color,
-    val gridLine: Color,
-    val halftoneDot: Color,
+    val canvasFallback: Color,
     val steelRule: Color,
-    val cropTick: Color,
-    val mastheadBg: Color,
     val mastheadStencil: Color,
-    val sprayAccent: Color,
     val sectionBg: Color,
     val sectionInk: Color,
     val rowEvenBg: Color,
@@ -81,57 +77,36 @@ private data class ZineSheetColors(
     val onionKeyInk: Color,
 )
 
-private fun zineColorsFor(isDark: Boolean): ZineSheetColors = if (isDark) {
-    ZineSheetColors(
-        canvas = Color(0xFF0D0F12),
-        gridLine = Color(0xFF14181E),
-        halftoneDot = Color(0xFF1A1F27),
-        steelRule = Color(0xFF2A2F36),
-        cropTick = Color(0xFF4D5662),
-        mastheadBg = Color(0xFF12161C),
-        mastheadStencil = Color(0xFFE8A33D),
-        sprayAccent = Color(0xFFFF1A6C),
-        sectionBg = Color(0xFF14181F),
-        sectionInk = Color(0xFFC6CFD9),
-        rowEvenBg = Color(0xFF101318),
-        rowOddBg = Color(0xFF0D0F12),
-        titleInk = Color(0xFFF2F5F8),
-        descInk = Color(0xFF919BA8),
-        keyplateBg = Color(0xFF07090C),
-        keyplateBorder = Color(0xFF232A32),
-        onionKeyInk = Color(0xFF4ADE80),
-    )
-} else {
-    ZineSheetColors(
-        canvas = Color(0xFFF2EFE9),
-        gridLine = Color(0xFFE5DFD4),
-        halftoneDot = Color(0xFFDAD3C6),
-        steelRule = Color(0xFFC2BBB0),
-        cropTick = Color(0xFF7B7468),
-        mastheadBg = Color(0xFFE8E2D6),
-        mastheadStencil = Color(0xFFC47A12),
-        sprayAccent = Color(0xFFD81B60),
-        sectionBg = Color(0xFFE3DDD1),
-        sectionInk = Color(0xFF262B33),
-        rowEvenBg = Color(0xFFFAF8F4),
-        rowOddBg = Color(0xFFF2EFE9),
-        titleInk = Color(0xFF14171C),
-        descInk = Color(0xFF4D5562),
-        keyplateBg = Color(0xFF0B0E12),
-        keyplateBorder = Color(0xFF2A2F36),
-        onionKeyInk = Color(0xFF4ADE80),
-    )
-}
+private val TrapCollageOverlayColors = ZineSheetColors(
+    canvasFallback = Color(0xFF0A0C0F),
+    steelRule = Color(0xFF3A4048),
+    mastheadStencil = Color(0xFFF5B400),
+    sectionBg = Color(0xF011151B),
+    sectionInk = Color(0xFFD6DEE8),
+    rowEvenBg = Color(0xE60B0D10), // #0B0D10 at 90% alpha
+    rowOddBg = Color(0xE6090B0E),
+    titleInk = Color(0xFFF4F7FA),
+    descInk = Color(0xFFA0AAB8),
+    keyplateBg = Color(0xF206080B),
+    keyplateBorder = Color(0xFF3A4048),
+    onionKeyInk = Color(0xFF4ADE80),
+)
 
 /**
- * Street-Zine / Industrial First-Open & New-Tab Homepage rendered over `about:blank`.
+ * Authentic `TRAP` Street-Zine Collage Homepage rendered over `about:blank`.
  *
- * Combines:
- * 1. Raw dark wheatpaste / concrete grid surface (`#0D0F12`) with crisp `1.dp` `#2A2F36` steel rules.
- * 2. Bold `TRAP` street-stencil masthead lockup + live 1-line Tor transport status (`start_tor_status`).
- * 3. Recessed phosphor CRT `.onion` search / address input (`start_search_box`) wired to DuckDuckGo v3 `.onion`.
- * 4. Cryptographically verified [TrustedOnionDirectory] (`trusted_onion_directory`) obeying `<= 2:1` label density,
- *    plus `132.dp` bottom clearance so every item scrolls cleanly above floating hardware pods.
+ * Layout & Ergonomics:
+ * 1. Full-bleed `R.drawable.bg_trap_street_zine` street-zine collage (`TRAP` yellow-black graffiti +
+ *    `i-Kee Koos` + `NNOVATION DAM` posters + torn typewriter zine paper) fixed edge-to-edge behind
+ *    a scrollable foreground `Column`.
+ * 2. Top hero viewport (`~48%` of screen height) stays **OPEN** over the `TRAP` street-zine artwork,
+ *    with only a compact top-right `[ TRAP · ● Tor ready ]` hardware badge (`start_tor_status`).
+ * 3. Below the hero window (scrolling smoothly up over the wallpaper with `156.dp` bottom clearance
+ *    above the `1.5x` floating hardware pods):
+ *    - `52.dp`-tall recessed `#050608` (`92%` alpha, `1.5.dp` `#3A4048` steel bevel) CRT Search Box
+ *      (`start_search_box`, `15.sp` phosphor prompt), followed by
+ *    - Dark torn-zine steel-bordered [TrustedOnionDirectory] rows (`#0B0D10` at `90%` alpha)
+ *      obeying strict `<= 2:1` label density.
  */
 @Composable
 fun StartPage(
@@ -140,8 +115,7 @@ fun StartPage(
     modifier: Modifier = Modifier,
     onNavigate: (String) -> Unit = {},
 ) {
-    val trapColors = TrapTheme.colors
-    val zine = zineColorsFor(trapColors.isDark)
+    val zine = TrapCollageOverlayColors
     val focusManager = LocalFocusManager.current
     val scrollState = rememberScrollState()
     var searchQuery by rememberSaveable { mutableStateOf("") }
@@ -154,66 +128,64 @@ fun StartPage(
         }
     }
 
-    Box(
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
-            .background(zine.canvas)
-            .drawBehind {
-                // Concrete cutting-mat 24.dp grid + subtle diagonal zine registration stipple
-                val stepPx = 24.dp.toPx()
-                val strokePx = 1.dp.toPx()
-                var x = stepPx
-                while (x < size.width) {
-                    drawLine(
-                        color = zine.gridLine,
-                        start = Offset(x, 0f),
-                        end = Offset(x, size.height),
-                        strokeWidth = strokePx,
-                    )
-                    x += stepPx
-                }
-                var y = stepPx
-                while (y < size.height) {
-                    drawLine(
-                        color = zine.gridLine,
-                        start = Offset(0f, y),
-                        end = Offset(size.width, y),
-                        strokeWidth = strokePx,
-                    )
-                    y += stepPx
-                }
-                val dotRadius = 0.8.dp.toPx()
-                var gy = stepPx / 2f
-                var rowIdx = 0
-                while (gy < size.height) {
-                    var gx = if (rowIdx % 2 == 0) stepPx / 2f else stepPx
-                    while (gx < size.width) {
-                        drawCircle(
-                            color = zine.halftoneDot,
-                            radius = dotRadius,
-                            center = Offset(gx, gy),
-                        )
-                        gx += stepPx * 2f
-                    }
-                    gy += stepPx * 2f
-                    rowIdx++
-                }
-            }
+            .background(zine.canvasFallback)
             .testTag("start_page"),
     ) {
+        // 1. Fixed Full-Bleed Authentic TRAP Street-Zine Collage Wallpaper
+        //    FillWidth + TopCenter maps the full street-poster & TRAP door width edge-to-edge
+        //    with zero horizontal cropping so `i-Kee Koos`, `NNOVATION DAM`, and all 4 letters
+        //    of `T-R-A-P` are 100% visible on first launch!
+        Image(
+            painter = painterResource(R.drawable.bg_trap_street_zine),
+            contentDescription = null,
+            contentScale = ContentScale.FillWidth,
+            alignment = Alignment.TopCenter,
+            modifier = Modifier
+                .fillMaxSize()
+                .testTag("start_zine_wallpaper"),
+        )
+
+        // Seamless lower fade from the torn typewriter zine sheet into dark #0A0C0F below
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        0.0f to Color.Transparent,
+                        0.62f to Color.Transparent,
+                        0.82f to Color(0xCC0A0C0F),
+                        1.0f to zine.canvasFallback,
+                    ),
+                ),
+        )
+
+        val heroWindowHeight = (maxHeight * 0.47f).coerceIn(360.dp, 445.dp)
+
+        // 2. Scrollable Foreground over Fixed Street-Zine Wallpaper
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(scrollState)
                 .statusBarsPadding()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            ZineMastheadHeader(
-                state = state,
-                zine = zine,
-                onOpenSecurity = onOpenSecurity,
-            )
+            // Open Hero Window (~48% viewport height) showcasing the full TRAP graffiti & flyers
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(heroWindowHeight),
+            ) {
+                HeroTorHardwareBadge(
+                    state = state,
+                    zine = zine,
+                    onOpenSecurity = onOpenSecurity,
+                    modifier = Modifier.align(Alignment.TopEnd),
+                )
+            }
 
             RecessedCrtOnionSearchBox(
                 query = searchQuery,
@@ -231,12 +203,12 @@ fun StartPage(
                 },
             )
 
-            // 132.dp clearance so the bottom-most directory items scroll cleanly into full view
-            // above the floating MetaTools Tri-Pod hardware cluster.
+            // 156.dp clearance so bottom-most directory rows scroll cleanly into full view
+            // above the 1.5x floating KPT hardware pods!
             Spacer(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(132.dp)
+                    .height(156.dp)
                     .navigationBarsPadding()
                     .testTag("start_bottom_clearance"),
             )
@@ -244,11 +216,17 @@ fun StartPage(
     }
 }
 
+/**
+ * Compact top-right anodized hardware status keyplate (`start_tor_status`) tucked into the
+ * upper-right corner so the `TRAP` street-zine collage remains 100% open across the hero viewport.
+ * Strictly 2 labels (`TRAP` + live Tor status = `1:1 <= 2:1` label density).
+ */
 @Composable
-private fun ZineMastheadHeader(
+private fun HeroTorHardwareBadge(
     state: BrowserUiState,
     zine: ZineSheetColors,
     onOpenSecurity: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val statusText = if (state.tor.ready) {
         "Tor ready"
@@ -256,129 +234,62 @@ private fun ZineMastheadHeader(
         "Connecting to Tor \u00B7 ${state.tor.percent}%"
     }
     val ledColor = if (state.tor.ready) Color(0xFF39FF14) else Color(0xFFFFB000)
+    val badgeShape = RoundedCornerShape(8.dp)
 
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(zine.mastheadBg)
-            .border(width = 1.dp, color = zine.steelRule)
-            .drawBehind {
-                // Wheatpaste street-stencil amber bar + magenta registration tick on left edge
-                val barWidth = 4.dp.toPx()
-                drawRect(
-                    color = zine.mastheadStencil,
-                    topLeft = Offset.Zero,
-                    size = Size(barWidth, size.height),
-                )
-                drawRect(
-                    color = zine.sprayAccent,
-                    topLeft = Offset(0f, 0f),
-                    size = Size(barWidth, 12.dp.toPx()),
-                )
-                // Corner steel crop marks
-                val tickLen = 7.dp.toPx()
-                val stroke = 1.5.dp.toPx()
-                drawLine(
-                    color = zine.cropTick,
-                    start = Offset(size.width - tickLen, stroke),
-                    end = Offset(size.width, stroke),
-                    strokeWidth = stroke,
-                )
-                drawLine(
-                    color = zine.cropTick,
-                    start = Offset(size.width - stroke, 0f),
-                    end = Offset(size.width - stroke, tickLen),
-                    strokeWidth = stroke,
-                )
-            }
-            .padding(start = 12.dp, end = 10.dp, top = 10.dp, bottom = 10.dp),
+        modifier = modifier
+            .heightIn(min = 38.dp)
+            .clip(badgeShape)
+            .background(Color(0xE807090C))
+            .border(1.5.dp, zine.steelRule, badgeShape)
+            .clickable(role = Role.Button, onClick = onOpenSecurity)
+            .padding(horizontal = 11.dp, vertical = 7.dp)
+            .semantics { contentDescription = "Tor security and circuit status" }
+            .testTag("start_tor_status"),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Image(
-                painter = painterResource(R.drawable.ov_trap_mark),
-                contentDescription = null,
-                contentScale = ContentScale.Fit,
-                modifier = Modifier.size(42.dp),
-            )
+        Text(
+            text = "TRAP",
+            color = zine.mastheadStencil,
+            fontSize = 12.5.sp,
+            fontWeight = FontWeight.Black,
+            fontFamily = FontFamily.Monospace,
+            letterSpacing = 1.4.sp,
+            maxLines = 1,
+        )
 
-            // Street-zine stencil block lockup ("TRAP") — strictly 1 primary title
-            Box(
-                modifier = Modifier
-                    .drawBehind {
-                        // Hard 2dp amber stencil offset block behind dark cutout plate
-                        val offsetPx = 2.dp.toPx()
-                        drawRect(
-                            color = zine.mastheadStencil,
-                            topLeft = Offset(offsetPx, offsetPx),
-                            size = size,
-                        )
-                        drawRect(
-                            color = Color(0xFF0A0C0F),
-                            topLeft = Offset.Zero,
-                            size = size,
-                        )
-                    }
-                    .border(1.dp, zine.mastheadStencil)
-                    .padding(horizontal = 8.dp, vertical = 2.dp),
-            ) {
-                Text(
-                    text = "TRAP",
-                    color = zine.mastheadStencil,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Black,
-                    fontFamily = FontFamily.Monospace,
-                    letterSpacing = 2.5.sp,
-                    maxLines = 1,
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.width(8.dp))
-
-        // Live 1-line Tor transport readout (tappable to open Security / Tor Circuit pod/sheet)
-        Row(
+        Box(
             modifier = Modifier
-                .weight(1f, fill = false)
-                .heightIn(min = 38.dp)
-                .clip(RoundedCornerShape(3.dp))
-                .background(zine.keyplateBg)
-                .border(1.dp, zine.keyplateBorder, RoundedCornerShape(3.dp))
-                .clickable(role = Role.Button, onClick = onOpenSecurity)
-                .padding(horizontal = 10.dp, vertical = 7.dp)
-                .semantics { contentDescription = "Tor security and circuit status" }
-                .testTag("start_tor_status"),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(7.dp),
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(7.dp)
-                    .drawBehind {
-                        drawCircle(
-                            color = ledColor.copy(alpha = 0.28f),
-                            radius = size.minDimension * 0.85f,
-                        )
-                        drawCircle(
-                            color = ledColor,
-                            radius = size.minDimension / 2f,
-                        )
-                    },
-            )
-            Text(
-                text = statusText,
-                color = ledColor,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                fontFamily = FontFamily.Monospace,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
+                .width(1.dp)
+                .height(14.dp)
+                .background(zine.steelRule),
+        )
+
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .drawBehind {
+                    drawCircle(
+                        color = ledColor.copy(alpha = 0.32f),
+                        radius = size.minDimension * 0.9f,
+                    )
+                    drawCircle(
+                        color = ledColor,
+                        radius = size.minDimension / 2f,
+                    )
+                },
+        )
+
+        Text(
+            text = statusText,
+            color = ledColor,
+            fontSize = 12.5.sp,
+            fontWeight = FontWeight.SemiBold,
+            fontFamily = FontFamily.Monospace,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -390,22 +301,22 @@ private fun RecessedCrtOnionSearchBox(
     onSubmit: () -> Unit,
     zine: ZineSheetColors,
 ) {
-    val bezelOuter = Color(0xFF565E68)
-    val bezelHighlight = Color(0xFF8B94A0)
-    val bezelShadow = Color(0xFF1B1F25)
-    val crtWell = Color(0xFF050608)
+    val bezelOuter = Color(0xFF3A4048)
+    val bezelHighlight = Color(0xFF7D8692)
+    val bezelShadow = Color(0xFF15181D)
+    val crtWell = Color(0xEB050608) // #050608 at 92% alpha
     val phosphorInk = Color(0xFF39FF14)
-    val phosphorHint = Color(0xFF5B7D63)
+    val phosphorHint = Color(0xFF6B9475)
+    val outerShape = RoundedCornerShape(10.dp)
+    val innerShape = RoundedCornerShape(8.dp)
 
-    // Bead-blasted pewter outer collar framing recessed #050608 CRT phosphor search well
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(6.dp))
+            .clip(outerShape)
             .background(bezelOuter)
             .drawBehind {
                 val bevel = 1.5.dp.toPx()
-                // Top & left specular steel ridge
                 drawRect(
                     color = bezelHighlight,
                     topLeft = Offset.Zero,
@@ -416,7 +327,6 @@ private fun RecessedCrtOnionSearchBox(
                     topLeft = Offset.Zero,
                     size = Size(bevel, size.height),
                 )
-                // Bottom & right cast shadow bevel
                 drawRect(
                     color = bezelShadow,
                     topLeft = Offset(0f, size.height - bevel),
@@ -428,40 +338,39 @@ private fun RecessedCrtOnionSearchBox(
                     size = Size(bevel, size.height),
                 )
             }
-            .padding(3.dp),
+            .padding(2.dp),
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = 48.dp)
-                .clip(RoundedCornerShape(4.dp))
+                .heightIn(min = 52.dp)
+                .clip(innerShape)
                 .background(crtWell)
-                .border(1.dp, Color(0xFF17201B), RoundedCornerShape(4.dp))
+                .border(1.5.dp, Color(0xFF3A4048), innerShape)
                 .drawWithContent {
                     drawContent()
-                    // Recessed CRT top inset shadow + faint curved glass reflection + scanlines
                     drawRect(
                         brush = Brush.verticalGradient(
                             colors = listOf(Color(0xCC000000), Color.Transparent),
                             startY = 0f,
-                            endY = 6.dp.toPx(),
+                            endY = 7.dp.toPx(),
                         ),
                     )
                     drawLine(
-                        color = Color(0x14FFFFFF),
-                        start = Offset(8.dp.toPx(), 1.5.dp.toPx()),
-                        end = Offset(size.width - 8.dp.toPx(), 1.5.dp.toPx()),
+                        color = Color(0x18FFFFFF),
+                        start = Offset(10.dp.toPx(), 1.5.dp.toPx()),
+                        end = Offset(size.width - 10.dp.toPx(), 1.5.dp.toPx()),
                         strokeWidth = 1.dp.toPx(),
                     )
                 }
-                .padding(horizontal = 10.dp, vertical = 8.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(7.dp),
+            horizontalArrangement = Arrangement.spacedBy(9.dp),
         ) {
             TrapIcon(
                 glyph = TrapGlyph.Onion,
                 tint = phosphorInk,
-                size = 16.dp,
+                size = 18.dp,
                 forceVector = true,
             )
 
@@ -471,7 +380,7 @@ private fun RecessedCrtOnionSearchBox(
                 singleLine = true,
                 textStyle = TextStyle(
                     color = phosphorInk,
-                    fontSize = 13.sp,
+                    fontSize = 15.sp,
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Medium,
                 ),
@@ -493,8 +402,8 @@ private fun RecessedCrtOnionSearchBox(
                             Text(
                                 text = "Search DuckDuckGo .onion or enter address...",
                                 color = phosphorHint,
-                                fontSize = 11.5.sp,
-                                letterSpacing = (-0.2).sp,
+                                fontSize = 13.5.sp,
+                                letterSpacing = (-0.5).sp,
                                 fontFamily = FontFamily.Monospace,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
@@ -508,8 +417,8 @@ private fun RecessedCrtOnionSearchBox(
             if (query.isNotEmpty()) {
                 Box(
                     modifier = Modifier
-                        .size(28.dp)
-                        .clip(RoundedCornerShape(3.dp))
+                        .size(30.dp)
+                        .clip(RoundedCornerShape(5.dp))
                         .clickable(
                             role = Role.Button,
                             onClick = onClear,
@@ -520,29 +429,29 @@ private fun RecessedCrtOnionSearchBox(
                 ) {
                     TrapIcon(
                         glyph = TrapGlyph.Close,
-                        tint = Color(0xFF8A9990),
-                        size = 15.dp,
+                        tint = Color(0xFF98A89E),
+                        size = 16.dp,
                         forceVector = true,
                     )
                 }
 
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(3.dp))
+                        .clip(RoundedCornerShape(5.dp))
                         .background(zine.mastheadStencil)
                         .clickable(
                             role = Role.Button,
                             onClick = onSubmit,
                         )
-                        .padding(horizontal = 9.dp, vertical = 5.dp)
+                        .padding(horizontal = 11.dp, vertical = 6.dp)
                         .testTag("start_search_submit"),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
                         text = "GO",
                         color = Color(0xFF12100C),
-                        fontSize = 11.5.sp,
-                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.ExtraBold,
                         fontFamily = FontFamily.Monospace,
                         maxLines = 1,
                     )
@@ -557,10 +466,12 @@ private fun TrustedOnionDirectorySheet(
     zine: ZineSheetColors,
     onSelectEntry: (OnionServiceEntry) -> Unit,
 ) {
+    val sheetShape = RoundedCornerShape(8.dp)
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .border(width = 1.dp, color = zine.steelRule)
+            .clip(sheetShape)
+            .border(width = 1.5.dp, color = zine.steelRule, shape = sheetShape)
             .testTag("trusted_onion_directory"),
     ) {
         TrustedOnionDirectory.entriesBySection.forEachIndexed { sectionIndex, (section, sectionEntries) ->
@@ -612,15 +523,15 @@ private fun ZineDirectorySectionHeader(
                 drawRect(
                     color = zine.mastheadStencil,
                     topLeft = Offset.Zero,
-                    size = Size(3.dp.toPx(), size.height),
+                    size = Size(3.5.dp.toPx(), size.height),
                 )
             }
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = 12.dp, vertical = 9.dp),
     ) {
         Text(
             text = title,
             color = zine.sectionInk,
-            fontSize = 11.sp,
+            fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
             fontFamily = FontFamily.Monospace,
             letterSpacing = 1.3.sp,
@@ -649,7 +560,7 @@ private fun OnionDirectoryRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 58.dp)
+            .heightIn(min = 62.dp)
             .background(rowBg)
             .clickable(role = Role.Button, onClick = onClick)
             .drawBehind {
@@ -663,7 +574,7 @@ private fun OnionDirectoryRow(
                     )
                 }
             }
-            .padding(horizontal = 12.dp, vertical = 10.dp)
+            .padding(horizontal = 14.dp, vertical = 11.dp)
             .testTag("onion_dir_${entry.id}"),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -675,7 +586,7 @@ private fun OnionDirectoryRow(
             Text(
                 text = entry.title,
                 color = zine.titleInk,
-                fontSize = 14.5.sp,
+                fontSize = 15.5.sp,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -683,7 +594,7 @@ private fun OnionDirectoryRow(
             Text(
                 text = entry.description,
                 color = zine.descInk,
-                fontSize = 12.sp,
+                fontSize = 12.5.sp,
                 fontWeight = FontWeight.Normal,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -694,16 +605,16 @@ private fun OnionDirectoryRow(
 
         Box(
             modifier = Modifier
-                .clip(RoundedCornerShape(3.dp))
+                .clip(RoundedCornerShape(4.dp))
                 .background(zine.keyplateBg)
-                .border(1.dp, zine.keyplateBorder, RoundedCornerShape(3.dp))
-                .padding(horizontal = 7.dp, vertical = 4.dp),
+                .border(1.dp, zine.keyplateBorder, RoundedCornerShape(4.dp))
+                .padding(horizontal = 8.dp, vertical = 5.dp),
             contentAlignment = Alignment.Center,
         ) {
             Text(
                 text = entry.shortOnionKey,
                 color = zine.onionKeyInk,
-                fontSize = 11.sp,
+                fontSize = 11.5.sp,
                 fontWeight = FontWeight.Medium,
                 fontFamily = FontFamily.Monospace,
                 maxLines = 1,

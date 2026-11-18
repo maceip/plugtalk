@@ -43,7 +43,7 @@ impl Default for TorConfig {
             allow_clearnet: true,
             clearnet_allowlist_path: None,
             isolate_per_apex: true,
-            connect_timeout: Duration::from_secs(60),
+            connect_timeout: Duration::from_secs(120),
         }
     }
 }
@@ -70,14 +70,30 @@ impl TorConfig {
         std::fs::create_dir_all(&self.cache_dir)
             .with_context(|| format!("cannot create {}", self.cache_dir.display()))?;
 
-        // The hidden service directory is what makes `.onion` addresses
-        // resolvable; Arti fetches it as part of the regular consensus.
-        let config = arti_client::config::TorClientConfigBuilder::from_directories(
+        // Arti's default `StreamTimeoutConfig::connect_timeout` is only 10s,
+        // which prematurely aborts slow 6-hop `.onion` BEGIN/CONNECTED handshakes
+        // and mobile HsDir/rendezvous circuit builds. Raise stream and circuit
+        // timeouts to match `self.connect_timeout` (120s by default).
+        let mut builder = arti_client::config::TorClientConfigBuilder::from_directories(
             &self.state_dir,
             &self.cache_dir,
-        )
-        .build()
-        .map_err(|e| anyhow::anyhow!("cannot build the Arti configuration: {e}"))?;
+        );
+        builder
+            .stream_timeouts()
+            .connect_timeout(self.connect_timeout)
+            .resolve_timeout(Duration::from_secs(60))
+            .resolve_ptr_timeout(Duration::from_secs(60));
+        builder
+            .circuit_timing()
+            .request_timeout(self.connect_timeout)
+            .request_max_retries(24)
+            .hs_desc_fetch_attempts(12)
+            .hs_intro_rend_attempts(12)
+            .hs_dir_requery_interval(Duration::from_secs(30));
+
+        let config = builder
+            .build()
+            .map_err(|e| anyhow::anyhow!("cannot build the Arti configuration: {e}"))?;
         Ok(config)
     }
 }

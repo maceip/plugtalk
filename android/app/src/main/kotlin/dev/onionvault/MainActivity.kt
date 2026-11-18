@@ -1102,15 +1102,27 @@ class MainActivity : FragmentActivity() {
         val cachedPrev = backStackManager.previousForUrl(active.id, active.url)
         val navigated = tabSessionManager.goBack(active.id)
         if (navigated) {
-            if (cachedPrev != null) {
+            val updated = tabSessionManager.activeTab()
+            clearStatusAndPgpError()
+            if (updated != null && isBlankOrStartUrl(updated.url)) {
+                activeSnapshotView = null
+                uiState = uiState.copy(
+                    viewingSnapshot = false,
+                    backPreview = null,
+                )
+            } else if (cachedPrev != null) {
                 activeSnapshotView = cachedPrev.toBackPreviewState()
                 uiState = uiState.copy(
                     viewingSnapshot = true,
                     backPreview = activeSnapshotView,
                 )
+            } else {
+                activeSnapshotView = null
+                uiState = uiState.copy(viewingSnapshot = false)
             }
             refreshTorStatusNow()
         } else if (cachedPrev != null) {
+            clearStatusAndPgpError()
             backStackManager.popNewest(active.id)
             activeSnapshotView = cachedPrev.toBackPreviewState()
             uiState = uiState.copy(
