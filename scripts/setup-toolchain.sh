@@ -59,7 +59,8 @@ export JAVA_HOME=$TC/jdk25
 export ANDROID_HOME=$SDK
 export ANDROID_SDK_ROOT=$SDK
 export ANDROID_NDK_HOME=$TC/ndk-$NDK_VERSION
-export PATH=\$JAVA_HOME/bin:\$ANDROID_HOME/platform-tools:\$PATH
+export ANDROID_NDK_ROOT=$TC/ndk-$NDK_VERSION
+export PATH=\$JAVA_HOME/bin:\$ANDROID_HOME/platform-tools:\$ANDROID_HOME/build-tools/37.0.0:\$ANDROID_HOME/cmdline-tools/latest/bin:\$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:\$PATH
 EOF
 
 echo "Done. Run: source $TC/env.sh && cd android && ./gradlew :app:assembleDebug"
