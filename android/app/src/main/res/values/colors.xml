@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Adaptive Launcher & V3 Cutout Brand Swatches -->
-    <color name="ic_launcher_background">#FF0D080B</color>
-    <color name="trap_icon_backdrop">#FF0D080B</color>
-    <color name="trap_icon_extrude">#FF361821</color>
-    <color name="trap_icon_cyan">#FF5BCEF1</color>
-    <color name="trap_icon_magenta">#FFF27AF3</color>
+    <!-- Adaptive Launcher & Graffiti Squircle Brand Swatches -->
+    <color name="ic_launcher_background">#FF181818</color>
+    <color name="trap_icon_backdrop">#FF181818</color>
+    <color name="trap_icon_extrude">#FF5B50DD</color>
+    <color name="trap_icon_cyan">#FF11F20B</color>
+    <color name="trap_icon_magenta">#FFE8E503</color>
 
     <!-- SecureDrop Chrome Dark Tokens -->
     <color name="trap_sd_bg">#FF0F0C09</color>

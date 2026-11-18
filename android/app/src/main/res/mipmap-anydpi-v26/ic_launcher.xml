@@ -2,12 +2,22 @@
 <!--
     The adaptive icon of Trap (Android 8+, with Android 13+ monochrome layer).
 
-    - background: deep obsidian-plum (#0D080B) matching the V3 shutter shadow
-    - foreground: unmodified V3 cutout fitted inside the 72dp safe zone
-    - monochrome: shutter-striped TR/AP glyph mask for Material You themed icons
+    - background: dark charcoal (#181818) matched to the outer squircle rim
+    - foreground: unresized 1024x1024 mipmap-nodpi squircle inset 18% so
+      Android's 72dp/108dp circular and squircle masks never clip TR/AP
+    - monochrome: unresized 1024x1024 luminance-to-alpha glyph mask inset
+      16.67% (72dp/108dp) for Material You themed icons
 -->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <background android:drawable="@mipmap/ic_launcher_background" />
-    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
-    <monochrome android:drawable="@mipmap/ic_launcher_monochrome" />
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground>
+        <inset
+            android:drawable="@mipmap/ic_launcher_foreground"
+            android:inset="18%" />
+    </foreground>
+    <monochrome>
+        <inset
+            android:drawable="@mipmap/ic_launcher_monochrome"
+            android:inset="16.67%" />
+    </monochrome>
 </adaptive-icon>
