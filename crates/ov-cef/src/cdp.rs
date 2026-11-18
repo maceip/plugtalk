@@ -1,8 +1,8 @@
 //! Pure-Rust Chrome DevTools Protocol (`DOM.getDocument`) PGP node classifier.
 //!
 //! Parses the JSON tree returned by `DOM.getDocument({"depth": -1, "pierce": true})`
-//! in Chromium / Cefrium without executing JavaScript and without linking
-//! `libcef.so`.
+//! in Chromium / Cefpack without executing JavaScript and without linking
+//! `libcefpack_content.so`.
 //!
 //! Specifically handles Blink's User-Agent Shadow Root (`shadowRootType:
 //! "user-agent"` -> `<div id="inner-editor">` -> `#text`) so user-typed and

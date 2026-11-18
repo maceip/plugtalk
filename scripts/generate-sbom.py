@@ -5,11 +5,12 @@ Inspects three empirical sources with zero placeholder or synthetic entries:
   1. `cargo metadata --format-version 1 --locked` + `Cargo.lock` archive SHA-256 checksums
      (all Rust workspace & third-party crates, versions, licenses, purls, dependency graph).
   2. `./android/gradlew --project-dir android :app:dependencies --configuration debugRuntimeClasspath`
-     + resolved `.aar` / `.jar` / `.pom` files in `${GRADLE_USER_HOME:-~/.gradle}/caches/modules-2/files-2.1`
-     (all Android/Maven runtime libraries including `com.cefrium:cefrium-sdk:0.19.0`, AndroidX,
-     Jetpack Compose, Kotlin/Coroutines, with real SHA-256 digests and POM license metadata).
+     + resolved `cefpack-android.aar` (`https://github.com/maceip/cefpack`) and `.aar` / `.jar` / `.pom`
+     files in `${GRADLE_USER_HOME:-~/.gradle}/caches/modules-2/files-2.1` (all Android/Maven runtime
+     libraries including Cefpack, AndroidX, Jetpack Compose, Kotlin/Coroutines, with real SHA-256 digests
+     and POM license metadata).
   3. Built `app-debug.apk` (`aapt2 dump badging` manifest metadata, full APK SHA-256, and
-     embedded `lib/{arm64-v8a,x86_64}/{libcef.so,libonion_vault.so}` SHA-256 digests).
+     embedded `lib/{arm64-v8a,x86_64}/{libcefpack_content.so,libonion_vault.so}` SHA-256 digests).
 
 Emits:
   - `<output-dir>/app-debug.sbom.cdx.json`  (CycloneDX 1.5 JSON)
@@ -168,8 +169,8 @@ def inspect_apk(apk_path: pathlib.Path) -> dict[str, Any]:
 
     embedded_binaries: list[dict[str, Any]] = []
     target_members = [
-        ("lib/arm64-v8a/libcef.so", "LGPL-3.0-or-later", "Cefrium / Chromium native engine (arm64-v8a)"),
-        ("lib/x86_64/libcef.so", "LGPL-3.0-or-later", "Cefrium / Chromium native engine (x86_64)"),
+        ("lib/arm64-v8a/libcefpack_content.so", "BSD-3-Clause", "Cefpack / Chromium 156 content engine (arm64-v8a)"),
+        ("lib/x86_64/libcefpack_content.so", "BSD-3-Clause", "Cefpack / Chromium 156 content engine (x86_64)"),
         ("lib/arm64-v8a/libonion_vault.so", "Apache-2.0 OR MIT", "Trap Rust JNI shared library (arm64-v8a)"),
         ("lib/x86_64/libonion_vault.so", "Apache-2.0 OR MIT", "Trap Rust JNI shared library (x86_64)"),
     ]
@@ -439,8 +440,6 @@ def collect_gradle_components(
     # Sanity-check mandatory runtime libraries so truncated/broken Gradle output fails immediately.
     coord_names = {f"{g}:{a}" for g, a, _ in coords}
     for required_ga in (
-        "com.cefrium:cefrium-sdk",
-        "com.cefrium:cefrium-sdk-core",
         "androidx.appcompat:appcompat",
         "androidx.compose.ui:ui",
         "org.jetbrains.kotlinx:kotlinx-coroutines-android",
@@ -453,6 +452,56 @@ def collect_gradle_components(
     coord_to_ref: dict[tuple[str, str, str], str] = {}
     components: list[dict[str, Any]] = []
 
+    cefpack_meta_path = root / "android" / "app" / "build" / "cefpack" / "resolved-aar.json"
+    if not cefpack_meta_path.is_file():
+        subprocess.run(
+            [
+                str(gradlew),
+                "-q",
+                "--project-dir",
+                str(root / "android"),
+                ":app:resolveCefpackAar",
+            ],
+            cwd=root,
+            env=env,
+            check=True,
+        )
+    if not cefpack_meta_path.is_file():
+        raise RuntimeError(f"Missing resolved Cefpack AAR metadata at {cefpack_meta_path}")
+
+    cefpack_meta = json.loads(cefpack_meta_path.read_text(encoding="utf-8"))
+    cefpack_aar_path = pathlib.Path(cefpack_meta["aarPath"])
+    if not cefpack_aar_path.is_file():
+        raise RuntimeError(f"Resolved Cefpack AAR file not found at {cefpack_aar_path}")
+    cefpack_sha256 = sha256_file(cefpack_aar_path)
+    cefpack_tag = str(cefpack_meta.get("tag") or "v0.2.0")
+    cefpack_ver = str(cefpack_meta.get("version") or cefpack_tag.lstrip("v"))
+    cefpack_purl = f"pkg:github/maceip/cefpack@{cefpack_tag}?artifact=cefpack-android.aar"
+    cefpack_source = str(cefpack_meta.get("source") or "")
+    cefpack_download = (
+        cefpack_source
+        if cefpack_source.startswith(("https://", "http://"))
+        else f"https://github.com/maceip/cefpack/releases/download/{cefpack_tag}/cefpack-android.aar"
+    )
+    components.append(
+        {
+            "bom_ref": cefpack_purl,
+            "spdx_id": sanitize_spdx_id(f"github-maceip-cefpack-{cefpack_tag}"),
+            "ecosystem": "github-release-aar",
+            "group": "dev.cefpack",
+            "name": "cefpack-android",
+            "version": cefpack_ver,
+            "purl": cefpack_purl,
+            "sha256": cefpack_sha256,
+            "artifact_filename": cefpack_aar_path.name,
+            "license_spdx": "BSD-3-Clause AND (Apache-2.0 OR MIT)",
+            "license_raw": "BSD-3-Clause AND (Apache-2.0 OR MIT)",
+            "download_url": cefpack_download,
+            "description": "Cefpack source-built multi-ABI Chromium 156 Android content embedder AAR",
+            "is_workspace": False,
+        }
+    )
+
     for group, artifact, version in sorted(coords):
         purl = f"pkg:maven/{group}/{artifact}@{version}"
         coord_to_ref[(group, artifact, version)] = purl
@@ -463,11 +512,7 @@ def collect_gradle_components(
             parse_pom_metadata(pom_path) if pom_path is not None else (None, None, None)
         )
 
-        if group == "com.cefrium":
-            download_url = (
-                f"https://maven.cefrium.com/{group.replace('.', '/')}/{artifact}/{version}/"
-            )
-        elif group.startswith(("androidx.", "com.google.android.")):
+        if group.startswith(("androidx.", "com.google.android.")):
             download_url = (
                 f"https://dl.google.com/dl/android/maven2/{group.replace('.', '/')}/{artifact}/{version}/"
             )
@@ -496,10 +541,13 @@ def collect_gradle_components(
         )
 
     edges: dict[str, list[str]] = {
-        coord_to_ref[src]: sorted(coord_to_ref[dst] for dst in dsts if dst != src)
-        for src, dsts in raw_edges.items()
+        cefpack_purl: [],
+        **{
+            coord_to_ref[src]: sorted(coord_to_ref[dst] for dst in dsts if dst != src)
+            for src, dsts in raw_edges.items()
+        },
     }
-    root_refs = sorted(coord_to_ref[c] for c in direct_roots)
+    root_refs = sorted({cefpack_purl, *(coord_to_ref[c] for c in direct_roots)})
     return components, edges, root_refs
 
 

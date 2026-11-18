@@ -6,21 +6,26 @@
 #   ./scripts/audit-apk.sh [path/to/app-debug.apk]
 #
 # Verifies before emulator gate, attestation, or release:
-#   1. `aapt2 dump badging` confirms `applicationId='dev.onionvault'` (`package: name='dev.onionvault'`)
-#      and non-empty `versionCode` / `versionName`, AND `aapt2 dump xmltree` confirms
+#   1. Zero legacy banned engine references in `android/**/*.gradle.kts` or `proguard-rules.pro`,
+#      `aapt2 dump badging` confirms `applicationId='dev.onionvault'` and non-empty
+#      `versionCode` / `versionName`, AND `aapt2 dump xmltree` confirms
 #      `<application android:memtagMode="off">` (`0x01010624=0`) with zero `<service>` /
-#      `<process>` overrides (preventing ARMv9 MTE `SetHeapTaggingLevel` `SIGTRAP` crashes).
-#   2. Multi-ABI native libraries exist, are non-empty, and have 16KB-aligned (`p_align >= 0x4000`)
-#      ELF64 `PT_LOAD` segments:
-#        - lib/arm64-v8a/{libcef.so,libonion_vault.so}
-#        - lib/x86_64/{libcef.so,libonion_vault.so}
+#      `<process>` overrides plus merged `SandboxedProcessService0` & `PrivilegedProcessService0`.
+#   2. Multi-ABI native libraries exist, are non-empty, and EVERY `.so` in the APK has
+#      16KB-aligned (`p_align >= 0x4000`) ELF64 `PT_LOAD` segments:
+#        - lib/arm64-v8a/{libcefpack_content.so,libonion_vault.so}
+#        - lib/x86_64/{libcefpack_content.so,libonion_vault.so}
 #   3. Bundled legal notices exist:
 #        - assets/licenses/{GPL-3.0,LGPL-2.1,LGPL-3.0}.txt
-#   4. Chromium `.pak` assets exist and are stored uncompressed (`Stored`, compress_type=0).
-#   5. `classes*.dex` type tables contain `Lorg/chromium/`, `Lcom/cefrium/`, `Lorg/jni_zero/`,
-#      and `Ldev/onionvault/` (catching the missing-Java-layer crash from INCIDENT-REPORT.md).
-#   6. `libonion_vault.so` on BOTH `arm64-v8a` and `x86_64` has ZERO `libcef.so` `DT_NEEDED`
-#      entries and exports all 24 `Java_dev_onionvault_OvNative_*` JNI entry points.
+#   4. Cefpack Chromium assets (`assets/cefpack_resources.pak`, `assets/icudtl.dat`) exist and
+#      are stored uncompressed (`Stored`, compress_type=0).
+#   5. `classes*.dex` type and string tables contain `Ldev/cefpack/android/`, `Lorg/chromium/`,
+#      `Lorg/jni_zero/`, and `Ldev/onionvault/`, while containing ZERO banned legacy engine,
+#      Google Play Services (`Lcom/google/android/gms/`), Firebase (`Lcom/google/firebase/`),
+#      or MLKit (`Lcom/google/mlkit/`) classes or strings.
+#   6. `libonion_vault.so` on BOTH `arm64-v8a` and `x86_64` has ZERO browser `.so` `DT_NEEDED`
+#      entries and exports all 24 `Java_dev_onionvault_OvNative_*` JNI entry points, while
+#      `libcefpack_content.so` exports `JNI_OnLoad`.
 #   7. Valid APK Signature Scheme v2+ signature (matching deterministic `android/app/debug.keystore`
 #      when signed with the Android Debug DN).
 
@@ -128,7 +133,27 @@ fi
 
 APKSIGNER="$(find_apksigner || true)"
 
-echo "== [1/5] Auditing AndroidManifest badging & ARMv9 memtagMode with $(basename "$AAPT2") =="
+echo "== [1/5] Auditing Gradle build files, AndroidManifest badging, child services & ARMv9 memtagMode =="
+python3 - "$REPO_ROOT" <<'PY'
+import pathlib
+import sys
+
+repo_root = pathlib.Path(sys.argv[1])
+banned_token = "cef" + "rium"
+gradle_files = sorted(repo_root.glob("android/**/*.gradle.kts")) + [
+    repo_root / "android/app/proguard-rules.pro",
+]
+for gf in gradle_files:
+    if not gf.is_file():
+        continue
+    text = gf.read_text(encoding="utf-8", errors="replace")
+    if banned_token in text.lower():
+        raise SystemExit(
+            f"::error::Forbidden legacy '{banned_token}' reference found in {gf.relative_to(repo_root)}"
+        )
+print(f"  [gradle] Verified 0 '{banned_token}' references across {len(gradle_files)} Gradle/ProGuard config files")
+PY
+
 BADGING="$("$AAPT2" dump badging "$APK")"
 PKG_LINE="$(printf '%s\n' "$BADGING" | grep -m 1 '^package:' || true)"
 if [[ -z "$PKG_LINE" ]]; then
@@ -159,6 +184,20 @@ printf '%s\n' "$XMLTREE" | python3 -c '
 import re
 import sys
 
+xml_text = sys.stdin.read()
+banned_token = "cef" + "rium"
+if banned_token in xml_text.lower():
+    raise SystemExit(f"::error::Merged AndroidManifest.xml contains forbidden {banned_token} reference")
+
+for required_service in (
+    "org.chromium.content.app.SandboxedProcessService0",
+    "org.chromium.content.app.PrivilegedProcessService0",
+):
+    if required_service not in xml_text:
+        raise SystemExit(
+            f"::error::Merged AndroidManifest.xml is missing required Chromium child service {required_service}"
+        )
+
 stack: list[tuple[int, str]] = []
 app_memtag: list[tuple[str, int]] = []
 overrides: list[tuple[str, str, int]] = []
@@ -167,7 +206,7 @@ elem_re = re.compile(r"^(\s*)E:\s+([A-Za-z0-9_.-]+)")
 attr_re = re.compile(r"^(\s*)A:\s+.*:memtagMode\(0x01010624\)=(.*)$")
 val_re = re.compile(r"^(?:\(type\s+0x[0-9a-fA-F]+\))?\s*(0x[0-9a-fA-F]+|-?[0-9]+)")
 
-for raw_line in sys.stdin:
+for raw_line in xml_text.splitlines():
     line = raw_line.rstrip("\r\n")
     m_elem = elem_re.match(line)
     if m_elem:
@@ -204,34 +243,52 @@ if overrides:
     raise SystemExit(
         f"::error::Child manifest component(s) override android:memtagMode away from off (0): {overrides}"
     )
-print(f"  [manifest] <application android:memtagMode=\"off\"> verified ({app_memtag[0][0]}); 0 component overrides")
+print(f"  [manifest] <application android:memtagMode=\"off\"> + Sandboxed/Privileged child services verified; 0 overrides")
 '
 
-echo "== [2/5] Auditing ZIP entries, 16KB ELF PT_LOAD alignment, .pak storage, licenses, and DEX descriptors =="
+echo "== [2/5] Auditing ZIP entries, 16KB ELF PT_LOAD alignment, Stored assets, licenses, and DEX tables =="
 python3 - "$APK" <<'PY'
 import struct
 import sys
 import zipfile
 
 apk_path = sys.argv[1]
+banned_token = "cef" + "rium"
 
 required_libs = [
-    "lib/arm64-v8a/libcef.so",
+    "lib/arm64-v8a/libcefpack_content.so",
     "lib/arm64-v8a/libonion_vault.so",
-    "lib/x86_64/libcef.so",
+    "lib/x86_64/libcefpack_content.so",
     "lib/x86_64/libonion_vault.so",
 ]
+allowed_abi_dirs = {"arm64-v8a", "x86_64"}
 required_licenses = [
     "assets/licenses/GPL-3.0.txt",
     "assets/licenses/LGPL-2.1.txt",
     "assets/licenses/LGPL-3.0.txt",
 ]
+required_stored_assets = [
+    "assets/cefpack_resources.pak",
+    "assets/icudtl.dat",
+]
 required_dex_prefixes = {
+    "Ldev/cefpack/android/": 0,
     "Lorg/chromium/": 0,
-    "Lcom/cefrium/": 0,
     "Lorg/jni_zero/": 0,
     "Ldev/onionvault/": 0,
 }
+required_dex_classes = {
+    "Ldev/cefpack/android/CefpackEngine;",
+    "Ldev/cefpack/android/CefpackSession;",
+    "Ldev/cefpack/android/CefpackViewAndroidDelegate;",
+    "Ldev/cefpack/android/R;",
+}
+forbidden_dex_prefixes = (
+    f"Lcom/{banned_token}/",
+    "Lcom/google/android/gms/",
+    "Lcom/google/firebase/",
+    "Lcom/google/mlkit/",
+)
 
 
 def verify_elf64_16k_pt_load_alignment(zf: zipfile.ZipFile, entry: str) -> list[str]:
@@ -283,32 +340,52 @@ def read_uleb128(buf: bytes, offset: int) -> tuple[int, int]:
         shift += 7
 
 
-def collect_dex_type_descriptors(dex_bytes: bytes) -> list[str]:
+def inspect_dex(dex_bytes: bytes) -> tuple[list[str], list[str]]:
     if len(dex_bytes) < 112 or dex_bytes[:4] != b"dex\n":
         raise RuntimeError("Invalid DEX header magic")
     string_ids_size, string_ids_off, type_ids_size, type_ids_off = struct.unpack_from(
         "<IIII", dex_bytes, 56
     )
-    descriptors: list[str] = []
-    for idx in range(type_ids_size):
-        (descriptor_idx,) = struct.unpack_from("<I", dex_bytes, type_ids_off + idx * 4)
-        if descriptor_idx >= string_ids_size:
-            continue
-        (str_data_off,) = struct.unpack_from("<I", dex_bytes, string_ids_off + descriptor_idx * 4)
+    strings: list[str] = []
+    for s_idx in range(string_ids_size):
+        (str_data_off,) = struct.unpack_from("<I", dex_bytes, string_ids_off + s_idx * 4)
         _, payload_off = read_uleb128(dex_bytes, str_data_off)
         end_off = dex_bytes.find(b"\x00", payload_off)
         if end_off == -1:
+            strings.append("")
             continue
-        descriptors.append(dex_bytes[payload_off:end_off].decode("utf-8", errors="replace"))
-    return descriptors
+        strings.append(dex_bytes[payload_off:end_off].decode("utf-8", errors="replace"))
+
+    descriptors: list[str] = []
+    for idx in range(type_ids_size):
+        (descriptor_idx,) = struct.unpack_from("<I", dex_bytes, type_ids_off + idx * 4)
+        if descriptor_idx < len(strings):
+            descriptors.append(strings[descriptor_idx])
+    return strings, descriptors
 
 
 with zipfile.ZipFile(apk_path, "r") as zf:
     infos = {info.filename: info for info in zf.infolist()}
 
+    for name in sorted(infos):
+        if banned_token in name.lower() or name.endswith("/libcef.so"):
+            raise SystemExit(f"::error::Forbidden legacy entry packaged in APK: {name}")
+
     for entry in required_libs:
         if entry not in infos:
             raise SystemExit(f"::error::Missing required native library in APK: {entry}")
+        if infos[entry].file_size == 0:
+            raise SystemExit(f"::error::Empty native library in APK: {entry}")
+
+    all_so_entries = sorted(
+        name for name in infos if name.startswith("lib/") and name.endswith(".so")
+    )
+    for entry in all_so_entries:
+        parts = entry.split("/")
+        if len(parts) < 3 or parts[1] not in allowed_abi_dirs:
+            raise SystemExit(
+                f"::error::Unexpected native library ABI directory in APK: {entry} (allowed: {sorted(allowed_abi_dirs)})"
+            )
         info = infos[entry]
         if info.file_size == 0:
             raise SystemExit(f"::error::Empty native library in APK: {entry}")
@@ -321,19 +398,25 @@ with zipfile.ZipFile(apk_path, "r") as zf:
             raise SystemExit(f"::error::Missing or empty bundled license file: {entry}")
         print(f"  [license] {entry}: {infos[entry].file_size:,} bytes")
 
-    pak_infos = [
+    for entry in required_stored_assets:
+        if entry not in infos or infos[entry].file_size == 0:
+            raise SystemExit(f"::error::Missing or empty required Cefpack asset in APK: {entry}")
+        if infos[entry].compress_type != zipfile.ZIP_STORED:
+            raise SystemExit(
+                f"::error::Cefpack asset must be Stored uncompressed (compress_type=0), got compress_type={infos[entry].compress_type} for {entry}"
+            )
+        print(f"  [asset] {entry}: {infos[entry].file_size:,} bytes (Stored)")
+
+    mmap_assets = [
         info
         for name, info in sorted(infos.items())
-        if name.startswith("assets/") and (name.endswith(".pak") or ".pak+" in name)
+        if name.startswith("assets/") and (name.endswith(".pak") or name.endswith(".dat"))
     ]
-    if not pak_infos:
-        raise SystemExit("::error::No Chromium .pak assets found under assets/ in APK")
-    for info in pak_infos:
+    for info in mmap_assets:
         if info.compress_type != zipfile.ZIP_STORED:
             raise SystemExit(
-                f"::error::Chromium .pak asset must be Stored uncompressed, got compress_type={info.compress_type} for {info.filename}"
+                f"::error::Chromium mmap asset must be Stored uncompressed, got compress_type={info.compress_type} for {info.filename}"
             )
-    print(f"  [pak] {len(pak_infos)} Chromium .pak asset(s) verified Stored (uncompressed)")
 
     dex_names = sorted(
         name for name in infos if name.startswith("classes") and name.endswith(".dex")
@@ -341,22 +424,40 @@ with zipfile.ZipFile(apk_path, "r") as zf:
     if not dex_names:
         raise SystemExit("::error::No classes*.dex entries found in APK")
 
+    found_dex_classes: set[str] = set()
     for dex_name in dex_names:
-        descriptors = collect_dex_type_descriptors(zf.read(dex_name))
+        strings, descriptors = inspect_dex(zf.read(dex_name))
+        for s in strings:
+            if banned_token in s.lower():
+                raise SystemExit(
+                    f"::error::Forbidden '{banned_token}' string/symbol found in {dex_name}: {s!r}"
+                )
         for desc in descriptors:
+            for bad_prefix in forbidden_dex_prefixes:
+                if desc.startswith(bad_prefix):
+                    raise SystemExit(
+                        f"::error::Forbidden class descriptor '{desc}' found in {dex_name} (matches banned prefix '{bad_prefix}')"
+                    )
             for prefix in required_dex_prefixes:
                 if desc.startswith(prefix):
                     required_dex_prefixes[prefix] += 1
+            if desc in required_dex_classes:
+                found_dex_classes.add(desc)
 
-    print(f"  [dex] Scanned {len(dex_names)} DEX file(s): {required_dex_prefixes}")
+    print(f"  [dex] Scanned {len(dex_names)} DEX file(s): {required_dex_prefixes}; zero '{banned_token}'/GMS/Firebase/MLKit classes or strings")
     for prefix, count in required_dex_prefixes.items():
         if count == 0:
             raise SystemExit(
                 f"::error::Missing required Java/JNI layer prefix '{prefix}' across all {len(dex_names)} DEX files"
             )
+    missing_classes = sorted(required_dex_classes - found_dex_classes)
+    if missing_classes:
+        raise SystemExit(
+            f"::error::Missing required Cefpack classes in DEX: {missing_classes}"
+        )
 PY
 
-echo "== [3/5] Auditing ELF DT_NEEDED & 24 JNI exports on arm64-v8a and x86_64 =="
+echo "== [3/5] Auditing ELF DT_NEEDED, JNI_OnLoad & 24 OvNative JNI exports on arm64-v8a and x86_64 =="
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
@@ -389,7 +490,9 @@ EXPECTED_JNI_SYMBOLS=(
 
 for abi in arm64-v8a x86_64; do
     so_out="${TMP_DIR}/libonion_vault_${abi}.so"
+    cefpack_so_out="${TMP_DIR}/libcefpack_content_${abi}.so"
     unzip -p "$APK" "lib/${abi}/libonion_vault.so" > "$so_out"
+    unzip -p "$APK" "lib/${abi}/libcefpack_content.so" > "$cefpack_so_out"
 
     if [[ "$(basename "$ELF_TOOL")" == "llvm-readobj" ]]; then
         needed_out="$("$ELF_TOOL" --needed-libs "$so_out")"
@@ -397,9 +500,15 @@ for abi in arm64-v8a x86_64; do
         needed_out="$("$ELF_TOOL" -d "$so_out")"
     fi
 
-    if printf '%s\n' "$needed_out" | grep -q "libcef\.so"; then
-        echo "::error::lib/${abi}/libonion_vault.so has forbidden DT_NEEDED dependency on libcef.so" >&2
+    if printf '%s\n' "$needed_out" | grep -qE "libcef\.so|libcefpack_content\.so"; then
+        echo "::error::lib/${abi}/libonion_vault.so has forbidden DT_NEEDED dependency on browser .so" >&2
         printf '%s\n' "$needed_out" >&2
+        exit 1
+    fi
+
+    cefpack_syms="$("$NM_TOOL" -D --defined-only "$cefpack_so_out" | awk '{print $NF}')"
+    if ! printf '%s\n' "$cefpack_syms" | grep -Fxq "JNI_OnLoad"; then
+        echo "::error::lib/${abi}/libcefpack_content.so does not export global JNI_OnLoad" >&2
         exit 1
     fi
 
@@ -414,7 +523,7 @@ for abi in arm64-v8a x86_64; do
     if (( missing_count > 0 )); then
         exit 1
     fi
-    echo "  [elf:${abi}] zero libcef.so DT_NEEDED; ${#EXPECTED_JNI_SYMBOLS[@]}/24 OvNative JNI symbols exported"
+    echo "  [elf:${abi}] zero browser .so DT_NEEDED; libcefpack_content.so exports JNI_OnLoad; ${#EXPECTED_JNI_SYMBOLS[@]}/24 OvNative JNI symbols exported"
 done
 
 echo "== [4/5] Auditing APK Signature Scheme v2+ & deterministic debug signing certificate =="

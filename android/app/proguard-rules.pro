@@ -6,10 +6,10 @@
     native <methods>;
 }
 
-# Cefrium & Chromium JNI-Zero / CalledByNative reflection surfaces.
--keep class com.cefrium.** { *; }
+# Cefpack & Chromium JNI-Zero / CalledByNative reflection surfaces.
+-keep class dev.cefpack.** { *; }
 -keep class org.chromium.** { *; }
 -keep class org.jni_zero.** { *; }
--dontwarn com.cefrium.**
+-dontwarn dev.cefpack.**
 -dontwarn org.chromium.**
 -dontwarn org.jni_zero.**

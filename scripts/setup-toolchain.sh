@@ -2,8 +2,8 @@
 # Install everything needed to build the Trap APK on a Linux x86_64 machine:
 # JDK 25, Android SDK 37, NDK r27c, the Rust Android targets, and cargo-ndk.
 #
-# Browser rendering is provided by Cefrium (`com.cefrium:cefrium-sdk:0.19.0`),
-# resolved automatically by Gradle from `https://maven.cefrium.com`.
+# Browser rendering is provided by Cefpack (`https://github.com/maceip/cefpack`),
+# resolved and SHA-256 verified automatically by Gradle (`:app:resolveCefpackAar`).
 #
 #   scripts/setup-toolchain.sh            # installs into /opt/trap-toolchain
 #   source /opt/trap-toolchain/env.sh

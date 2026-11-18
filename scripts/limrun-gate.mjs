@@ -6,7 +6,7 @@
  * syncs & installs `app-debug.apk` (`syncApp` with `assets.getOrUpload` + `sendAsset`
  * fallback), launches `dev.onionvault` under a live ActivityManager `onExit` crash/ANR
  * watch, and verifies end-to-end:
- *   1. `TrapApplication` initializes Cefrium (`"the engine is ready"`),
+ *   1. `TrapApplication` initializes Cefpack (`"Initialized Cefpack content engine"` / `"the engine is ready"`),
  *   2. `ov_tor` binds its loopback SOCKS5 listener (`127.0.0.1:<port>`),
  *   3. Embedded Arti bootstraps against the live Tor network (`"Tor client bootstrapped"`
  *      / `"Tor ready"` in UI),
@@ -176,11 +176,15 @@ function detectFatalLogIssues(logText) {
       'ARMv9 MTE / PartitionAlloc memory-tagging fault detected in logcat (missing android:memtagMode="off" or PartitionAllocMemoryTagging disable)',
     );
   }
-  if (/UnsatisfiedLinkError|ClassNotFoundException|NoSuchMethodError/.test(logText)) {
-    issues.push('JNI/DEX linkage error (UnsatisfiedLinkError / ClassNotFoundException / NoSuchMethodError) detected');
+  if (/UnsatisfiedLinkError|ClassNotFoundException|NoSuchMethodError|NoSuchFieldError/.test(logText)) {
+    issues.push('JNI/DEX linkage error (UnsatisfiedLinkError / ClassNotFoundException / NoSuchMethodError / NoSuchFieldError) detected');
   }
-  if (/Trap startup failed|Cefrium initialization failed|Failed to load libonion_vault\.so/.test(logText)) {
-    issues.push('TrapApplication / MainActivity logged a fatal engine or native startup error');
+  if (
+    /Trap startup failed|Cefpack initialization failed|Failed to initialize Cefpack content engine|Failed to load libonion_vault\.so/.test(
+      logText,
+    )
+  ) {
+    issues.push('TrapApplication / MainActivity logged a fatal Cefpack engine or native startup error');
   }
   return issues;
 }
@@ -271,7 +275,7 @@ function extractLatestMainFrameHttpStatus(logBuffer, targetUrl) {
   const loadIdx = logBuffer.lastIndexOf(`loadUrl: ${targetUrl}`);
   const postNavLog = loadIdx >= 0 ? logBuffer.slice(loadIdx) : logBuffer;
   const matches = [
-    ...postNavLog.matchAll(/Cefrium\s*:\s*OnLoadEnd:\s*status\s+([23]\d\d),\s*isMain=1/g),
+    ...postNavLog.matchAll(/Cefpack(?:Engine)?\s*:\s*OnLoadEnd:\s*status\s+([23]\d\d),\s*isMain=1/g),
   ];
   if (matches.length === 0) return null;
   return Number(matches[matches.length - 1][1]);
@@ -600,7 +604,7 @@ async function main() {
     });
 
     console.log(
-      `== [5/7] Waiting up to ${BOOT_WAIT_SECONDS}s for Cefrium engine + ov_tor SOCKS5 + Arti Tor bootstrap ==`,
+      `== [5/7] Waiting up to ${BOOT_WAIT_SECONDS}s for Cefpack engine + ov_tor SOCKS5 + Arti Tor bootstrap ==`,
     );
     const bootLoopStarted = Date.now();
     while ((Date.now() - bootLoopStarted) / 1000 < BOOT_WAIT_SECONDS) {
@@ -616,7 +620,7 @@ async function main() {
       }
 
       const logText = combinedLogText();
-      if (/the engine is ready/.test(logText)) {
+      if (/the engine is ready|Initialized Cefpack content engine/.test(logText)) {
         summary.readiness.engineReady = true;
       }
       const socksMatch = logText.match(
@@ -687,7 +691,7 @@ async function main() {
     }
 
     if (!summary.readiness.engineReady) {
-      summary.failures.push("Cefrium never logged 'the engine is ready'");
+      summary.failures.push("Cefpack never logged 'Initialized Cefpack content engine' / 'the engine is ready'");
     }
     if (!summary.readiness.socksEndpoint) {
       summary.failures.push('ov_tor never bound its loopback 127.0.0.1:<port> SOCKS5 proxy');
@@ -910,7 +914,7 @@ async function main() {
       }
       if (!summary.onionSmoke.pageLoadedInLogcat) {
         summary.failures.push(
-          `Cefrium never completed HTTP 2xx/3xx main-frame OnLoadEnd for ${ONION_TEST_URL}`,
+          `Cefpack never completed HTTP 2xx/3xx main-frame OnLoadEnd for ${ONION_TEST_URL}`,
         );
       }
       if (!summary.onionSmoke.onionTitleRenderedInUi) {
@@ -1046,7 +1050,7 @@ async function main() {
 
   console.log(
     `PASS: ${PACKAGE} (pid ${summary.appPid}) verified on Limrun cloud Android ${summary.deviceProps.release} ` +
-      `(${summary.deviceProps.abi}, pageSize=${summary.deviceProps.pageSize}): Cefrium ready, ` +
+      `(${summary.deviceProps.abi}, pageSize=${summary.deviceProps.pageSize}): Cefpack ready, ` +
       `ov_tor SOCKS5=${summary.readiness.socksEndpoint}, Arti bootstrapped, ` +
       `${SKIP_ONION_SMOKE ? 'onion smoke skipped' : `isolated ${ONION_EXPECTED_ISOLATION} .onion loaded`}, ` +
       `zero crashes/tombstones/ANRs.`,

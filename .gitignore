@@ -14,7 +14,7 @@ android/local.properties
 # The native libraries that cargo-ndk produces
 android/app/src/main/jniLibs/
 
-# The CEF resources (they come from the CEF distribution)
+# Legacy local asset staging directory
 android/app/src/main/assets/cef/*
 !android/app/src/main/assets/cef/README.md
 
