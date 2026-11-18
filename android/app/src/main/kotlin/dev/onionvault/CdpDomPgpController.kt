@@ -3,7 +3,7 @@ package dev.onionvault
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import com.cefrium.CefriumBrowser
+import dev.cefpack.android.CefpackSession
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -14,13 +14,13 @@ import org.json.JSONObject
 
 /**
  * 100% Zero-JavaScript DOM OpenPGP scanner and form-field mutator powered by
- * Cefrium's in-process Chrome DevTools Protocol (`executeDevToolsMethod`).
+ * Cefpack's in-process Chrome DevTools Protocol (`executeDevToolsMethod`).
  *
  * Operates exclusively through Chromium's C++ `InspectorDOMAgent`, `InspectorPageAgent`,
  * and `InspectorInputAgent` (`DOM.getDocument`, `DOM.getOuterHTML`, `DOM.getBoxModel`,
  * `DOM.focus`, `Input.dispatchKeyEvent`, `Input.insertText`) while leaving webpage
- * DOM styling untouched and enforcing `setJavaScriptEnabled(false)` and
- * `Emulation.setScriptExecutionDisabled(true)` on every browser instance.
+ * DOM styling untouched and enforcing `WebPreferences::javascript_enabled = false` and
+ * `Emulation.setScriptExecutionDisabled(true)` on every session instance.
  */
 class CdpDomPgpController(
     private val onNodesDetected: (
@@ -118,7 +118,7 @@ class CdpDomPgpController(
     private val _activeNodes = MutableStateFlow<Map<String, List<DetectedPgpNode>>>(emptyMap())
     val activeNodes: StateFlow<Map<String, List<DetectedPgpNode>>> = _activeNodes.asStateFlow()
 
-    private val attachedBrowsers = ConcurrentHashMap<String, CefriumBrowser>()
+    private val attachedBrowsers = ConcurrentHashMap<String, CefpackSession>()
     private val lastUrlByTab = ConcurrentHashMap<String, String>()
     private val lastClassifiedByTab = ConcurrentHashMap<String, List<ClassifiedNodeEntry>>()
     private val scanGenerationByTab = ConcurrentHashMap<String, AtomicInteger>()
@@ -128,7 +128,7 @@ class CdpDomPgpController(
 
     fun attachAndScan(
         tabId: String,
-        browser: CefriumBrowser,
+        browser: CefpackSession,
         currentUrl: String = browser.url ?: "",
     ) {
         runOnMain {
@@ -143,7 +143,7 @@ class CdpDomPgpController(
         }
     }
 
-    fun refreshViewportBounds(tabId: String, browser: CefriumBrowser) {
+    fun refreshViewportBounds(tabId: String, browser: CefpackSession) {
         runOnMain {
             val classified = lastClassifiedByTab[tabId]
             if (classified.isNullOrEmpty()) {
@@ -174,7 +174,7 @@ class CdpDomPgpController(
      * Blink UA shadow-root editor actually holds [newValue] before reporting success.
      */
     fun writeFieldValue(
-        browser: CefriumBrowser,
+        browser: CefpackSession,
         nodeId: Int,
         backendNodeId: Int = 0,
         newValue: String,
@@ -227,7 +227,7 @@ class CdpDomPgpController(
         _activeNodes.value = emptyMap()
     }
 
-    private fun configureDevToolsDomains(tabId: String, browser: CefriumBrowser) {
+    private fun configureDevToolsDomains(tabId: String, browser: CefpackSession) {
         browser.setDevToolsEventListener { method, _ ->
             when (method) {
                 "DOM.documentUpdated",
@@ -251,7 +251,7 @@ class CdpDomPgpController(
 
     private fun resolveScanUrl(
         tabId: String,
-        browser: CefriumBrowser,
+        browser: CefpackSession,
         explicitUrl: String = "",
     ): String {
         val explicit = explicitUrl.trim()
@@ -272,7 +272,7 @@ class CdpDomPgpController(
 
     private fun performFullScan(
         tabId: String,
-        browser: CefriumBrowser,
+        browser: CefpackSession,
         currentUrl: String,
     ) {
         val genCounter = scanGenerationByTab.getOrPut(tabId) { AtomicInteger(0) }
@@ -347,7 +347,7 @@ class CdpDomPgpController(
     }
 
     private fun fetchOuterHtml(
-        browser: CefriumBrowser,
+        browser: CefpackSession,
         rootNodeId: Int,
         onResult: (String) -> Unit,
     ) {
@@ -367,7 +367,7 @@ class CdpDomPgpController(
     }
 
     private fun fetchViewportMetrics(
-        browser: CefriumBrowser,
+        browser: CefpackSession,
         onResult: (ViewportMetrics?) -> Unit,
     ) {
         browser.executeDevToolsMethod("Page.getLayoutMetrics", "{}") { ok, json ->
@@ -396,7 +396,7 @@ class CdpDomPgpController(
 
     private fun resolveAllNodeBounds(
         tabId: String,
-        browser: CefriumBrowser,
+        browser: CefpackSession,
         classified: List<ClassifiedNodeEntry>,
         metrics: ViewportMetrics,
         generation: Int,
@@ -487,7 +487,7 @@ class CdpDomPgpController(
     }
 
     private fun attemptZeroJsWrite(
-        browser: CefriumBrowser,
+        browser: CefpackSession,
         nodeId: Int,
         backendNodeId: Int,
         newValue: String,
@@ -601,7 +601,7 @@ class CdpDomPgpController(
     }
 
     private fun verifyFieldValueInDom(
-        browser: CefriumBrowser,
+        browser: CefpackSession,
         nodeId: Int,
         backendNodeId: Int,
         expectedValue: String,

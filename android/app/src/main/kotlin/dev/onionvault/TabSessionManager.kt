@@ -15,12 +15,8 @@ import android.view.MotionEvent
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.annotation.VisibleForTesting
-import com.cefrium.CefriumAudioHandler
-import com.cefrium.CefriumBrowser
-import com.cefrium.CefriumDisplayHandler
-import com.cefrium.CefriumLoadHandler
-import com.cefrium.CefriumPickerHandler
-import com.cefrium.CefriumRequestHandler
+import dev.cefpack.android.CefpackEngine
+import dev.cefpack.android.CefpackSession
 import dev.onionvault.platform.LanAccessController
 import dev.onionvault.platform.MediaDisplayNormalizer
 import dev.onionvault.platform.ScreenRecordingGuard
@@ -37,15 +33,16 @@ import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONObject
 
 /**
- * Multi-tab Tor browser session manager backed by [CefriumBrowser] instances on
- * an ephemeral in-memory `CefriumProfile.incognito()` context.
+ * Multi-tab Tor browser session manager backed by [CefpackSession] instances on
+ * an ephemeral off-the-record [CefpackEngine] browser context.
  *
  * Enforces:
- *   1. `setJavaScriptEnabled(false)` + CDP `Emulation.setScriptExecutionDisabled(true)` on every tab.
+ *   1. `WebPreferences::javascript_enabled = false` + V8 `--jitless,--no-expose-wasm` +
+ *      CDP `Emulation.setScriptExecutionDisabled(true)` on every tab.
  *   2. Fail-closed Tor SOCKS5 routing: blocks all non-`about:blank` loads until Arti reports
  *      its bound loopback SOCKS5 listener (`127.0.0.1:<port>`).
  *   3. Per-request URL policy (`OvNative.nativeCheckUrlPolicy`): blocks clearnet/disallowed
- *      schemes, `TYPE_PING`, `TYPE_CSP_REPORT`, and `TYPE_SCRIPT` at the network interceptor.
+ *      schemes, `ping`, `csp_report`, and `script` requests at the network interceptor.
  *   4. Hardened text-selection `ActionMode.Callback` that strips external `WEB_SEARCH`,
  *      `SHARE`, and `ACTION_PROCESS_TEXT` intents while surfacing in-app OpenPGP actions.
  *   5. Touch-suppression gate (`setTouchSuppressed`) so native modals and predictive-back
@@ -68,7 +65,7 @@ class TabSessionManager(
     private val onLocalNetworkPermissionRequired: (targetUrl: String) -> Unit = {},
     private val onColorPickerRequested: (
         initialColor: Int,
-        callback: CefriumPickerHandler.ColorCallback,
+        callback: CefpackSession.ColorCallback,
     ) -> Boolean = { _, _ -> false },
     private val onViewportInteraction: (Boolean) -> Unit = {},
     private val onUrlBlocked: (tabId: String, blockedUrl: String, reason: String) -> Unit = { _, _, _ -> },
@@ -125,7 +122,7 @@ class TabSessionManager(
 
     private class ManagedTab(
         val id: String,
-        val browser: CefriumBrowser?,
+        val browser: CefpackSession?,
         val surfaceWrapper: TouchGateFrameLayout?,
         var state: TabState,
         var latestDomHtml: String = "",
@@ -698,7 +695,7 @@ class TabSessionManager(
         return sessions[currentId]?.state
     }
 
-    fun activeBrowser(): CefriumBrowser? {
+    fun activeBrowser(): CefpackSession? {
         val currentId = _activeTabId.value ?: return null
         return sessions[currentId]?.browser
     }
@@ -711,7 +708,7 @@ class TabSessionManager(
     fun surfaceContainerFor(tabId: String): FrameLayout? =
         sessions[tabId]?.surfaceWrapper
 
-    fun browserFor(tabId: String): CefriumBrowser? =
+    fun browserFor(tabId: String): CefpackSession? =
         sessions[tabId]?.browser
 
     fun ensureInitialTab(initialUrl: String = "about:blank"): String {
@@ -732,9 +729,9 @@ class TabSessionManager(
         val activity = resolveActivity(context)
         val browser = if (activity != null && TrapApplication.isEngineReady) {
             runCatching {
-                CefriumBrowser.createWithSurface(activity, TrapApplication.incognitoProfile())
+                CefpackSession(activity)
             }.onFailure {
-                Log.e(TAG, "Failed to create CefriumBrowser for $tabId", it)
+                Log.e(TAG, "Failed to create CefpackSession for $tabId", it)
             }.getOrNull()
         } else {
             null
@@ -743,11 +740,11 @@ class TabSessionManager(
         val wrapper = if (browser != null) {
             TouchGateFrameLayout(context, tabId).apply {
                 ScreenRecordingGuard.applyContentSensitivity(this, sensitive = isPrivate)
-                val cefSurface = browser.surfaceContainer
-                ScreenRecordingGuard.applyContentSensitivity(cefSurface, sensitive = isPrivate)
-                (cefSurface.parent as? ViewGroup)?.removeView(cefSurface)
+                val sessionSurface = browser.surfaceContainer
+                ScreenRecordingGuard.applyContentSensitivity(sessionSurface, sensitive = isPrivate)
+                (sessionSurface.parent as? ViewGroup)?.removeView(sessionSurface)
                 addView(
-                    cefSurface,
+                    sessionSurface,
                     FrameLayout.LayoutParams(
                         FrameLayout.LayoutParams.MATCH_PARENT,
                         FrameLayout.LayoutParams.MATCH_PARENT,
@@ -821,7 +818,7 @@ class TabSessionManager(
         if (sessions.isEmpty()) {
             _activeTabId.value = null
             createTab(initialUrl = "about:blank", select = true)
-            runCatching { CefriumBrowser.reapUnusedRenderers() }
+            runCatching { CefpackEngine.reapUnusedRenderers() }
             return
         }
 
@@ -831,11 +828,11 @@ class TabSessionManager(
         } else {
             publishTabsSnapshot()
         }
-        runCatching { CefriumBrowser.reapUnusedRenderers() }
+        runCatching { CefpackEngine.reapUnusedRenderers() }
     }
 
     /**
-     * Destroys every open browser tab, rotates the ephemeral incognito profile,
+     * Destroys every open browser tab, rotates the ephemeral off-the-record profile,
      * wipes all CDP & predictive-back snapshots in RAM, rotates Arti Tor's stream
      * isolation token, and opens a fresh `about:blank` tab.
      */
@@ -848,10 +845,10 @@ class TabSessionManager(
         backStackManager.clearAll()
 
         existing.forEach { teardownBrowser(it) }
-        runCatching { CefriumBrowser.reapUnusedRenderers() }
+        runCatching { CefpackEngine.reapUnusedRenderers() }
 
         if (TrapApplication.isEngineReady) {
-            TrapApplication.resetIncognitoProfile()
+            TrapApplication.resetEphemeralProfile()
             TrapApplication.applyProfileSocksServer(_activeSocksAddr.value)
         }
 
@@ -1069,9 +1066,9 @@ class TabSessionManager(
     }
 
     /**
-     * Injects a zero-JavaScript HTML document into the live [CefriumBrowser] frame via
+     * Injects a zero-JavaScript HTML document into the live [CefpackSession] frame via
      * `Page.getFrameTree` + `Page.setDocumentContent` for instrumentation verification
-     * while preserving `setJavaScriptEnabled(false)` and `Emulation.setScriptExecutionDisabled(true)`.
+     * while preserving `WebPreferences::javascript_enabled = false` and `Emulation.setScriptExecutionDisabled(true)`.
      */
     @VisibleForTesting
     internal fun loadInlineHtmlForTest(
@@ -1179,7 +1176,7 @@ class TabSessionManager(
         val browser = managed.browser
         if (browser != null && browser.canGoBack()) {
             val entries = runCatching { browser.navigationEntries }.getOrNull()
-            val currentIdx = entries?.indexOfFirst { it.current } ?: -1
+            val currentIdx = entries?.indexOfFirst { it.isCurrent } ?: -1
             val targetIdx = if (entries != null && currentIdx > 0) {
                 selectBackTargetIndex(
                     entryUrls = entries.map { it.url.orEmpty() },
@@ -1291,12 +1288,12 @@ class TabSessionManager(
     fun setZoomPercent(percent: Int, tabId: String? = _activeTabId.value) {
         val managed = tabId?.let { sessions[it] } ?: return
         val clamped = percent.coerceIn(MIN_ZOOM_PERCENT, MAX_ZOOM_PERCENT)
-        val cefZoomLevel = if (clamped == 100) {
+        val chromiumZoomLevel = if (clamped == 100) {
             0.0
         } else {
             ln(clamped / 100.0) / ln(1.2)
         }
-        managed.browser?.setZoomLevel(cefZoomLevel)
+        managed.browser?.setZoomLevel(chromiumZoomLevel)
         updateTabState(managed.id) { it.copy(zoomPercent = clamped) }
         managed.browser?.let { cdpController.refreshViewportBounds(managed.id, it) }
     }
@@ -1580,7 +1577,7 @@ class TabSessionManager(
             }
         }
         if (throttledCount > 0 && TrapApplication.isEngineReady) {
-            runCatching { CefriumBrowser.reapUnusedRenderers() }
+            runCatching { CefpackEngine.reapUnusedRenderers() }
         }
         return throttledCount
     }
@@ -1648,7 +1645,7 @@ class TabSessionManager(
     )
 
     private fun dispatchCdpKeyTap(
-        browser: CefriumBrowser,
+        browser: CefpackSession,
         key: String,
         code: String,
         windowsVirtualKeyCode: Int,
@@ -1684,72 +1681,40 @@ class TabSessionManager(
         _tabs.value = emptyList()
     }
 
-    private fun configureHardenedBrowser(tabId: String, browser: CefriumBrowser) {
-        // Hard zero-JavaScript policy; keep pinchToZoomEnabled at its default (true)
-        // because CefriumBrowser.setPinchToZoomEnabled(false) injects JS.
-        browser.setJavaScriptEnabled(false)
-        browser.setMediaPlaybackRequiresUserGesture(true)
-        browser.setAdBlockEnabled(false)
-
-        // Deny all sensitive Web permissions (geolocation, camera, mic, notifications, clipboard, NFC).
-        browser.setPermissionHandler { _, _, callback ->
-            callback.respond(false)
-        }
+    private fun configureHardenedBrowser(tabId: String, browser: CefpackSession) {
+        // Hard zero-JavaScript policy: CefpackContentBrowserClient::OverrideWebPreferences
+        // enforces WebPreferences::javascript_enabled = false, WebGL disabled, and media
+        // permissions denied at the C++ embedder layer; reinforce via CDP immediately.
+        browser.executeDevToolsMethod(
+            "Emulation.setScriptExecutionDisabled",
+            "{\"value\":true}",
+            null,
+        )
 
         // Route HTML `<input type="color">` / EyeDropper requests to Android 17's
         // zero-permission system `ACTION_OPEN_EYE_DROPPER` picker when available.
-        browser.setPickerHandler(object : CefriumPickerHandler {
-            override fun onShowColor(
-                initialColor: Int,
-                suggestions: IntArray?,
-                callback: CefriumPickerHandler.ColorCallback,
-            ): Boolean = onColorPickerRequested(initialColor, callback)
-        })
+        browser.setColorPickerHandler { initialColor, callback ->
+            onColorPickerRequested(initialColor, callback)
+        }
 
-        // Deny hardware chooser dialogs (Bluetooth, USB, Serial).
-        browser.setDeviceChooserHandler(object : CefriumBrowser.DeviceChooserHandler {
-            override fun onShowDeviceChooser(session: CefriumBrowser.DeviceChooserSession) {
-                session.cancel()
-            }
-
-            override fun onDeviceAdded(
-                session: CefriumBrowser.DeviceChooserSession,
-                device: CefriumBrowser.ChooserDevice,
-            ) = Unit
-
-            override fun onDeviceChooserClosed(session: CefriumBrowser.DeviceChooserSession) = Unit
-        })
-
-        // Network-thread request policy enforcement.
-        browser.setRequestInterceptor(object : CefriumBrowser.RequestInterceptor {
-            override fun shouldBlockRequest(
-                url: String,
-                method: String,
-                isMainFrame: Boolean,
-            ): Boolean = shouldBlockUrlInternal(
-                tabId = tabId,
-                url = url,
-                isMainFrame = isMainFrame,
-                resourceType = -1,
-                topLevelUrl = "",
-            )
-
-            override fun shouldBlockRequest(request: CefriumBrowser.ResourceRequest): Boolean {
-                if (request.resourceType == CefriumBrowser.ResourceRequest.TYPE_PING ||
-                    request.resourceType == CefriumBrowser.ResourceRequest.TYPE_CSP_REPORT ||
-                    request.resourceType == CefriumBrowser.ResourceRequest.TYPE_SCRIPT
-                ) {
-                    return true
-                }
-                return shouldBlockUrlInternal(
+        // Request policy enforcement across NavigationThrottle and URLLoaderThrottle.
+        browser.setRequestInterceptor { url, _, isMainFrame, resourceType, topLevelUrl ->
+            val normalizedType = resourceType?.trim()?.lowercase().orEmpty()
+            if (normalizedType == "ping" ||
+                normalizedType == "csp_report" ||
+                normalizedType == "script"
+            ) {
+                true
+            } else {
+                shouldBlockUrlInternal(
                     tabId = tabId,
-                    url = request.url ?: "",
-                    isMainFrame = request.isMainFrame,
-                    resourceType = request.resourceType,
-                    topLevelUrl = request.topLevelUrl ?: request.documentUrl ?: "",
+                    url = url ?: "",
+                    isMainFrame = isMainFrame,
+                    resourceType = normalizedType,
+                    topLevelUrl = topLevelUrl ?: "",
                 )
             }
-        })
+        }
 
         // Block unsolicited popups; route explicit user-gesture links into a managed tab if allowed.
         browser.setPopupHandler { targetUrl, userGesture ->
@@ -1777,154 +1742,58 @@ class TabSessionManager(
         // Strip clearnet/external-app intents (`WEB_SEARCH`, `SHARE`, `PROCESS_TEXT`) from text selection.
         browser.setTextSelectionActionModeCallback(createHardenedSelectionCallback(tabId, browser))
 
-        // Long-press context menu callback (`menuItems` is newline-separated "id|label",
-        // `url` is the link or media URL). Immediately cancel Chromium's native pending
-        // `CefRunContextMenuCallback` (`contextMenuCommand(-1)`) on the UI thread and
-        // surface Trap's native Compose context sheet instead.
-        browser.setOnContextMenuListener { menuItems, url ->
+        // Long-press context menu callback from CefpackSession (`linkUrl`, `srcUrl`, `selectionText`).
+        browser.setOnContextMenuListener { linkUrl, srcUrl, selectionText ->
             mainHandler.post {
                 runCatching { browser.contextMenuCommand(-1) }
-                val cleanUrl = url?.trim()?.takeIf { it.isNotEmpty() }
-                val hasMediaCommand = menuItems.orEmpty()
-                    .lineSequence()
-                    .map { it.substringAfter('|', "").lowercase() }
-                    .any { label ->
-                        label.contains("image") ||
-                            label.contains("video") ||
-                            label.contains("audio") ||
-                            label.contains("media")
-                    }
-                val selected = runCatching { browser.selectedText }.getOrNull()?.takeIf { it.isNotBlank() }
+                val cleanLink = linkUrl?.trim()?.takeIf { it.isNotEmpty() }
+                val cleanMedia = srcUrl?.trim()?.takeIf { it.isNotEmpty() }
+                val selected = selectionText?.trim()?.takeIf { it.isNotEmpty() }
+                    ?: runCatching { browser.selectedText }.getOrNull()?.trim()?.takeIf { it.isNotEmpty() }
                 val classification = selected?.let { classifySelectedText(it) }?.takeIf { it.isPgp }
-                onContextMenu(
-                    ContextMenuTarget(
-                        tabId = tabId,
-                        linkUrl = cleanUrl,
-                        mediaUrl = if (hasMediaCommand) cleanUrl else null,
-                        selectedText = selected,
-                        textClassification = classification,
-                    ),
-                )
-            }
-        }
-
-        browser.setDisplayHandler(object : CefriumDisplayHandler {
-            override fun onLoadingProgress(progress: Double) {
-                val pct = (progress * 100.0).roundToInt().coerceIn(5, 100)
-                mainHandler.post {
-                    updateTabState(tabId) { it.copy(loadProgress = pct) }
-                }
-            }
-
-            override fun onMediaAccessChange(hasVideo: Boolean, hasAudio: Boolean) {
-                mainHandler.post {
-                    updateTabState(tabId) {
-                        it.copy(
-                            hasWebRtcVideo = hasVideo,
-                            hasWebRtcAudio = hasAudio,
-                        )
-                    }
-                }
-            }
-        })
-
-        browser.setAudioHandler(object : CefriumAudioHandler {
-            override fun onAudioStreamStarted(channels: Int, sampleRate: Int) {
-                mainHandler.post {
-                    mediaDisplayNormalizer.ensureAudioSessionNormalized(context)
-                    updateTabState(tabId) {
-                        it.copy(
-                            isPlayingAudio = true,
-                            isMediaPausedByUser = false,
-                        )
-                    }
-                    probePrimaryVideoBounds(tabId, browser)
-                }
-            }
-
-            override fun onAudioStreamStopped() {
-                mainHandler.post {
-                    val stillPlaying = runCatching { browser.isPlayingAudio }.getOrDefault(false)
-                    updateTabState(tabId) { it.copy(isPlayingAudio = stillPlaying) }
-                }
-            }
-
-            override fun onAudioStreamError(message: String?) {
-                mainHandler.post {
-                    val stillPlaying = runCatching { browser.isPlayingAudio }.getOrDefault(false)
-                    updateTabState(tabId) { it.copy(isPlayingAudio = stillPlaying) }
-                }
-            }
-        })
-
-        browser.setLoadHandler(object : CefriumLoadHandler {
-            override fun onLoadStart(url: String?) {
-                val cleanUrl = url?.trim().orEmpty()
-                if (cleanUrl.isEmpty() ||
-                    cleanUrl == "about:blank" ||
-                    cleanUrl.startsWith("chrome-error://")
-                ) {
-                    return
-                }
-                mainHandler.post {
-                    val managed = sessions[tabId] ?: return@post
-                    managed.lastBrowserLoadingState = true
-                    if (isOnionAddress(cleanUrl)) {
-                        if (managed.onionAutoRetryScheduled) {
-                            managed.onionAutoRetryScheduled = false
-                        } else if (managed.onionNavStartedElapsedMs == 0L ||
-                            !sameOnionService(managed.onionOriginalTargetUrl, cleanUrl)
-                        ) {
-                            managed.onionOriginalTargetUrl = cleanUrl
-                            managed.onionNavStartedElapsedMs = elapsedRealtimeClock()
-                            managed.onionRetryCount = 0
-                        }
-                    }
-                }
-            }
-
-            override fun onLoadError(errorCode: Int, errorText: String?, failedUrl: String?) {
-                // Ignore ERR_ABORTED (-3), which occurs during normal stop/redirect.
-                if (errorCode == -3) return
-                if (!failedUrl.isNullOrBlank() && failedUrl == lastConsentInterceptedUrl) {
-                    lastConsentInterceptedUrl = null
-                    mainHandler.post {
-                        updateTabState(tabId) {
-                            it.copy(isLoading = false, loadProgress = 100)
-                        }
-                    }
-                    return
-                }
-                mainHandler.post {
-                    handleLoadErrorOnMainThread(
-                        tabId = tabId,
-                        errorCode = errorCode,
-                        errorText = errorText,
-                        failedUrl = failedUrl,
-                        reloadUrl = { retryTarget ->
-                            sessions[tabId]?.browser?.loadUrl(retryTarget)
-                        },
+                if (cleanLink != null || cleanMedia != null || selected != null) {
+                    onContextMenu(
+                        ContextMenuTarget(
+                            tabId = tabId,
+                            linkUrl = cleanLink ?: cleanMedia,
+                            mediaUrl = cleanMedia,
+                            selectedText = selected,
+                            textClassification = classification,
+                        ),
                     )
                 }
             }
-        })
+        }
 
-        browser.setRequestHandler(object : CefriumRequestHandler {
-            override fun onDocumentAvailable() {
-                mainHandler.post {
-                    val managed = sessions[tabId] ?: return@post
-                    val current = managed.browser ?: return@post
-                    val effectiveUrl = managed.overrideDisplayUrl ?: current.url.orEmpty()
-                    cdpController.attachAndScan(tabId, current, effectiveUrl)
-                }
-            }
-        })
-
-        browser.setCallback(object : CefriumBrowser.Callback() {
+        browser.setSessionCallback(object : CefpackSession.SessionCallback {
             override fun onUrlChanged(url: String?) {
-                val rawSafeUrl = url?.trim().orEmpty().ifEmpty { "about:blank" }
+                val rawTrimmed = url?.trim().orEmpty()
+                val rawSafeUrl = rawTrimmed.ifEmpty { "about:blank" }
                 mainHandler.post {
                     val managed = sessions[tabId]
+                    if (managed != null &&
+                        rawTrimmed.isNotEmpty() &&
+                        rawTrimmed != "about:blank" &&
+                        !rawTrimmed.startsWith("chrome-error://")
+                    ) {
+                        managed.lastBrowserLoadingState = true
+                        if (isOnionAddress(rawTrimmed)) {
+                            if (managed.onionAutoRetryScheduled &&
+                                (!rawTrimmed.startsWith("https://", ignoreCase = true) ||
+                                    managed.onionOriginalTargetUrl?.startsWith("https://", ignoreCase = true) == true)
+                            ) {
+                                managed.onionAutoRetryScheduled = false
+                            } else if (!managed.onionAutoRetryScheduled &&
+                                (managed.onionNavStartedElapsedMs == 0L ||
+                                    !sameOnionService(managed.onionOriginalTargetUrl, rawTrimmed))
+                            ) {
+                                managed.onionOriginalTargetUrl = rawTrimmed
+                                managed.onionNavStartedElapsedMs = elapsedRealtimeClock()
+                                managed.onionRetryCount = 0
+                            }
+                        }
+                    }
+
                     val overrideUrl = managed?.overrideDisplayUrl
                     val pendingUrl = managed?.pendingNavigationUrl
                     val safeUrl = when {
@@ -1983,10 +1852,10 @@ class TabSessionManager(
                 }
             }
 
-            override fun onFullscreenChanged(isFullscreen: Boolean) {
+            override fun onLoadingProgress(progress: Int) {
+                val pct = progress.coerceIn(5, 100)
                 mainHandler.post {
-                    updateTabState(tabId) { it.copy(isFullscreenVideo = isFullscreen) }
-                    probePrimaryVideoBounds(tabId, browser)
+                    updateTabState(tabId) { it.copy(loadProgress = pct) }
                 }
             }
 
@@ -2054,6 +1923,76 @@ class TabSessionManager(
                     }
                 }
             }
+
+            override fun onLoadError(errorCode: Int, errorText: String?, failedUrl: String?) {
+                // Ignore ERR_ABORTED (-3), which occurs during normal stop/redirect.
+                if (errorCode == -3) return
+                if (!failedUrl.isNullOrBlank() && failedUrl == lastConsentInterceptedUrl) {
+                    lastConsentInterceptedUrl = null
+                    mainHandler.post {
+                        updateTabState(tabId) {
+                            it.copy(isLoading = false, loadProgress = 100)
+                        }
+                    }
+                    return
+                }
+                mainHandler.post {
+                    handleLoadErrorOnMainThread(
+                        tabId = tabId,
+                        errorCode = errorCode,
+                        errorText = errorText,
+                        failedUrl = failedUrl,
+                        reloadUrl = { retryTarget ->
+                            sessions[tabId]?.browser?.loadUrl(retryTarget)
+                        },
+                    )
+                }
+            }
+
+            override fun onDocumentAvailable() {
+                mainHandler.post {
+                    val managed = sessions[tabId] ?: return@post
+                    val current = managed.browser ?: return@post
+                    val effectiveUrl = managed.overrideDisplayUrl ?: current.url.orEmpty()
+                    cdpController.attachAndScan(tabId, current, effectiveUrl)
+                }
+            }
+
+            override fun onFullscreenChanged(isFullscreen: Boolean) {
+                mainHandler.post {
+                    updateTabState(tabId) { it.copy(isFullscreenVideo = isFullscreen) }
+                    probePrimaryVideoBounds(tabId, browser)
+                }
+            }
+
+            override fun onAudioStateChanged(isPlaying: Boolean) {
+                mainHandler.post {
+                    if (isPlaying) {
+                        mediaDisplayNormalizer.ensureAudioSessionNormalized(context)
+                        updateTabState(tabId) {
+                            it.copy(
+                                isPlayingAudio = true,
+                                isMediaPausedByUser = false,
+                            )
+                        }
+                        probePrimaryVideoBounds(tabId, browser)
+                    } else {
+                        val stillPlaying = runCatching { browser.isPlayingAudio }.getOrDefault(false)
+                        updateTabState(tabId) { it.copy(isPlayingAudio = stillPlaying) }
+                    }
+                }
+            }
+
+            override fun onMediaAccessChange(hasVideo: Boolean, hasAudio: Boolean) {
+                mainHandler.post {
+                    updateTabState(tabId) {
+                        it.copy(
+                            hasWebRtcVideo = hasVideo,
+                            hasWebRtcAudio = hasAudio,
+                        )
+                    }
+                }
+            }
         })
 
         cdpController.attachAndScan(tabId, browser, "about:blank")
@@ -2061,7 +2000,7 @@ class TabSessionManager(
 
     private fun createHardenedSelectionCallback(
         tabId: String,
-        browser: CefriumBrowser,
+        browser: CefpackSession,
     ): ActionMode.Callback = object : ActionMode.Callback {
         override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
             sanitizeSelectionMenu(menu)
@@ -2130,18 +2069,19 @@ class TabSessionManager(
         tabId: String,
         url: String,
         isMainFrame: Boolean,
-        resourceType: Int,
+        resourceType: String,
         topLevelUrl: String = "",
     ): Boolean {
         if (url.isBlank()) return true
         if (url == "about:blank") return false
 
-        // In CEF, `request.isMainFrame` is true for ANY resource (images, favicons, CSS)
-        // originating inside the main frame; only `TYPE_MAIN_FRAME` (or legacy `-1`) is
-        // an actual top-level document navigation!
+        // Only `main_frame` (or empty fallback) inside the outermost main frame is a
+        // top-level document navigation; subresources (`image`, `stylesheet`, `font`, etc.)
+        // originating from the main frame have `isMainFrame == true` with non-document `resourceType`.
         val isTopLevelNavigation = isMainFrame && (
-            resourceType < 0 || resourceType == CefriumBrowser.ResourceRequest.TYPE_MAIN_FRAME
+            resourceType.isEmpty() || resourceType == "main_frame"
             )
+        val isSubFrameNavigation = resourceType == "sub_frame"
         val pageUrl = topLevelUrl.ifBlank { sessions[tabId]?.state?.url.orEmpty() }
         val lanDecision = lanAccessController.evaluateRequest(
             pageUrl = pageUrl,
@@ -2164,7 +2104,7 @@ class TabSessionManager(
             LanAccessController.LanDecision.BLOCKED_CROSS_ORIGIN_LAN_PROBE,
             LanAccessController.LanDecision.BLOCKED_HIDDEN_SERVICE_ONLY,
             -> {
-                if (isTopLevelNavigation || resourceType == CefriumBrowser.ResourceRequest.TYPE_SUB_FRAME) {
+                if (isTopLevelNavigation || isSubFrameNavigation) {
                     val reason = if (lanDecision == LanAccessController.LanDecision.BLOCKED_HIDDEN_SERVICE_ONLY) {
                         "Local network request blocked in Hidden Service Only mode"
                     } else {
@@ -2225,7 +2165,7 @@ class TabSessionManager(
                 // legitimate clearnet subresources in `pendingClearnetHost` for live consent.
                 return false
             }
-            if (isTopLevelNavigation || resourceType == CefriumBrowser.ResourceRequest.TYPE_SUB_FRAME) {
+            if (isTopLevelNavigation || isSubFrameNavigation) {
                 mainHandler.post {
                     updateTabState(tabId) {
                         it.copy(
@@ -2323,7 +2263,7 @@ class TabSessionManager(
         }
     }
 
-    private fun blankErrorFrameViaZeroJsCdp(browser: CefriumBrowser?) {
+    private fun blankErrorFrameViaZeroJsCdp(browser: CefpackSession?) {
         if (browser == null) return
         val currentBrowserUrl = runCatching { browser.url.orEmpty() }.getOrDefault("")
         if (!currentBrowserUrl.startsWith("chrome-error://")) return
@@ -2547,7 +2487,7 @@ class TabSessionManager(
     }
 
     private fun navigateBrowserToHistoryIndex(
-        browser: CefriumBrowser,
+        browser: CefpackSession,
         targetIdx: Int,
         steps: Int,
         fallbackUrl: String,
@@ -2586,9 +2526,9 @@ class TabSessionManager(
         }
     }
 
-    private fun canNavigateForward(browser: CefriumBrowser): Boolean {
+    private fun canNavigateForward(browser: CefpackSession): Boolean {
         val entries = runCatching { browser.navigationEntries }.getOrNull() ?: return false
-        val currentIdx = entries.indexOfFirst { it.current }
+        val currentIdx = entries.indexOfFirst { it.isCurrent }
         return currentIdx >= 0 && currentIdx < entries.lastIndex
     }
 
@@ -2634,7 +2574,7 @@ class TabSessionManager(
      * (`DOM.getDocument` -> `DOM.querySelector("video")` -> `DOM.getBoxModel`)
      * so dynamic PiP aspect ratios match live HTML5 video bounds without script execution.
      */
-    private fun probePrimaryVideoBounds(tabId: String, browser: CefriumBrowser) {
+    private fun probePrimaryVideoBounds(tabId: String, browser: CefpackSession) {
         browser.executeDevToolsMethod("DOM.getDocument", """{"depth":1}""") { docOk, docJson ->
             if (!docOk || docJson.isNullOrBlank()) return@executeDevToolsMethod
             val rootNodeId = runCatching {

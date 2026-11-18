@@ -43,7 +43,7 @@ import kotlinx.coroutines.withContext
 
 /**
  * Scrollable open-source license index for Trap's bundled runtime components:
- * Cefrium `0.19.0` (LGPL-3.0-or-later / Chromium BSD-3-Clause), Sequoia OpenPGP
+ * Cefpack (`maceip/cefpack`, MIT OR Apache-2.0 / Chromium BSD-3-Clause), Sequoia OpenPGP
  * (LGPL-2.0-or-later), and Arti Tor (MIT OR Apache-2.0).
  */
 @Composable
@@ -74,8 +74,8 @@ fun LegalNoticesDialog(
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Text(
-                    text = "Trap embeds Cefrium 0.19.0 (Android port of Chromium Embedded " +
-                        "Framework, LGPL-3.0-or-later / Chromium BSD-3-Clause), Sequoia OpenPGP " +
+                    text = "Trap embeds Cefpack (maceip/cefpack Android Chromium content embedder, " +
+                        "MIT OR Apache-2.0 / Chromium BSD-3-Clause), Sequoia OpenPGP " +
                         "(LGPL-2.0-or-later), and Arti (MIT OR Apache-2.0). Full licence texts " +
                         "ship inside assets/licenses/ and alongside release artifacts.",
                     color = colors.textMuted,

@@ -35,7 +35,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
-import com.cefrium.CefriumPickerHandler
+import dev.cefpack.android.CefpackSession
 import dev.onionvault.platform.CrossDeviceHandoffController
 import dev.onionvault.platform.LanAccessController
 import dev.onionvault.platform.MediaDisplayNormalizer
@@ -76,7 +76,7 @@ import kotlinx.coroutines.withContext
  * Primary browser activity for Trap.
  *
  * Binds [BrowserScreen] and [OvCrashScreen] to:
- *   1. [TabSessionManager] (ephemeral `CefriumProfile.incognito()` multi-tab sessions),
+ *   1. [TabSessionManager] (ephemeral off-the-record `CefpackSession` multi-tab sessions),
  *   2. [CdpDomPgpController] (100% zero-JavaScript in-process CDP DOM OpenPGP scanner & mutator),
  *   3. [OnionBackStackManager] (PixelCopy snapshot stack powering predictive-back gestures),
  *   4. [OvNative] (Arti Tor SOCKS5/isolation client + Sequoia Keystore OpenPGP engine), and
@@ -116,7 +116,7 @@ class MainActivity : FragmentActivity() {
     private var pipReceiverRegistered: Boolean = false
     private var pendingLanNavigationUrl: String? = null
     private var pendingHandoffScrollY: Int = 0
-    private var pendingColorPickerCallback: CefriumPickerHandler.ColorCallback? = null
+    private var pendingColorPickerCallback: CefpackSession.ColorCallback? = null
     private var pendingContactsPickedCallback: ((Intent?) -> Unit)? = null
 
     private val viewportLayoutListener =
@@ -147,9 +147,9 @@ class MainActivity : FragmentActivity() {
             pendingColorPickerCallback = null
             val color = WebPickersBridge.extractEyeDropperColor(result.resultCode, result.data)
             if (color != null) {
-                callback?.set(color)
+                callback?.onColorSelected(color)
             } else {
-                callback?.cancel()
+                callback?.onDismissed()
             }
         }
 
@@ -518,7 +518,7 @@ class MainActivity : FragmentActivity() {
     }
 
     override fun onDestroy() {
-        pendingColorPickerCallback?.cancel()
+        pendingColorPickerCallback?.onDismissed()
         pendingColorPickerCallback = null
         pendingContactsPickedCallback = null
         hostSurfaceFrame = null
@@ -1543,12 +1543,12 @@ class MainActivity : FragmentActivity() {
 
     private fun launchSystemEyeDropper(
         @Suppress("UNUSED_PARAMETER") initialColor: Int,
-        callback: CefriumPickerHandler.ColorCallback,
+        callback: CefpackSession.ColorCallback,
     ): Boolean {
         if (!WebPickersBridge.isEyeDropperAvailable(this)) {
             return false
         }
-        pendingColorPickerCallback?.cancel()
+        pendingColorPickerCallback?.onDismissed()
         pendingColorPickerCallback = callback
         return runCatching {
             eyeDropperLauncher.launch(WebPickersBridge.buildEyeDropperIntent())
@@ -2151,7 +2151,7 @@ class MainActivity : FragmentActivity() {
     }
 
     @VisibleForTesting
-    internal fun activeCefriumBrowserForTest(): com.cefrium.CefriumBrowser? =
+    internal fun activeCefpackSessionForTest(): CefpackSession? =
         if (controllersReady) tabSessionManager.activeBrowser() else null
 
     @VisibleForTesting

@@ -268,10 +268,10 @@ class BrowserChromeInstrumentedTest {
     }
 
     @Test
-    fun zero_js_cdp_dom_pgp_insert_encrypt_and_decrypt_on_live_cefrium_browser() {
+    fun zero_js_cdp_dom_pgp_insert_encrypt_and_decrypt_on_live_cefpack_session() {
         val activity = composeRule.activity
         assertTrue("Native libonion_vault.so must be loaded", OvNative.isLoaded)
-        assertTrue("Cefrium 0.19.0 engine must be ready", TrapApplication.isEngineReady)
+        assertTrue("Cefpack engine must be ready", TrapApplication.isEngineReady)
 
         // Ensure biometric prompt is off for unattended instrumentation execution.
         OvNative.nativeSetRequireBiometric(false)
@@ -313,11 +313,11 @@ class BrowserChromeInstrumentedTest {
             composeRule.onNodeWithTag("sheet_close_button").performClick()
             composeRule.waitForIdle()
 
-            // Wait for live CefriumBrowser to attach on the active tab.
+            // Wait for live CefpackSession to attach on the active tab.
             composeRule.waitUntil(timeoutMillis = 15_000L) {
-                activity.activeCefriumBrowserForTest() != null
+                activity.activeCefpackSessionForTest() != null
             }
-            val browser = activity.activeCefriumBrowserForTest()
+            val browser = activity.activeCefpackSessionForTest()
             assertNotNull(browser)
 
             val testOnionUrl =
@@ -364,7 +364,7 @@ class BrowserChromeInstrumentedTest {
             }
             composeRule.onNodeWithTag("pgp_field_overlay").assertIsDisplayed()
 
-            // 2. Verify 100% zero JavaScript execution inside live CefriumBrowser via CDP DOM.getDocument.
+            // 2. Verify 100% zero JavaScript execution inside live CefpackSession via CDP DOM.getDocument.
             val initialDom = queryPiercedDomJson(activity, browser!!)
             assertFalse(
                 "Page <script> must NEVER execute",
@@ -453,7 +453,7 @@ class BrowserChromeInstrumentedTest {
 
     private fun awaitControlInnerEditorContains(
         activity: MainActivity,
-        browser: com.cefrium.CefriumBrowser,
+        browser: dev.cefpack.android.CefpackSession,
         elementId: String,
         expectedSubstring: String,
         timeoutMs: Long,
@@ -472,7 +472,7 @@ class BrowserChromeInstrumentedTest {
 
     private fun queryPiercedDomJson(
         activity: MainActivity,
-        browser: com.cefrium.CefriumBrowser,
+        browser: dev.cefpack.android.CefpackSession,
     ): String {
         val latch = CountDownLatch(1)
         val resultRef = AtomicReference("")

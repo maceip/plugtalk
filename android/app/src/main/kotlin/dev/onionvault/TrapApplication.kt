@@ -4,23 +4,23 @@ import android.app.Application
 import android.content.Context
 import android.os.Build
 import android.util.Log
-import com.cefrium.Cefrium
-import com.cefrium.CefriumBrowser
-import com.cefrium.CefriumProfile
+import dev.cefpack.android.CefpackEngine
 import org.chromium.base.CommandLine
 
 /**
  * Main application entry point for Trap.
  *
  * Strictly enforces process isolation: Chromium spawns isolated `:sandboxed_process*`
- * and `:privileged_process*` child services from the same APK. Only the primary
+ * and `:privileged_process*` child services from the same APK. All processes call
+ * [CefpackEngine.initProcess] to bind their `LibraryProcessType`, while only the primary
  * browser process installs [CrashReporter], loads `libonion_vault.so`, configures
- * Chromium's zero-clearnet command-line switches, and initializes [Cefrium].
+ * Chromium's zero-clearnet command-line switches, and initializes [CefpackEngine].
  */
 class TrapApplication : Application() {
 
     companion object {
         private const val TAG = "Trap"
+        private const val BROWSER_LOG_TAG = "TrapBrowser"
 
         /** Fail-closed loopback blackhole used until Arti binds its SOCKS5 listener. */
         const val FAIL_CLOSED_SOCKS_SERVER: String = "socks5://127.0.0.1:1"
@@ -35,8 +35,9 @@ class TrapApplication : Application() {
 
         /**
          * Chromium features disabled at startup to prevent unsolicited Google background
-         * endpoints (`content-autofill.googleapis.com`, optimization hints, translate, cast)
-         * and ARMv9 MTE `SetHeapTaggingLevel` traps.
+         * endpoints (`content-autofill.googleapis.com`, optimization hints, translate, cast),
+         * WebRTC mDNS local-IP leakage, `.onion` `HttpsUpgrades` / `HttpsFirstBalancedMode`
+         * speculative HTTPS rewrites, and ARMv9 MTE `SetHeapTaggingLevel` traps.
          */
         val HARDENED_DISABLED_FEATURES: List<String> = listOf(
             PARTITION_ALLOC_MEMORY_TAGGING_FEATURE,
@@ -44,6 +45,10 @@ class TrapApplication : Application() {
             "OptimizationHints",
             "Translate",
             "MediaRouter",
+            "WebRtcHideLocalIpsWithMdns",
+            "HttpsUpgrades",
+            "HttpsFirstBalancedMode",
+            "HttpsFirstBalancedModeAutoEnable",
         )
 
         @Volatile
@@ -63,9 +68,6 @@ class TrapApplication : Application() {
             private set
 
         @Volatile
-        private var currentProfile: CefriumProfile? = null
-
-        @Volatile
         private var currentSocksServer: String = FAIL_CLOSED_SOCKS_SERVER
 
         fun isBrowserProcess(context: Context? = null): Boolean {
@@ -79,48 +81,36 @@ class TrapApplication : Application() {
             Build.FINGERPRINT.equals("robolectric", ignoreCase = true)
 
         @Synchronized
-        fun incognitoProfile(): CefriumProfile {
-            currentProfile?.let { return it }
-            val profile = CefriumProfile.incognito()
-            applyHardenedProfilePolicy(profile, currentSocksServer)
-            currentProfile = profile
-            return profile
-        }
+        fun currentSocksProxyServer(): String = currentSocksServer
 
         @Synchronized
-        fun resetIncognitoProfile(): CefriumProfile {
-            val fresh = CefriumProfile.incognito()
-            applyHardenedProfilePolicy(fresh, currentSocksServer)
-            currentProfile = fresh
-            return fresh
+        fun resetEphemeralProfile() {
+            runCatching {
+                CefpackEngine.resetEphemeralProfile()
+                CefpackEngine.setProxyServer(currentSocksServer)
+            }.onFailure { err ->
+                runCatching { Log.e(TAG, "Could not rotate ephemeral Cefpack profile", err) }
+            }
         }
 
         @Synchronized
         fun applyProfileSocksServer(socksAddr: String) {
             val normalized = socksAddr.trim()
-            val server = if (normalized.isEmpty()) {
-                FAIL_CLOSED_SOCKS_SERVER
-            } else if (normalized.startsWith("socks5://")) {
-                normalized
-            } else {
-                "socks5://$normalized"
+            val server = when {
+                normalized.isEmpty() -> FAIL_CLOSED_SOCKS_SERVER
+                normalized.startsWith("socks5://", ignoreCase = true) ->
+                    "socks5://" + normalized.substring(9)
+                normalized.startsWith("socks5h://", ignoreCase = true) ->
+                    "socks5://" + normalized.substring(10)
+                else -> "socks5://$normalized"
             }
             currentSocksServer = server
-            currentProfile?.let { profile ->
-                applyHardenedProfilePolicy(profile, server)
-            }
-        }
-
-        private fun applyHardenedProfilePolicy(profile: CefriumProfile, socksServer: String) {
             runCatching {
-                profile.setWebRtcIpHandlingPolicy(CefriumProfile.WEBRTC_DISABLE_NON_PROXIED_UDP)
-            }.onFailure {
-                Log.w(TAG, "Could not set WebRTC IP policy on CefriumProfile", it)
-            }
-            runCatching {
-                profile.setProxy(CefriumBrowser.PROXY_FIXED, socksServer)
-            }.onFailure {
-                Log.e(TAG, "Could not apply SOCKS5 proxy ($socksServer) on CefriumProfile", it)
+                CefpackEngine.setProxyServer(server)
+            }.onSuccess {
+                runCatching { Log.i(BROWSER_LOG_TAG, "Applied SOCKS5 proxy to CefpackEngine: $server") }
+            }.onFailure { err ->
+                runCatching { Log.e(TAG, "Could not apply SOCKS5 proxy ($server) on CefpackEngine", err) }
             }
         }
 
@@ -161,6 +151,11 @@ class TrapApplication : Application() {
 
     override fun attachBaseContext(base: Context) {
         super.attachBaseContext(base)
+        if (!isJvmUnitTestRuntime()) {
+            runCatching { CefpackEngine.initProcess(this) }.onFailure { error ->
+                Log.e(TAG, "CefpackEngine.initProcess failed in attachBaseContext", error)
+            }
+        }
         if (!isBrowserProcess(base)) {
             return
         }
@@ -169,12 +164,17 @@ class TrapApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        if (!isBrowserProcess(this)) {
-            return
-        }
         if (isJvmUnitTestRuntime()) {
             // Robolectric JVM unit tests inflate Compose previews without Android
-            // native `.so` binaries; skip JNI/Cefrium native boot cleanly.
+            // native `.so` binaries; skip JNI/Cefpack native boot cleanly.
+            return
+        }
+
+        runCatching { CefpackEngine.initProcess(this) }.onFailure { error ->
+            Log.e(TAG, "CefpackEngine.initProcess failed in onCreate", error)
+        }
+
+        if (!isBrowserProcess(this)) {
             return
         }
 
@@ -190,56 +190,49 @@ class TrapApplication : Application() {
         }
 
         try {
-            initializeHardenedCefrium()
+            initializeHardenedCefpack()
         } catch (error: Throwable) {
             isEngineReady = false
-            engineInitError = "${error.javaClass.simpleName}: ${error.message ?: "Cefrium failed to initialize"}"
-            Log.e(TAG, "Cefrium initialization failed", error)
+            engineInitError = "${error.javaClass.simpleName}: ${error.message ?: "Cefpack failed to initialize"}"
+            Log.e(TAG, "Cefpack initialization failed", error)
             CrashReporter.record(this, error)
         }
 
         dev.onionvault.platform.DiagnosticProfilingController.install(this)
     }
 
-    private fun initializeHardenedCefrium() {
-        // Isolate GPU execution inside `:privileged_process0` instead of `--in-process-gpu`.
-        Cefrium.setGpuProcessEnabled(true)
-
-        // Disable all background clearnet connections before starting Chromium.
-        Cefrium.setComponentUpdatesEnabled(false)
-        Cefrium.setNetworkTimeQueriesEnabled(false)
-        Cefrium.setDrmPreprovisioningAtStartupEnabled(false)
+    private fun initializeHardenedCefpack() {
+        // Start fail-closed on loopback blackhole proxy (`socks5://127.0.0.1:1`) until Arti binds.
+        CefpackEngine.setProxyServer(currentSocksServer)
 
         if (!CommandLine.isInitialized()) {
-            CommandLine.init(null)
+            CommandLine.init(arrayOf("cefpack"))
         }
         CommandLine.getInstance().apply {
             // Block OS DNS resolution for every hostname except 127.0.0.1 (Arti's
-            // local SOCKS5 listener); all `.onion` and remote names traverse SOCKS5h.
+            // local SOCKS5 listener); all `.onion` and remote names traverse SOCKS5.
             appendSwitchWithValue("host-resolver-rules", "MAP * ~NOTFOUND , EXCLUDE 127.0.0.1")
             appendSwitch("dns-prefetch-disable")
             appendSwitch("no-pings")
             appendSwitch("disable-background-networking")
-            // Pre-populate `disable-features` before `Cefrium.initialize(this)` appends
-            // its own disabled features (`Cefrium.disableFeature` is private static).
+            appendSwitchWithValue("force-webrtc-ip-handling-policy", "disable_non_proxied_udp")
+            appendSwitchWithValue("js-flags", "--jitless,--no-expose-wasm")
             HARDENED_DISABLED_FEATURES.forEach { feature ->
                 appendDisabledFeature(this, feature)
             }
         }
 
-        val initialized = Cefrium.initialize(this)
+        val initialized = CefpackEngine.initialize(this)
         if (!initialized) {
-            throw IllegalStateException("Cefrium.initialize(Context) returned false in browser process")
+            throw IllegalStateException("CefpackEngine.initialize(Context) returned false in browser process")
         }
 
-        // Disable system DNS-over-HTTPS fallback so Chromium never bypasses SOCKS5.
-        Cefrium.setSecureDns(Cefrium.SECURE_DNS_OFF, null)
-
-        // Prime the ephemeral in-memory profile with fail-closed loopback proxy until Arti binds.
-        incognitoProfile()
+        // Ensure active and future NetworkContexts remain pinned to currentSocksServer.
+        CefpackEngine.setProxyServer(currentSocksServer)
 
         isEngineReady = true
         engineInitError = null
         Log.i(TAG, "the engine is ready")
+        Log.i(BROWSER_LOG_TAG, "CefpackEngine initialized (proxy=$currentSocksServer)")
     }
 }
