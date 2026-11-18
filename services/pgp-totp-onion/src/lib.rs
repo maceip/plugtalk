@@ -59,8 +59,7 @@ const MAX_ACTIVE_SESSIONS: usize = 4096;
 const SESSION_TTL_SECS: u64 = 900;
 
 /// Exact strict Content-Security-Policy header sent on every response.
-pub const STRICT_CSP: &str =
-    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'";
+pub const STRICT_CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'";
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -178,8 +177,7 @@ pub fn compute_totp_code(
     round_salt: &[u8; 32],
     step: u64,
 ) -> String {
-    let mut mac =
-        HmacSha256::new_from_slice(master_key).expect("HMAC-SHA256 accepts 256-bit keys");
+    let mut mac = HmacSha256::new_from_slice(master_key).expect("HMAC-SHA256 accepts 256-bit keys");
     mac.update(b"TRAP-OPENPGP-TOTP-V1\0");
     mac.update(session_id.as_bytes());
     mac.update(&[0u8, round]);
@@ -331,7 +329,10 @@ async fn handle_verify(
     let now_step = totp_step(now_unix);
 
     enum VerifyOutcome {
-        Failed { round: u8, reason: &'static str },
+        Failed {
+            round: u8,
+            reason: &'static str,
+        },
         NextRound {
             next_round: u8,
             client_cert_bytes: Vec<u8>,
@@ -362,9 +363,7 @@ async fn handle_verify(
                 round,
                 reason: "Session already finalized or replayed.",
             }
-        } else if submitted_code.len() != 6
-            || !submitted_code.bytes().all(|b| b.is_ascii_digit())
-        {
+        } else if submitted_code.len() != 6 || !submitted_code.bytes().all(|b| b.is_ascii_digit()) {
             record.failed = true;
             sessions.remove(session_id);
             VerifyOutcome::Failed {
@@ -509,10 +508,7 @@ async fn handle_verify(
                  ISSUED AT: {}\n\
                  ROUNDS VERIFIED: 3 OF 3\n\
                  AUTHORITY FINGERPRINT: {}\n",
-                state.prize_text,
-                fingerprint_hex,
-                issued_iso,
-                state.server_fingerprint_hex,
+                state.prize_text, fingerprint_hex, issued_iso, state.server_fingerprint_hex,
             );
             let Ok(armored_prize) =
                 sign_and_encrypt_armored(&state.server_cert, &client_cert, &cert_plaintext)
@@ -555,8 +551,8 @@ fn load_or_generate_server_cert(state_dir: Option<&Path>) -> Result<Cert> {
         if tsk_path.exists() {
             let bytes = fs::read(&tsk_path)
                 .with_context(|| format!("failed to read {}", tsk_path.display()))?;
-            let cert = Cert::from_bytes(&bytes)
-                .context("failed to parse persisted server OpenPGP TSK")?;
+            let cert =
+                Cert::from_bytes(&bytes).context("failed to parse persisted server OpenPGP TSK")?;
             if cert.is_tsk() {
                 return Ok(cert);
             }
@@ -1040,13 +1036,15 @@ mod tests {
                 .unwrap(),
             STRICT_CSP
         );
-        let index_html = String::from_utf8(to_bytes(res.into_body(), 65536).await.unwrap().to_vec()).unwrap();
+        let index_html =
+            String::from_utf8(to_bytes(res.into_body(), 65536).await.unwrap().to_vec()).unwrap();
         assert!(index_html.contains("placeholder=\"Paste PGP public key\""));
         assert!(!index_html.to_ascii_lowercase().contains("<script"));
 
         // 2. POST /enroll -> Round 1
         let (client_tsk, client_pub_armored) = generate_client_key();
-        let enroll_body = serde_urlencoded::to_string([("pubkey", client_pub_armored.as_str())]).unwrap();
+        let enroll_body =
+            serde_urlencoded::to_string([("pubkey", client_pub_armored.as_str())]).unwrap();
         let res = app
             .clone()
             .oneshot(
@@ -1060,7 +1058,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        let r1_html = String::from_utf8(to_bytes(res.into_body(), 65536).await.unwrap().to_vec()).unwrap();
+        let r1_html =
+            String::from_utf8(to_bytes(res.into_body(), 65536).await.unwrap().to_vec()).unwrap();
         assert!(r1_html.contains("data-stage=\"challenge\" data-round=\"1\""));
         let session_id = extract_between(&r1_html, "name=\"session\" value=\"", "\"").to_string();
         let pgp_r1 = extract_between(&r1_html, "<pre id=\"pgp-challenge\">", "</pre>");
@@ -1090,13 +1089,17 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        let r2_html = String::from_utf8(to_bytes(res.into_body(), 65536).await.unwrap().to_vec()).unwrap();
+        let r2_html =
+            String::from_utf8(to_bytes(res.into_body(), 65536).await.unwrap().to_vec()).unwrap();
         assert!(r2_html.contains("data-stage=\"challenge\" data-round=\"2\""));
         let pgp_r2 = extract_between(&r2_html, "<pre id=\"pgp-challenge\">", "</pre>");
         let plain_r2 = decrypt_and_verify(&client_tsk, &server_pub, pgp_r2);
         assert!(plain_r2.contains("TRAP OPENPGP TOTP — ROUND 2 OF 3"));
         let code_r2 = extract_code_from_plaintext(&plain_r2);
-        assert_ne!(code_r1, code_r2, "Round 2 TOTP code must differ from Round 1");
+        assert_ne!(
+            code_r1, code_r2,
+            "Round 2 TOTP code must differ from Round 1"
+        );
 
         // 4. POST /verify Round 2 -> Round 3
         clock.advance(12);
@@ -1118,7 +1121,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        let r3_html = String::from_utf8(to_bytes(res.into_body(), 65536).await.unwrap().to_vec()).unwrap();
+        let r3_html =
+            String::from_utf8(to_bytes(res.into_body(), 65536).await.unwrap().to_vec()).unwrap();
         assert!(r3_html.contains("data-stage=\"challenge\" data-round=\"3\""));
         let pgp_r3 = extract_between(&r3_html, "<pre id=\"pgp-challenge\">", "</pre>");
         let plain_r3 = decrypt_and_verify(&client_tsk, &server_pub, pgp_r3);
@@ -1147,7 +1151,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        let won_html = String::from_utf8(to_bytes(res.into_body(), 65536).await.unwrap().to_vec()).unwrap();
+        let won_html =
+            String::from_utf8(to_bytes(res.into_body(), 65536).await.unwrap().to_vec()).unwrap();
         assert!(won_html.contains("data-stage=\"won\" data-round=\"3\" data-won=\"true\""));
         let banner = extract_between(&won_html, "<div id=\"prize-banner\">", "</div>");
         assert_eq!(banner, "TEST-ONLY-EPHEMERAL-UNIT-PRIZE-9911");
@@ -1170,7 +1175,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(replay.status(), StatusCode::BAD_REQUEST);
-        let replay_html = String::from_utf8(to_bytes(replay.into_body(), 65536).await.unwrap().to_vec()).unwrap();
+        let replay_html =
+            String::from_utf8(to_bytes(replay.into_body(), 65536).await.unwrap().to_vec()).unwrap();
         assert!(replay_html.contains("data-stage=\"failed\""));
     }
 
@@ -1190,7 +1196,8 @@ mod tests {
         let (client_tsk, client_pub_armored) = generate_client_key();
 
         // Case A: Wrong code burns session so subsequent right code also fails
-        let enroll_body = serde_urlencoded::to_string([("pubkey", client_pub_armored.as_str())]).unwrap();
+        let enroll_body =
+            serde_urlencoded::to_string([("pubkey", client_pub_armored.as_str())]).unwrap();
         let res = app
             .clone()
             .oneshot(
@@ -1203,7 +1210,8 @@ mod tests {
             )
             .await
             .unwrap();
-        let r1_html = String::from_utf8(to_bytes(res.into_body(), 65536).await.unwrap().to_vec()).unwrap();
+        let r1_html =
+            String::from_utf8(to_bytes(res.into_body(), 65536).await.unwrap().to_vec()).unwrap();
         let session_a = extract_between(&r1_html, "name=\"session\" value=\"", "\"").to_string();
         let plain_a = decrypt_and_verify(
             &client_tsk,
@@ -1211,7 +1219,11 @@ mod tests {
             extract_between(&r1_html, "<pre id=\"pgp-challenge\">", "</pre>"),
         );
         let real_code_a = extract_code_from_plaintext(&plain_a);
-        let wrong_code = if real_code_a == "000000" { "999999" } else { "000000" };
+        let wrong_code = if real_code_a == "000000" {
+            "999999"
+        } else {
+            "000000"
+        };
 
         let bad_res = app
             .clone()
@@ -1267,7 +1279,8 @@ mod tests {
             )
             .await
             .unwrap();
-        let r1_b_html = String::from_utf8(to_bytes(res_b.into_body(), 65536).await.unwrap().to_vec()).unwrap();
+        let r1_b_html =
+            String::from_utf8(to_bytes(res_b.into_body(), 65536).await.unwrap().to_vec()).unwrap();
         let session_b = extract_between(&r1_b_html, "name=\"session\" value=\"", "\"").to_string();
         let plain_b = decrypt_and_verify(
             &client_tsk,
