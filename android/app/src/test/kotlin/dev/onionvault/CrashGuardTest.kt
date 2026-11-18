@@ -6,6 +6,7 @@ import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
 import org.chromium.base.CommandLine
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -136,10 +137,23 @@ class CrashGuardTest {
         )
 
         assertEquals(
-            "PartitionAllocMemoryTagging,AutofillServerCommunication,OptimizationHints,Translate," +
-                "MediaRouter,WebRtcHideLocalIpsWithMdns,HttpsUpgrades,HttpsFirstBalancedMode," +
-                "HttpsFirstBalancedModeAutoEnable",
+            "PartitionAllocMemoryTagging,JavalessRendererExperimentOn,AutofillServerCommunication," +
+                "OptimizationHints,Translate,MediaRouter,WebRtcHideLocalIpsWithMdns," +
+                "HttpsUpgrades,HttpsFirstBalancedMode,HttpsFirstBalancedModeAutoEnable",
             cl.getSwitchValue("disable-features", ""),
+        )
+    }
+
+    @Test
+    fun android_17_child_process_params_pin_standard_sandboxed_process_services() {
+        TrapApplication.configureChildProcessCreationParams("dev.onionvault")
+        // Calling a second time must be idempotent and never trigger Chromium's sInitialized assert.
+        TrapApplication.configureChildProcessCreationParams("dev.onionvault")
+
+        assertFalse(org.chromium.content.browser.ChildProcessCreationParamsImpl.isNativeSandboxedServiceEnabled())
+        assertEquals(
+            "org.chromium.content.app.SandboxedProcessService",
+            org.chromium.content.browser.ChildProcessCreationParamsImpl.getSandboxedServicesName(),
         )
     }
 

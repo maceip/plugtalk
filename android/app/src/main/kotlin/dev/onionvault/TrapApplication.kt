@@ -6,6 +6,7 @@ import android.os.Build
 import android.util.Log
 import dev.cefpack.android.CefpackEngine
 import org.chromium.base.CommandLine
+import org.chromium.content_public.browser.ChildProcessCreationParams
 
 /**
  * Main application entry point for Trap.
@@ -34,13 +35,26 @@ class TrapApplication : Application() {
         const val PARTITION_ALLOC_MEMORY_TAGGING_FEATURE: String = "PartitionAllocMemoryTagging"
 
         /**
+         * Chromium 156 enables `JavalessRendererExperimentOn` by default on Android 17+
+         * (`SDK_INT >= 37`), switching `ChildProcessCreationParamsImpl.getSandboxedServicesName()`
+         * to `NativeOnlySandboxedProcessService0`, whereas `cefpack-android.aar` declares
+         * `SandboxedProcessService0..39`. Pinning `forceNativeSandboxedService = false` and
+         * `--javaless-renderers=disabled` keeps child renderer allocation on
+         * `SandboxedProcessService0..39` across Android 10 through Android 17+.
+         */
+        const val JAVALESS_RENDERERS_FEATURE: String = "JavalessRendererExperimentOn"
+        private const val LIBRARY_PROCESS_TYPE_CHILD: Int = 2
+
+        /**
          * Chromium features disabled at startup to prevent unsolicited Google background
          * endpoints (`content-autofill.googleapis.com`, optimization hints, translate, cast),
          * WebRTC mDNS local-IP leakage, `.onion` `HttpsUpgrades` / `HttpsFirstBalancedMode`
-         * speculative HTTPS rewrites, and ARMv9 MTE `SetHeapTaggingLevel` traps.
+         * speculative HTTPS rewrites, ARMv9 MTE `SetHeapTaggingLevel` traps, and Android 17+
+         * unbundled `NativeOnlySandboxedProcessService` renderer routing.
          */
         val HARDENED_DISABLED_FEATURES: List<String> = listOf(
             PARTITION_ALLOC_MEMORY_TAGGING_FEATURE,
+            JAVALESS_RENDERERS_FEATURE,
             "AutofillServerCommunication",
             "OptimizationHints",
             "Translate",
@@ -50,6 +64,9 @@ class TrapApplication : Application() {
             "HttpsFirstBalancedMode",
             "HttpsFirstBalancedModeAutoEnable",
         )
+
+        @Volatile
+        private var childProcessParamsConfigured: Boolean = false
 
         @Volatile
         var isEngineReady: Boolean = false
@@ -147,6 +164,23 @@ class TrapApplication : Application() {
             }
             commandLine.appendSwitchWithValue("disable-features", merged)
         }
+
+        @Synchronized
+        internal fun configureChildProcessCreationParams(packageName: String) {
+            if (childProcessParamsConfigured) {
+                return
+            }
+            ChildProcessCreationParams.set(
+                packageName,
+                packageName,
+                false,
+                LIBRARY_PROCESS_TYPE_CHILD,
+                false,
+                false,
+                false,
+            )
+            childProcessParamsConfigured = true
+        }
     }
 
     override fun attachBaseContext(base: Context) {
@@ -204,6 +238,7 @@ class TrapApplication : Application() {
     private fun initializeHardenedCefpack() {
         // Start fail-closed on loopback blackhole proxy (`socks5://127.0.0.1:1`) until Arti binds.
         CefpackEngine.setProxyServer(currentSocksServer)
+        configureChildProcessCreationParams(packageName)
 
         if (!CommandLine.isInitialized()) {
             CommandLine.init(arrayOf("cefpack"))
@@ -217,6 +252,10 @@ class TrapApplication : Application() {
             appendSwitch("disable-background-networking")
             appendSwitchWithValue("force-webrtc-ip-handling-policy", "disable_non_proxied_udp")
             appendSwitchWithValue("js-flags", "--jitless,--no-expose-wasm")
+            if (hasSwitch("javaless-renderers")) {
+                removeSwitch("javaless-renderers")
+            }
+            appendSwitchWithValue("javaless-renderers", "disabled")
             HARDENED_DISABLED_FEATURES.forEach { feature ->
                 appendDisabledFeature(this, feature)
             }
