@@ -2,9 +2,18 @@ package dev.onionvault
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.util.Log
+import android.view.PixelCopy
+import android.view.SurfaceView
+import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
 import androidx.compose.ui.geometry.Offset
@@ -455,7 +464,12 @@ class LiveOnionPgpTotpPrizeTest {
                         findElementById(root, "totp-code") != null &&
                         findElementById(root, "verify-submit") != null
                     ) {
-                        return domJson
+                        val challengeText = readElementVisibleTextById(domJson, "pgp-challenge")
+                        if (challengeText.contains("-----BEGIN PGP MESSAGE-----") &&
+                            challengeText.contains("-----END PGP MESSAGE-----")
+                        ) {
+                            return domJson
+                        }
                     }
                 }
             }
@@ -498,7 +512,14 @@ class LiveOnionPgpTotpPrizeTest {
                         findElementById(root, "prize-banner") != null &&
                         findElementById(root, "pgp-prize") != null
                     ) {
-                        return domJson
+                        val bannerText = readElementVisibleTextById(domJson, "prize-banner").trim()
+                        val prizeArmor = readElementVisibleTextById(domJson, "pgp-prize")
+                        if (bannerText.isNotBlank() &&
+                            prizeArmor.contains("-----BEGIN PGP MESSAGE-----") &&
+                            prizeArmor.contains("-----END PGP MESSAGE-----")
+                        ) {
+                            return domJson
+                        }
                     }
                 }
             }
@@ -938,17 +959,135 @@ class LiveOnionPgpTotpPrizeTest {
         activity: MainActivity,
     ) {
         runShellCommandDrained(instrumentation, "rm -f $DEVICE_PRIZE_SCREENSHOT_PATH")
-        runShellCommandDrained(instrumentation, "screencap -p $DEVICE_PRIZE_SCREENSHOT_PATH")
 
-        // Also save via UiAutomation.takeScreenshot() into externalCacheDir as secondary forensic copy.
-        runCatching {
-            val bmp = instrumentation.uiAutomation.takeScreenshot()
-            if (bmp != null) {
-                val outFile = File(activity.externalCacheDir ?: activity.cacheDir, "trap-prize-won.png")
-                FileOutputStream(outFile).use { out ->
-                    bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+        val hasFocusRef = AtomicReference(false)
+        activity.runOnUiThread {
+            hasFocusRef.set(activity.hasWindowFocus())
+        }
+
+        if (hasFocusRef.get()) {
+            runShellCommandDrained(instrumentation, "screencap -p $DEVICE_PRIZE_SCREENSHOT_PATH")
+            val sizeStr = runShellCommandDrained(
+                instrumentation,
+                "sh -c 'wc -c < $DEVICE_PRIZE_SCREENSHOT_PATH 2>/dev/null || echo 0'",
+            ).trim()
+            if ((sizeStr.toLongOrNull() ?: 0L) > 1024L) {
+                return
+            }
+        }
+
+        // When a physical device has an active secure Keyguard overlay stealing window focus,
+        // SurfaceFlinger `screencap` captures the lockscreen wallpaper rather than MainActivity.
+        // Composite CefpackSession's SurfaceView + MainActivity's Window HardwareBuffer directly
+        // via Android's hardware PixelCopy API so the real rendered Trap UI & prize are captured.
+        val composite = captureActivityWindowComposite(activity) ?: run {
+            runShellCommandDrained(instrumentation, "screencap -p $DEVICE_PRIZE_SCREENSHOT_PATH")
+            return
+        }
+        try {
+            val pngOut = ByteArrayOutputStream()
+            composite.compress(Bitmap.CompressFormat.PNG, 100, pngOut)
+            val pngBytes = pngOut.toByteArray()
+
+            val cacheFile = File(activity.externalCacheDir ?: activity.cacheDir, "trap-prize-won.png")
+            FileOutputStream(cacheFile).use { it.write(pngBytes) }
+
+            val pfds = instrumentation.uiAutomation.executeShellCommandRw(
+                "sh -c 'cat > $DEVICE_PRIZE_SCREENSHOT_PATH'",
+            )
+            ParcelFileDescriptor.AutoCloseOutputStream(pfds[1]).use { stdin ->
+                stdin.write(pngBytes)
+                stdin.flush()
+            }
+            ParcelFileDescriptor.AutoCloseInputStream(pfds[0]).use { stdout ->
+                val drain = ByteArray(1024)
+                while (stdout.read(drain) > 0) {
+                    // Drain until shell cat closes stdout on EOF.
                 }
-                bmp.recycle()
+            }
+        } finally {
+            composite.recycle()
+        }
+    }
+
+    private fun captureActivityWindowComposite(activity: MainActivity): Bitmap? {
+        val dimsRef = AtomicReference<Pair<Int, Int>?>(null)
+        val surfaceViews = ArrayList<Pair<SurfaceView, IntArray>>()
+        val initLatch = CountDownLatch(1)
+
+        activity.runOnUiThread {
+            val decor = activity.window?.decorView
+            if (decor != null && decor.width > 0 && decor.height > 0) {
+                dimsRef.set(decor.width to decor.height)
+                collectVisibleSurfaceViews(decor, surfaceViews)
+            }
+            initLatch.countDown()
+        }
+        initLatch.await(5, TimeUnit.SECONDS)
+        val (w, h) = dimsRef.get() ?: return null
+
+        val composite = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(composite)
+        canvas.drawColor(Color.rgb(8, 9, 12))
+        val mainHandler = Handler(Looper.getMainLooper())
+
+        for ((sv, loc) in surfaceViews) {
+            if (sv.width <= 0 || sv.height <= 0 || !sv.holder.surface.isValid) continue
+            val svBmp = Bitmap.createBitmap(sv.width, sv.height, Bitmap.Config.ARGB_8888)
+            val svLatch = CountDownLatch(1)
+            val svResult = AtomicReference(PixelCopy.ERROR_UNKNOWN)
+            runCatching {
+                PixelCopy.request(
+                    sv,
+                    svBmp,
+                    { res ->
+                        svResult.set(res)
+                        svLatch.countDown()
+                    },
+                    mainHandler,
+                )
+            }.onFailure { svLatch.countDown() }
+            svLatch.await(5, TimeUnit.SECONDS)
+            if (svResult.get() == PixelCopy.SUCCESS) {
+                canvas.drawBitmap(svBmp, loc[0].toFloat(), loc[1].toFloat(), null)
+            }
+            svBmp.recycle()
+        }
+
+        val winBmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val winLatch = CountDownLatch(1)
+        val winResult = AtomicReference(PixelCopy.ERROR_UNKNOWN)
+        runCatching {
+            PixelCopy.request(
+                activity.window,
+                winBmp,
+                { res ->
+                    winResult.set(res)
+                    winLatch.countDown()
+                },
+                mainHandler,
+            )
+        }.onFailure { winLatch.countDown() }
+        winLatch.await(5, TimeUnit.SECONDS)
+        if (winResult.get() == PixelCopy.SUCCESS) {
+            canvas.drawBitmap(winBmp, 0f, 0f, null)
+        }
+        winBmp.recycle()
+
+        return composite
+    }
+
+    private fun collectVisibleSurfaceViews(view: View, out: MutableList<Pair<SurfaceView, IntArray>>) {
+        if (view.visibility != View.VISIBLE) return
+        if (view is SurfaceView) {
+            val loc = IntArray(2)
+            view.getLocationInWindow(loc)
+            out.add(view to loc)
+            return
+        }
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) {
+                collectVisibleSurfaceViews(view.getChildAt(i), out)
             }
         }
     }
