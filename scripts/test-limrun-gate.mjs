@@ -263,7 +263,7 @@ async function startMockLimrunServer(toolsDir, mode) {
                     stackTrace:
                       '*** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***\n' +
                       'Build fingerprint: Android/sdk_gphone64/emu64a:15\n' +
-                      '      #00 pc 000000000412abcd  /data/app/dev.onionvault/lib/arm64/libcef.so',
+                      '      #00 pc 000000000412abcd  /data/app/dev.onionvault/lib/arm64/libcefpack_content.so',
                     timeMillis: Date.now(),
                   },
                   logs: [
@@ -411,20 +411,21 @@ async function startMockLimrunServer(toolsDir, mode) {
             ].join('\n');
           } else {
             const lines = [
+              '11-15 03:00:00.990  9001  9001 I Cefpack : Initialized Cefpack content engine (proxy=socks5://127.0.0.1:1)',
               '11-15 03:00:01.010  9001  9001 I Trap    : the engine is ready',
               '11-15 03:00:01.250  9001  9024 I ov_tor  : SOCKS5 listener bound to 127.0.0.1:41955',
-              '11-15 03:00:01.400  9001  9001 I Cefrium : loadUrl: about:blank',
-              '11-15 03:00:01.750  9001  9001 I Cefrium : OnLoadEnd: status 0, isMain=1',
+              '11-15 03:00:01.400  9001  9001 I Cefpack : loadUrl: about:blank',
+              '11-15 03:00:01.750  9001  9001 I Cefpack : OnLoadEnd: status 0, isMain=1',
               '11-15 03:00:03.400  9001  9025 I ov_tor  : Tor client bootstrapped',
             ];
             if (state.navigatedOnion) {
               lines.push(
-                '11-15 03:00:04.050  9001  9001 I Cefrium : loadUrl: https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/',
+                '11-15 03:00:04.050  9001  9001 I Cefpack : loadUrl: https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/',
                 '11-15 03:00:04.100  9001  9026 I ov_tor  : created isolated Tor circuit group iso-duckduckgogg42xj',
               );
               if (mode !== 'premature_onion_still_loading') {
                 lines.push(
-                  '11-15 03:00:18.450  9001  9001 I Cefrium : OnLoadEnd: status 200, isMain=1',
+                  '11-15 03:00:18.450  9001  9001 I Cefpack : OnLoadEnd: status 200, isMain=1',
                 );
               }
             }

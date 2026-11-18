@@ -2,7 +2,7 @@
 #
 # Emulator runtime gate: installs the APK on a booted Android device/AVD,
 # launches `dev.onionvault/.MainActivity`, verifies that:
-#   1. Cefrium initializes cleanly ("the engine is ready"),
+#   1. Cefpack initializes cleanly ("Initialized Cefpack content engine" / "the engine is ready"),
 #   2. `ov_tor` binds its loopback SOCKS5 proxy (`127.0.0.1:<port>`),
 #   3. The browser holds steady for 12s with a live PID,
 #   4. Zero Java FATAL EXCEPTIONs, ANRs, native fatal signals, or CrashReporter files occur,
@@ -55,13 +55,13 @@ adb shell am start -W -n "$ACTIVITY" || {
     exit 1
 }
 
-echo "== waiting up to ${WAIT_SECONDS}s for Cefrium readiness + ov_tor loopback SOCKS5 bind =="
+echo "== waiting up to ${WAIT_SECONDS}s for Cefpack readiness + ov_tor loopback SOCKS5 bind =="
 engine_ready=0
 socks_bound=0
 elapsed=0
 while (( elapsed < WAIT_SECONDS )); do
     adb logcat -d > "$LOG" 2>/dev/null || true
-    if grep -q "the engine is ready" "$LOG"; then
+    if grep -qE "the engine is ready|Initialized Cefpack content engine" "$LOG"; then
         engine_ready=1
     fi
     if grep -qE "(ov_tor: SOCKS5 listener bound to|Tor SOCKS5 listener bound on) 127\.0\.0\.1:[0-9]+" "$LOG"; then
@@ -70,7 +70,7 @@ while (( elapsed < WAIT_SECONDS )); do
     if (( engine_ready == 1 && socks_bound == 1 )); then
         break
     fi
-    if grep -qE "FATAL EXCEPTION|ANR in ${PACKAGE}|Fatal signal [0-9]+|SetHeapTaggingLevel: set_tcf_on_all_threads failed" "$LOG"; then
+    if grep -qE "FATAL EXCEPTION|ANR in ${PACKAGE}|Fatal signal [0-9]+|SetHeapTaggingLevel: set_tcf_on_all_threads failed|Failed to initialize Cefpack content engine|Cefpack initialization failed" "$LOG"; then
         break
     fi
     sleep 2
@@ -105,9 +105,15 @@ if grep -qE "SetHeapTaggingLevel: set_tcf_on_all_threads failed|PartitionAlloc: 
     failed=1
 fi
 
-if grep -qE "UnsatisfiedLinkError|ClassNotFoundException|NoSuchMethodError" "$LOG"; then
-    echo "::error::JNI/DEX linkage error (UnsatisfiedLinkError / ClassNotFoundException / NoSuchMethodError) detected in logcat" >&2
-    grep -E -C 5 "UnsatisfiedLinkError|ClassNotFoundException|NoSuchMethodError" "$LOG" | head -60 >&2 || true
+if grep -qE "UnsatisfiedLinkError|ClassNotFoundException|NoSuchMethodError|NoSuchFieldError" "$LOG"; then
+    echo "::error::JNI/DEX linkage error (UnsatisfiedLinkError / ClassNotFoundException / NoSuchMethodError / NoSuchFieldError) detected in logcat" >&2
+    grep -E -C 5 "UnsatisfiedLinkError|ClassNotFoundException|NoSuchMethodError|NoSuchFieldError" "$LOG" | head -60 >&2 || true
+    failed=1
+fi
+
+if grep -qE "Trap startup failed|Cefpack initialization failed|Failed to initialize Cefpack content engine|Failed to load libonion_vault\.so" "$LOG"; then
+    echo "::error::Cefpack or native startup error logged" >&2
+    grep -E -C 5 "Trap startup failed|Cefpack initialization failed|Failed to initialize Cefpack content engine|Failed to load libonion_vault\.so" "$LOG" | head -40 >&2 || true
     failed=1
 fi
 
@@ -118,7 +124,7 @@ if adb shell "run-as ${PACKAGE} ls files" 2>/dev/null | grep -q "crash"; then
 fi
 
 if (( engine_ready == 0 )); then
-    echo "::error::Cefrium never logged 'the engine is ready'" >&2
+    echo "::error::Cefpack never logged 'Initialized Cefpack content engine' / 'the engine is ready'" >&2
     failed=1
 fi
 
@@ -147,4 +153,4 @@ if [[ "$failed" != "0" ]]; then
     exit 1
 fi
 
-echo "PASS: ${PACKAGE} (pid ${app_pid}) initialized Cefrium, bound ov_tor SOCKS5 on ${socks_endpoint}, zero crashes/linkage errors (screenshot: ${SCREENSHOT_PATH})"
+echo "PASS: ${PACKAGE} (pid ${app_pid}) initialized Cefpack, bound ov_tor SOCKS5 on ${socks_endpoint}, zero crashes/linkage errors (screenshot: ${SCREENSHOT_PATH})"

@@ -1,15 +1,34 @@
 // Gradle build for the Trap Android application.
 //
-// Browser rendering is provided by Cefrium (`com.cefrium:cefrium-sdk:0.19.0`,
-// Chromium 156 / CEF for native Android). Trap's Rust library (`libonion_vault.so`,
-// built via `cargo-ndk`) handles Arti Tor SOCKS5 circuits, URL leak policy,
-// Sequoia OpenPGP keyring/crypto, and zero-JS CDP DOM classification without
-// linking against `libcef.so`.
+// Browser rendering is provided by Cefpack (`https://github.com/maceip/cefpack`,
+// source-built Chromium 156 `//content/public/android` embedder `cefpack-android.aar`
+// resolved directly from GitHub Releases with mandatory SHA-256 verification).
+// Trap's Rust library (`libonion_vault.so`, built via `cargo-ndk`) handles Arti Tor
+// SOCKS5 circuits, URL leak policy, Sequoia OpenPGP keyring/crypto, and zero-JS CDP
+// DOM classification with zero browser `.so` linkage.
+
+import java.io.FileInputStream
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
+import java.time.Duration
+import org.gradle.api.DefaultTask
+import org.gradle.api.GradleException
+import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.provider.Property
+import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.Optional
+import org.gradle.api.tasks.OutputFile
+import org.gradle.api.tasks.TaskAction
+import org.gradle.work.DisableCachingByDefault
 
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
-    id("com.cefrium")
 }
 
 val trapVersionFile = rootProject.file("../VERSION")
@@ -43,6 +62,263 @@ val trapResolvedVersionCode = providers.gradleProperty("trap.versionCode")
             maxOf(trapVersionCodeFloor, encoded)
         }
         ?: trapVersionCodeFloor
+
+// Pinned `maceip/cefpack` GitHub Release artifact coordinates & mandatory SHA-256 digest.
+val cefpackPinnedTag = "v0.2.0"
+val cefpackPinnedAsset = "cefpack-android.aar"
+val cefpackPinnedSha256 = "PENDING_CEFPACK_V020_RELEASE_SHA256"
+
+object CefpackAarResolver {
+    private const val ASSET_NAME = "cefpack-android.aar"
+
+    fun sha256Hex(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val buffer = ByteArray(1024 * 1024)
+        FileInputStream(file).use { input ->
+            while (true) {
+                val read = input.read(buffer)
+                if (read <= 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    fun assertZipHeader(file: File, label: String) {
+        if (!file.isFile || file.length() < 4L) {
+            throw GradleException("$label is missing or empty: ${file.absolutePath}")
+        }
+        val magic = ByteArray(4)
+        FileInputStream(file).use { input ->
+            if (input.read(magic) != 4) {
+                throw GradleException("$label could not be read: ${file.absolutePath}")
+            }
+        }
+        val isZip = magic[0] == 0x50.toByte() &&
+            magic[1] == 0x4B.toByte() &&
+            magic[2] == 0x03.toByte() &&
+            magic[3] == 0x04.toByte()
+        if (!isZip) {
+            throw GradleException("$label is not a valid ZIP/AAR archive: ${file.absolutePath}")
+        }
+    }
+
+    fun materialize(
+        localOverridePath: String?,
+        releaseTag: String,
+        releaseUrl: String,
+        expectedSha256Raw: String,
+        userCacheRoot: File,
+        destAar: File,
+        metadataJsonOut: File,
+    ) {
+        val expectedSha256 = expectedSha256Raw.trim().lowercase()
+        val sha256HexRegex = Regex("^[0-9a-f]{64}$")
+
+        destAar.parentFile.mkdirs()
+        metadataJsonOut.parentFile.mkdirs()
+
+        val resolvedSha256: String
+        val sourceUrlOrPath: String
+        val isLocalOverride: Boolean
+
+        if (!localOverridePath.isNullOrBlank()) {
+            isLocalOverride = true
+            val overrideFile = File(localOverridePath)
+            if (!overrideFile.isFile) {
+                throw GradleException(
+                    "Local cefpack AAR override not found at '${overrideFile.absolutePath}' " +
+                        "(set via -PcefpackAarPath or CEFPACK_AAR_PATH).",
+                )
+            }
+            assertZipHeader(overrideFile, "Local cefpack AAR override")
+            val actualSha = sha256Hex(overrideFile)
+            if (expectedSha256.isNotEmpty() && sha256HexRegex.matches(expectedSha256) && actualSha != expectedSha256) {
+                throw GradleException(
+                    "SHA-256 mismatch for local cefpack AAR override '${overrideFile.absolutePath}': " +
+                        "expected $expectedSha256, got $actualSha",
+                )
+            }
+            if (overrideFile.canonicalPath != destAar.canonicalPath) {
+                val tmp = File(destAar.parentFile, "${destAar.name}.tmp")
+                Files.copy(overrideFile.toPath(), tmp.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                Files.move(tmp.toPath(), destAar.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
+            resolvedSha256 = actualSha
+            sourceUrlOrPath = overrideFile.canonicalPath
+        } else {
+            isLocalOverride = false
+            if (!sha256HexRegex.matches(expectedSha256)) {
+                throw GradleException(
+                    "Cefpack AAR SHA-256 pin is not a valid 64-character hex digest ('$expectedSha256Raw'). " +
+                        "Pin cefpackPinnedSha256 in android/app/build.gradle.kts from https://github.com/maceip/cefpack/releases " +
+                        "or pass -PcefpackAarPath=/path/to/cefpack-android.aar for local builds.",
+                )
+            }
+
+            if (destAar.isFile && sha256Hex(destAar) == expectedSha256) {
+                assertZipHeader(destAar, "Cached cefpack AAR")
+                resolvedSha256 = expectedSha256
+            } else {
+                val sharedCacheFile = File(userCacheRoot, "$expectedSha256/$ASSET_NAME")
+                if (sharedCacheFile.isFile && sha256Hex(sharedCacheFile) == expectedSha256) {
+                    assertZipHeader(sharedCacheFile, "Gradle cache cefpack AAR")
+                    val tmp = File(destAar.parentFile, "${destAar.name}.tmp")
+                    Files.copy(sharedCacheFile.toPath(), tmp.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                    Files.move(tmp.toPath(), destAar.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                    resolvedSha256 = expectedSha256
+                } else {
+                    println("Downloading $releaseUrl -> ${destAar.absolutePath} (expecting SHA-256 $expectedSha256)...")
+                    val partFile = File(destAar.parentFile, "${destAar.name}.part")
+                    Files.deleteIfExists(partFile.toPath())
+
+                    val client = HttpClient.newBuilder()
+                        .followRedirects(HttpClient.Redirect.NORMAL)
+                        .connectTimeout(Duration.ofSeconds(30))
+                        .build()
+                    val reqBuilder = HttpRequest.newBuilder(URI.create(releaseUrl))
+                        .timeout(Duration.ofMinutes(10))
+                        .header("Accept", "application/octet-stream")
+                        .header("User-Agent", "trap-gradle-cefpack-resolver")
+                    val ghToken = (System.getenv("GITHUB_TOKEN") ?: System.getenv("GH_TOKEN"))?.trim()
+                    if (!ghToken.isNullOrEmpty() && releaseUrl.startsWith("https://github.com/")) {
+                        reqBuilder.header("Authorization", "Bearer $ghToken")
+                    }
+
+                    val response = client.send(reqBuilder.GET().build(), HttpResponse.BodyHandlers.ofFile(partFile.toPath()))
+                    if (response.statusCode() != 200) {
+                        Files.deleteIfExists(partFile.toPath())
+                        throw GradleException(
+                            "Failed to download cefpack AAR from $releaseUrl (HTTP ${response.statusCode()}).",
+                        )
+                    }
+
+                    val downloadedSha = sha256Hex(partFile)
+                    if (downloadedSha != expectedSha256) {
+                        Files.deleteIfExists(partFile.toPath())
+                        throw GradleException(
+                            "SHA-256 verification failed for $releaseUrl: expected $expectedSha256, got $downloadedSha",
+                        )
+                    }
+                    assertZipHeader(partFile, "Downloaded cefpack AAR")
+
+                    sharedCacheFile.parentFile.mkdirs()
+                    val cacheTmp = File(sharedCacheFile.parentFile, "${sharedCacheFile.name}.tmp")
+                    Files.copy(partFile.toPath(), cacheTmp.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                    Files.move(cacheTmp.toPath(), sharedCacheFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                    Files.move(partFile.toPath(), destAar.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                    resolvedSha256 = downloadedSha
+                }
+            }
+            sourceUrlOrPath = releaseUrl
+        }
+
+        val escapedSource = sourceUrlOrPath.replace("\\", "\\\\").replace("\"", "\\\"")
+        val escapedPath = destAar.absolutePath.replace("\\", "\\\\").replace("\"", "\\\"")
+        val escapedTag = releaseTag.replace("\\", "\\\\").replace("\"", "\\\"")
+        metadataJsonOut.writeText(
+            """
+            {
+              "group": "dev.cefpack",
+              "artifact": "cefpack-android",
+              "tag": "$escapedTag",
+              "version": "${escapedTag.removePrefix("v")}",
+              "sha256": "$resolvedSha256",
+              "sizeBytes": ${destAar.length()},
+              "source": "$escapedSource",
+              "aarPath": "$escapedPath",
+              "localOverride": $isLocalOverride
+            }
+            """.trimIndent() + "\n",
+        )
+    }
+}
+
+@DisableCachingByDefault(because = "Verifies SHA-256 of local/cached or GitHub Release cefpack-android.aar")
+abstract class ResolveCefpackAarTask : DefaultTask() {
+    @get:Input
+    @get:Optional
+    abstract val localOverridePath: Property<String>
+
+    @get:Input
+    abstract val releaseTag: Property<String>
+
+    @get:Input
+    abstract val releaseUrl: Property<String>
+
+    @get:Input
+    abstract val expectedSha256: Property<String>
+
+    @get:Input
+    abstract val userCacheDir: Property<String>
+
+    @get:OutputFile
+    abstract val outputAar: RegularFileProperty
+
+    @get:OutputFile
+    abstract val outputMetadataJson: RegularFileProperty
+
+    @TaskAction
+    fun resolve() {
+        CefpackAarResolver.materialize(
+            localOverridePath = localOverridePath.orNull,
+            releaseTag = releaseTag.get(),
+            releaseUrl = releaseUrl.get(),
+            expectedSha256Raw = expectedSha256.get(),
+            userCacheRoot = File(userCacheDir.get()),
+            destAar = outputAar.get().asFile,
+            metadataJsonOut = outputMetadataJson.get().asFile,
+        )
+    }
+}
+
+val cefpackAarOverrideRaw = providers.gradleProperty("cefpackAarPath").orNull?.trim()?.takeIf { it.isNotEmpty() }
+    ?: providers.environmentVariable("CEFPACK_AAR_PATH").orNull?.trim()?.takeIf { it.isNotEmpty() }
+val cefpackResolvedLocalOverride = cefpackAarOverrideRaw?.let { raw ->
+    val candidate = File(raw)
+    if (candidate.isAbsolute) candidate.absolutePath else rootProject.file("..").resolve(raw).absolutePath
+}
+val cefpackResolvedTag = providers.gradleProperty("cefpackReleaseTag").orNull?.trim()?.takeIf { it.isNotEmpty() }
+    ?: providers.environmentVariable("CEFPACK_RELEASE_TAG").orNull?.trim()?.takeIf { it.isNotEmpty() }
+    ?: cefpackPinnedTag
+val cefpackResolvedUrl = providers.gradleProperty("cefpackAarUrl").orNull?.trim()?.takeIf { it.isNotEmpty() }
+    ?: providers.environmentVariable("CEFPACK_AAR_URL").orNull?.trim()?.takeIf { it.isNotEmpty() }
+    ?: "https://github.com/maceip/cefpack/releases/download/$cefpackResolvedTag/$cefpackPinnedAsset"
+val cefpackResolvedSha256 = providers.gradleProperty("cefpackAarSha256").orNull?.trim()?.takeIf { it.isNotEmpty() }
+    ?: providers.environmentVariable("CEFPACK_AAR_SHA256").orNull?.trim()?.takeIf { it.isNotEmpty() }
+    ?: if (cefpackResolvedLocalOverride != null) "" else cefpackPinnedSha256
+
+val cefpackCacheSubdir = if (cefpackResolvedLocalOverride != null) "local" else cefpackResolvedTag
+val cefpackCachedAarFile = layout.buildDirectory.file("cefpack/$cefpackCacheSubdir/$cefpackPinnedAsset")
+val cefpackMetadataFile = layout.buildDirectory.file("cefpack/resolved-aar.json")
+val cefpackSharedUserCacheRoot = File(gradle.gradleUserHomeDir, "caches/cefpack")
+
+// Materialize eagerly during IDE Gradle Sync so Android Studio indexes `dev.cefpack.android.*` immediately.
+if (System.getProperty("idea.sync.active") == "true") {
+    CefpackAarResolver.materialize(
+        localOverridePath = cefpackResolvedLocalOverride,
+        releaseTag = cefpackResolvedTag,
+        releaseUrl = cefpackResolvedUrl,
+        expectedSha256Raw = cefpackResolvedSha256,
+        userCacheRoot = cefpackSharedUserCacheRoot,
+        destAar = cefpackCachedAarFile.get().asFile,
+        metadataJsonOut = cefpackMetadataFile.get().asFile,
+    )
+}
+
+val resolveCefpackAar = tasks.register<ResolveCefpackAarTask>("resolveCefpackAar") {
+    group = "build setup"
+    description = "Downloads or stages cefpack-android.aar from maceip/cefpack with mandatory SHA-256 verification."
+    if (cefpackResolvedLocalOverride != null) {
+        localOverridePath.set(cefpackResolvedLocalOverride)
+    }
+    releaseTag.set(cefpackResolvedTag)
+    releaseUrl.set(cefpackResolvedUrl)
+    expectedSha256.set(cefpackResolvedSha256)
+    userCacheDir.set(cefpackSharedUserCacheRoot.absolutePath)
+    outputAar.set(cefpackCachedAarFile)
+    outputMetadataJson.set(cefpackMetadataFile)
+}
 
 android {
     namespace = "dev.onionvault"
@@ -95,9 +371,10 @@ android {
     }
 
     dependencies {
-        // Cefrium 0.19.0 (Chromium 156 / CEF for Android: Java SDK, libcef.so,
-        // Chromium assets, and isolated child-process services).
-        implementation("com.cefrium:cefrium-sdk:0.19.0")
+        // Cefpack (`https://github.com/maceip/cefpack` — source-built Chromium 156
+        // `//content/public/android` embedder AAR, SHA-256 verified by `resolveCefpackAar`).
+        implementation(files(resolveCefpackAar.flatMap { it.outputAar }))
+
         implementation("androidx.appcompat:appcompat:1.7.0")
         implementation("androidx.mediarouter:mediarouter:1.7.0")
         implementation("androidx.browser:browser:1.8.0")
@@ -222,6 +499,7 @@ val copyLegalNotices = tasks.register<Copy>("copyLegalNotices") {
 }
 
 tasks.named("preBuild") {
+    dependsOn(resolveCefpackAar)
     dependsOn(cargoBuild)
     dependsOn(copyLegalNotices)
 }

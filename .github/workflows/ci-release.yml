@@ -9,12 +9,12 @@
 #                        `scripts/audit-apk.sh` packaging/DEX/ELF gate, and real Cargo + Gradle +
 #                        binary CycloneDX 1.5 & SPDX 2.3 SBOM generation (`scripts/generate-sbom.py`)
 #   3. `emulator-gate`      — boots an Android 15 (API 35) x86_64 emulator, installs `app-debug.apk`,
-#                             and asserts Cefrium readiness, `ov_tor` loopback SOCKS5 bind, 12s live-PID
+#                             and asserts Cefpack readiness, `ov_tor` loopback SOCKS5 bind, 12s live-PID
 #                             stability, zero Java/native crashes/ANRs, and zero JNI/DEX linkage errors
 #   4. `limrun-device-gate` — provisions an isolated cloud Android 15 phone instance on Limrun
 #                             (`@limrun/api` + `lim` CLI), delta-syncs & installs `app-debug.apk`,
 #                             launches `dev.onionvault/.MainActivity` under ActivityManager crash/ANR
-#                             watch, verifies Cefrium + Arti Tor bootstrap + live `.onion` navigation
+#                             watch, verifies Cefpack + Arti Tor bootstrap + live `.onion` navigation
 #                             (`iso-duckduckgogg42xj`), captures screenshots/logcat/UI tree, and
 #                             tears down the cloud instance cleanly (failing closed on missing secret)
 #   5. `release`            — attests `app-debug.apk` provenance (`actions/attest-build-provenance`) and
@@ -241,11 +241,13 @@ jobs:
       - name: Run Android JVM & Robolectric unit tests
         env:
           ONIONVAULT_SKIP_CARGO: "1"
+          GH_TOKEN: ${{ github.token }}
         run: ./android/gradlew --project-dir android :app:testDebugUnitTest
 
       - name: Assemble debug APK
         env:
           ONIONVAULT_SKIP_CARGO: "1"
+          GH_TOKEN: ${{ github.token }}
         run: ./android/gradlew --project-dir android :app:assembleDebug
 
       - name: Audit packaged APK contents, DEX descriptors, and ELF linkage
@@ -594,7 +596,7 @@ jobs:
           - Rust workspace formatting, Clippy, unit/integration suite, and coverage
           - Android JVM / Robolectric Compose UI, screenshot, and JNI parity tests
           - Strict APK DEX/ELF/asset packaging audit (\`scripts/audit-apk.sh\`)
-          - Live Android 15 emulator launch, Cefrium 0.19.0 readiness, and \`ov_tor\` SOCKS5 runtime gate (\`scripts/emulator-gate.sh\`)
+          - Live Android 15 emulator launch, Cefpack Chromium 156 readiness, and \`ov_tor\` SOCKS5 runtime gate (\`scripts/emulator-gate.sh\`)
           - Live Limrun cloud Android 15 phone launch, Arti Tor bootstrap, and isolated \`.onion\` UI smoke gate (\`scripts/limrun-gate.sh\`)
           - Sigstore-backed GitHub Build Provenance & SPDX 2.3 SBOM Attestations
 
