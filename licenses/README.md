@@ -1,57 +1,16 @@
-# The licences of the third party components
+# Bundled Third-Party License Texts
 
-The full text of every licence that applies to a component of Trap lives
-in this directory.  The files are shipped inside the APK, so that a user of the
-application can read them without leaving it, and they are attached to every
-release of the project.
+Verbatim license texts for LGPL/GPL-governed components packaged with Trap live in this directory. Gradle (`copyLegalNotices` in `android/app/build.gradle.kts`) copies `*.txt` into `assets/licenses/` inside the APK so users can read them offline via the hardware remote menu → **Licences**, and CI attaches them alongside every GitHub Release.
 
-| file | component | licence |
+| File | Component | SPDX Identifier |
 |---|---|---|
-| `LGPL-3.0.txt` | the CEF engine of [Chromium Embedded Framework](https://github.com/chromiumembedded/cef) | LGPL-3.0-or-later |
-| `GPL-3.0.txt` | the GNU GPL that the LGPL-3.0 incorporates | GPL-3.0-or-later |
-| `LGPL-2.1.txt` | [sequoia-openpgp](https://gitlab.com/sequoia-pgp/sequoia-openpgp) | LGPL-2.0-or-later |
+| `LGPL-2.1.txt` | [sequoia-openpgp](https://gitlab.com/sequoia-pgp/sequoia-openpgp) (`1.22`, compiled into `libonion_vault.so`) and LGPL-2.1-licensed Chromium subcomponents | `LGPL-2.0-or-later` / `LGPL-2.1-or-later` |
+| `LGPL-3.0.txt` | LGPL-3.0-licensed subcomponents | `LGPL-3.0-or-later` |
+| `GPL-3.0.txt` | GNU GPL v3.0 incorporated by reference in LGPL-3.0 | `GPL-3.0-or-later` |
 
-The LGPL-3.0 is the licence of the engine: it incorporates the terms and
-conditions of the GPL-3.0 and adds the permissions of the LGPL.  Both texts are
-therefore needed; `LGPL-3.0.txt` carries the additional permissions and the
-GPL-3.0 in one file, `GPL-3.0.txt` is the GPL on its own.
+The texts are verbatim copies from the [SPDX License List](https://github.com/spdx/license-list-data) with normalized LF line endings.
 
-The texts are the ones of the Free Software Foundation, taken from the
-[licence list of SPDX](https://github.com/spdx/license-list-data).  They are
-verbatim copies; only the line endings are normalised.
+## Browser Engine & Source Relinking
 
-## Where the documents are
-
-The texts are shipped three times over, so that a recipient of the binary can
-always read them:
-
-  * here, in the repository, under their canonical names;
-  * inside the APK, under `assets/licenses/`, where the application shows
-    them: the button of the book in the upper bar opens the list;
-  * next to the APK, as attachments of every GitHub Release.
-
-The Gradle build copies the `*.txt` files of this directory into the assets
-of the application; it copies the notice of the engine next to them, when
-the engine is present.
-
-## The notice of the engine
-
-The engine carries a licence of its own, and the notice of the Chromium
-sources and of every library they are built from belongs to the exact build.
-Both are produced by the bundling service of this repository and travel with
-the bundle, so that they always belong to the engine that is shipped; the
-continuous integration puts them into the APK next to these texts.
-
-## Why the engine may be replaced
-
-The engine is loaded as a shared library at run time, it is not linked into
-the native library of the application.  A user of Trap can therefore
-replace `lib/arm64-v8a/libcef.so` with another build of the same engine, which
-is what the LGPL-3.0 asks for: the work that uses the library has to be
-distributed in a form that allows the library to be replaced.
-
-The sources of the engine are published at
-<https://github.com/chromiumembedded/cef>, at the revision that
-`crates/cefpack/manifest/cef-android.toml` pins; the sources of the
-application itself, together with the pinned versions of its Rust
-dependencies, are the repository of this project.
+- **Cefpack Browser Engine (`libcefpack_content.so`, `BSD-3-Clause` / `Apache-2.0 OR MIT`)**: Built directly from pinned upstream Chromium `156.0.8078.96` (`//content/public/android`) in [`https://github.com/maceip/cefpack`](https://github.com/maceip/cefpack) and packaged dynamically as `lib/{arm64-v8a,x86_64}/libcefpack_content.so` via `cefpack-android.aar` (`libonion_vault.so` has zero `DT_NEEDED` browser `.so` dependencies).
+- **Sequoia OpenPGP (`libonion_vault.so`, `LGPL-2.0-or-later`)**: Full source code of Trap (`Cargo.toml`, `Cargo.lock`, `build.rs`, `src/`, and `crates/`) is published in this repository so any recipient can modify `sequoia-openpgp`, recompile `libonion_vault.so` with `cargo ndk`, and repackage the APK.
