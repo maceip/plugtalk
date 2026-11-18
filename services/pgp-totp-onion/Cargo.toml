@@ -1,0 +1,44 @@
+[package]
+name = "trap-pgp-totp"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "Apache-2.0 OR MIT"
+description = "Zero-JavaScript 3-round OpenPGP TOTP Tor v3 hidden service for Trap"
+publish = false
+
+[workspace]
+
+[dependencies]
+anyhow = "1"
+axum = { version = "0.7", default-features = false, features = ["form", "http1", "tokio"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+hex = "0.4"
+hmac = "0.12"
+rand = "0.8"
+sequoia-openpgp = { version = "1.22", default-features = false, features = [
+    "crypto-rust",
+    "allow-experimental-crypto",
+    "allow-variable-time-crypto",
+] }
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+subtle = "2"
+tokio = { version = "1", default-features = false, features = [
+    "macros",
+    "net",
+    "rt-multi-thread",
+    "signal",
+    "sync",
+    "time",
+] }
+
+[dev-dependencies]
+serde_urlencoded = "0.7"
+tower = { version = "0.5", features = ["util"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
