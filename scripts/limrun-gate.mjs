@@ -91,6 +91,64 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const TRANSIENT_LIMRUN_RPC_RE =
+  /\b(?:Try again|EAGAIN|EWOULDBLOCK|ECONNRESET|socket hang up|resource temporarily unavailable|device busy|WebSocket is not connected)\b/i;
+
+function isTransientLimrunRpcError(err) {
+  const msg = err instanceof Error ? err.message : String(err || '');
+  return TRANSIENT_LIMRUN_RPC_RE.test(msg);
+}
+
+async function withTransientRpcRetry(label, fn, maxAttempts = 5, baseDelayMs = 650) {
+  let lastErr;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (attempt < maxAttempts && isTransientLimrunRpcError(err)) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `  [retry ${attempt}/${maxAttempts - 1}] Transient Limrun RPC error in ${label}: ${msg}`,
+        );
+        await sleep(baseDelayMs * attempt);
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+}
+
+function wrapResilientInstanceClient(rawClient) {
+  let adbChain = Promise.resolve();
+  const serializeAdb = (task) => {
+    const next = adbChain.then(task, task);
+    adbChain = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  };
+
+  const wrapped = Object.create(rawClient);
+  if (typeof rawClient.adbShell === 'function') {
+    const origAdbShell = rawClient.adbShell.bind(rawClient);
+    wrapped.adbShell = (command, args, options) =>
+      serializeAdb(() =>
+        withTransientRpcRetry(`adbShell(${command})`, () => origAdbShell(command, args, options)),
+      );
+  }
+  for (const method of ['screenshot', 'getElementTree', 'launchApp', 'tap', 'pullFile']) {
+    if (typeof rawClient[method] === 'function') {
+      const orig = rawClient[method].bind(rawClient);
+      wrapped[method] = (...callArgs) =>
+        withTransientRpcRetry(method, () => orig(...callArgs));
+    }
+  }
+  return wrapped;
+}
+
 function sanitizeLabelValue(raw) {
   return String(raw || '')
     .toLowerCase()
@@ -204,6 +262,32 @@ async function saveScreenshot(client, targetPath) {
 }
 
 async function tryPullDevicePngViaBase64(client, remotePath, targetPath) {
+  // Stage app-private `files/prize-won.png` into world-readable `/data/local/tmp/trap-prize-won.png`
+  // so `client.pullFile` can stream full-resolution PNGs of any size without adbShell stdout truncation.
+  await client
+    .adbShell(
+      'sh',
+      [
+        '-c',
+        `if run-as ${PACKAGE} test -s files/prize-won.png 2>/dev/null; then run-as ${PACKAGE} cat files/prize-won.png > "${remotePath}"; chmod 0644 "${remotePath}" 2>/dev/null || true; fi`,
+      ],
+      { timeoutMs: 20_000 },
+    )
+    .catch(() => ({ stdout: '', exitCode: 1 }));
+
+  if (typeof client.pullFile === 'function') {
+    try {
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      await client.pullFile(remotePath, targetPath);
+      const pulled = assertValidPngBuffer(fs.readFileSync(targetPath), remotePath);
+      return pulled.length;
+    } catch {
+      try {
+        if (fs.existsSync(targetPath)) fs.unlinkSync(targetPath);
+      } catch {}
+    }
+  }
+
   const res = await client
     .adbShell(
       'sh',
@@ -213,7 +297,10 @@ async function tryPullDevicePngViaBase64(client, remotePath, targetPath) {
       ],
       { timeoutMs: 25_000 },
     )
-    .catch(() => ({ stdout: '', exitCode: 1 }));
+    .catch(() => ({ stdout: '', exitCode: 1, truncated: true }));
+  if (res.truncated) {
+    return null;
+  }
   const b64 = String(res.stdout || '').trim();
   if (!b64) {
     return null;
@@ -298,9 +385,11 @@ async function runDetachedInstrumentationAndPoll({
 
   // Limrun's server-side scrcpy adbShell enforces a ~30s per-command execution ceiling,
   // whereas Tor v3 .onion rendezvous + 3 OpenPGP TOTP rounds can legitimately take 30-120s.
-  // Spawn `am instrument` detached via `nohup` and poll short <2s status checks until exit.
+  // Clean stale prize artifacts and spawn `am instrument` detached via `nohup` in a single
+  // shell invocation, then poll short <2s status checks until exit.
   const launchScript =
-    `rm -f ${DEVICE_INST_LOG_PATH} ${DEVICE_INST_EXIT_PATH} && ` +
+    `run-as ${PACKAGE} rm -f files/prize-won.png 2>/dev/null || true; ` +
+    `rm -f ${DEVICE_PRIZE_SCREENSHOT_PATH} ${DEVICE_INST_LOG_PATH} ${DEVICE_INST_EXIT_PATH}; ` +
     `nohup sh -c ${shellSingleQuote(
       `${cmdParts.join(' ')} > ${DEVICE_INST_LOG_PATH} 2>&1; printf '%s\\n' "$?" > ${DEVICE_INST_EXIT_PATH}`,
     )} </dev/null >/dev/null 2>&1 &`;
@@ -747,12 +836,14 @@ async function main() {
     );
 
     console.log('== [2/8] Connecting InstanceClient & inspecting cloud Android device ==');
-    client = await createInstanceClient({
-      apiUrl,
-      adbUrl: instance?.status?.adbWebSocketUrl,
-      token,
-      logLevel: 'warn',
-    });
+    client = wrapResilientInstanceClient(
+      await createInstanceClient({
+        apiUrl,
+        adbUrl: instance?.status?.adbWebSocketUrl,
+        token,
+        logLevel: 'warn',
+      }),
+    );
 
     for (let attempt = 0; attempt < 60; attempt += 1) {
       const bootRes = await client.adbShell('getprop', ['sys.boot_completed']);
@@ -1205,12 +1296,6 @@ async function main() {
       // Android ActivityManager stops & restarts the target package around `am instrument`;
       // suppress the earlier launchApp exit listener while instrumentation owns the process.
       suppressExitWatchForInstrumentation = true;
-      await client
-        .adbShell('sh', ['-c', `run-as ${PACKAGE} rm -f files/prize-won.png 2>/dev/null || true`])
-        .catch(() => {});
-      await client.adbShell('rm', ['-f', DEVICE_PRIZE_SCREENSHOT_PATH]).catch(() => {});
-      await client.adbShell('input', ['keyevent', 'KEYCODE_WAKEUP']).catch(() => {});
-      await client.adbShell('wm', ['dismiss-keyguard']).catch(() => {});
 
       const instRes = await runDetachedInstrumentationAndPoll({
         client,

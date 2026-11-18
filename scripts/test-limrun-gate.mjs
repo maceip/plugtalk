@@ -115,6 +115,7 @@ async function startMockLimrunServer(toolsDir, mode) {
     launched: false,
     navigatedOnion: false,
     ranPrizeInstrumentation: false,
+    injectedTransientTryAgain: false,
     createPayloads: [],
   };
 
@@ -432,6 +433,17 @@ async function startMockLimrunServer(toolsDir, mode) {
           cmd.includes('nohup sh -c') &&
           cmd.includes('dev.onionvault.LiveOnionPgpTotpPrizeTest')
         ) {
+          if (mode === 'healthy' && !state.injectedTransientTryAgain) {
+            state.injectedTransientTryAgain = true;
+            ws.send(
+              JSON.stringify({
+                type: 'adbShellResult',
+                id,
+                error: 'adb shell failed: Try again',
+              }),
+            );
+            return;
+          }
           state.ranPrizeInstrumentation = true;
           out = '';
         } else if (cmd.includes('__TRAP_INST_EXIT__=')) {
@@ -665,6 +677,7 @@ async function runTests() {
       assert.equal(summary.totpPrize.passed, true);
       assert.equal(summary.totpPrize.roundsCompleted, 3);
       assert.equal(summary.totpPrize.prizeBanner, 'HARNESS-PROTOCOL-TEST-VECTOR');
+      assert.equal(mock.state.injectedTransientTryAgain, true);
       assert.match(res.stdout, /\[PRIZE WON\]/);
       assert.equal(summary.appPid, '9001');
       assert.ok(fs.statSync(path.join(outDir, 'limrun-launch.png')).size > 0);
