@@ -70,7 +70,7 @@ adb -s "$SERIAL" shell rm -f "$DEVICE_TMP_PNG" >/dev/null 2>&1 || true
 echo "== [2/4] Installing $(basename "$APK") and $(basename "$TEST_APK") =="
 adb -s "$SERIAL" install -r -t "$APK"
 adb -s "$SERIAL" install -r -t "$TEST_APK"
-adb -s "$SERIAL" shell "run-as dev.onionvault rm -f files/crash-java.txt files/crash-native.txt 2>/dev/null || true"
+adb -s "$SERIAL" shell "run-as dev.onionvault rm -f files/crash-java.txt files/crash-native.txt files/prize-won.png 2>/dev/null || true"
 adb -s "$SERIAL" shell cmd statusbar collapse >/dev/null 2>&1 || true
 
 adb -s "$SERIAL" logcat -G 16M >/dev/null 2>&1 || true
@@ -96,7 +96,9 @@ adb -s "$SERIAL" logcat -d -v threadtime > "$LOGCAT_OUT" || true
 
 mkdir -p "$(dirname "$SCREENSHOT_OUT")"
 rm -f "$SCREENSHOT_OUT"
-if adb -s "$SERIAL" shell "[ -s '$DEVICE_TMP_PNG' ]" >/dev/null 2>&1; then
+if adb -s "$SERIAL" shell "run-as dev.onionvault test -s files/prize-won.png" >/dev/null 2>&1; then
+    adb -s "$SERIAL" exec-out run-as dev.onionvault cat files/prize-won.png > "$SCREENSHOT_OUT"
+elif adb -s "$SERIAL" shell "[ -s '$DEVICE_TMP_PNG' ]" >/dev/null 2>&1; then
     adb -s "$SERIAL" pull "$DEVICE_TMP_PNG" "$SCREENSHOT_OUT" >/dev/null
 else
     adb -s "$SERIAL" exec-out screencap -p > "$SCREENSHOT_OUT" || true

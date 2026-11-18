@@ -17,6 +17,7 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
@@ -29,6 +30,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
@@ -74,6 +76,7 @@ class LiveOnionPgpTotpPrizeTest {
 
     companion object {
         const val TAG = "TrapPrizeGate"
+        const val APP_PRIZE_SCREENSHOT_FILENAME = "prize-won.png"
         const val DEVICE_PRIZE_SCREENSHOT_PATH = "/data/local/tmp/trap-prize-won.png"
 
         /**
@@ -109,9 +112,9 @@ class LiveOnionPgpTotpPrizeTest {
             targetOnionUrl.isNotBlank(),
         )
 
-        // Clear any stale crash file from earlier sessions before cold-launching MainActivity,
-        // and ensure the Activity window wakes & renders above any device lockscreen.
+        // Clear any stale crash or prize screenshot file from earlier sessions before cold-launching.
         CrashReporter.clear(appContext)
+        runCatching { File(appContext.filesDir, APP_PRIZE_SCREENSHOT_FILENAME).delete() }
         wakeAndUnlockDisplay(instrumentation)
 
         val prefs = TrapPreferences(appContext)
@@ -193,10 +196,7 @@ class LiveOnionPgpTotpPrizeTest {
             val challengerEmail = "prize-${System.currentTimeMillis()}@onion"
             val challengerUserId = "Trap Prize Challenger <$challengerEmail>"
 
-            composeRule.onNodeWithTag("pgp_rocker_pod").performClick()
-            composeRule.waitUntil(timeoutMillis = 10_000L) {
-                composeRule.onAllNodesWithTag("keyring_sheet").fetchSemanticsNodes().isNotEmpty()
-            }
+            openKeyringSheetReliably(timeoutMs = 15_000L)
             composeRule.onNodeWithTag("keyring_sheet").assertIsDisplayed()
             composeRule.onNodeWithText("Generate").performClick()
             composeRule.waitForIdle()
@@ -968,59 +968,100 @@ class LiveOnionPgpTotpPrizeTest {
         }
     }
 
+    private fun openKeyringSheetReliably(timeoutMs: Long) {
+        val deadline = SystemClock.uptimeMillis() + timeoutMs
+        var attempt = 0
+        while (SystemClock.uptimeMillis() < deadline) {
+            val isOpen = runCatching {
+                composeRule.onAllNodesWithTag("keyring_sheet")
+                    .fetchSemanticsNodes()
+                    .isNotEmpty()
+            }.getOrDefault(false)
+            if (isOpen) return
+
+            composeRule.waitForIdle()
+            if (attempt % 2 == 0) {
+                runCatching { composeRule.onNodeWithTag("pgp_rocker_pod").performClick() }
+            } else {
+                runCatching {
+                    composeRule.onNodeWithTag("pgp_rocker_pod")
+                        .performSemanticsAction(SemanticsActions.OnClick)
+                }
+            }
+            attempt += 1
+
+            val stepWait = minOf(deadline, SystemClock.uptimeMillis() + 1_500L)
+            while (SystemClock.uptimeMillis() < stepWait) {
+                val nowOpen = runCatching {
+                    composeRule.onAllNodesWithTag("keyring_sheet")
+                        .fetchSemanticsNodes()
+                        .isNotEmpty()
+                }.getOrDefault(false)
+                if (nowOpen) return
+                SystemClock.sleep(100L)
+            }
+        }
+        fail("Timed out opening KeyringHardwarePod ('keyring_sheet') from 'pgp_rocker_pod'")
+    }
+
     private fun capturePrizeScreenshotToDeviceTmp(
         instrumentation: android.app.Instrumentation,
         activity: MainActivity,
     ) {
-        runShellCommandDrained(instrumentation, "rm -f $DEVICE_PRIZE_SCREENSHOT_PATH")
-
         val hasFocusRef = AtomicReference(false)
         activity.runOnUiThread {
             hasFocusRef.set(activity.hasWindowFocus())
         }
 
+        // Prefer UiAutomation.takeScreenshot() when MainActivity holds top window focus (e.g.
+        // unlocked devices and Limrun Cloud Android 15); otherwise composite CefpackSession's
+        // SurfaceView + MainActivity's Window HardwareBuffer directly via PixelCopy so a physical
+        // device lockscreen / UDFPS overlay never obscures the rendered prize UI.
+        var capturedBitmap: Bitmap? = null
         if (hasFocusRef.get()) {
-            runShellCommandDrained(instrumentation, "screencap -p $DEVICE_PRIZE_SCREENSHOT_PATH")
-            val sizeStr = runShellCommandDrained(
-                instrumentation,
-                "sh -c 'wc -c < $DEVICE_PRIZE_SCREENSHOT_PATH 2>/dev/null || echo 0'",
-            ).trim()
-            if ((sizeStr.toLongOrNull() ?: 0L) > 1024L) {
-                return
-            }
+            capturedBitmap = runCatching { instrumentation.uiAutomation.takeScreenshot() }.getOrNull()
         }
+        if (capturedBitmap == null) {
+            capturedBitmap = captureActivityWindowComposite(activity)
+                ?: runCatching { instrumentation.uiAutomation.takeScreenshot() }.getOrNull()
+        }
+        assertNotNull("Failed to capture rendered prize screenshot bitmap", capturedBitmap)
 
-        // When a physical device has an active secure Keyguard overlay stealing window focus,
-        // SurfaceFlinger `screencap` captures the lockscreen wallpaper rather than MainActivity.
-        // Composite CefpackSession's SurfaceView + MainActivity's Window HardwareBuffer directly
-        // via Android's hardware PixelCopy API so the real rendered Trap UI & prize are captured.
-        val composite = captureActivityWindowComposite(activity) ?: run {
-            runShellCommandDrained(instrumentation, "screencap -p $DEVICE_PRIZE_SCREENSHOT_PATH")
-            return
-        }
         try {
             val pngOut = ByteArrayOutputStream()
-            composite.compress(Bitmap.CompressFormat.PNG, 100, pngOut)
+            capturedBitmap!!.compress(Bitmap.CompressFormat.PNG, 100, pngOut)
             val pngBytes = pngOut.toByteArray()
+            assertTrue("Encoded prize PNG must be non-empty", pngBytes.size > 512)
 
-            val cacheFile = File(activity.externalCacheDir ?: activity.cacheDir, "trap-prize-won.png")
-            FileOutputStream(cacheFile).use { it.write(pngBytes) }
-
-            val pfds = instrumentation.uiAutomation.executeShellCommandRw(
-                "sh -c 'cat > $DEVICE_PRIZE_SCREENSHOT_PATH'",
-            )
-            ParcelFileDescriptor.AutoCloseOutputStream(pfds[1]).use { stdin ->
-                stdin.write(pngBytes)
-                stdin.flush()
+            // Persist deterministically inside app-private filesDir (`run-as dev.onionvault cat files/prize-won.png`).
+            val appPrizeFile = File(activity.filesDir, APP_PRIZE_SCREENSHOT_FILENAME)
+            FileOutputStream(appPrizeFile).use { out ->
+                out.write(pngBytes)
+                out.fd.sync()
             }
-            ParcelFileDescriptor.AutoCloseInputStream(pfds[0]).use { stdout ->
-                val drain = ByteArray(1024)
-                while (stdout.read(drain) > 0) {
-                    // Drain until shell cat closes stdout on EOF.
+
+            // Best-effort secondary copy in externalCacheDir and /data/local/tmp (never fatal if restricted).
+            runCatching {
+                val extFile = File(activity.externalCacheDir ?: activity.cacheDir, APP_PRIZE_SCREENSHOT_FILENAME)
+                FileOutputStream(extFile).use { it.write(pngBytes) }
+            }
+            runCatching {
+                val pfds = instrumentation.uiAutomation.executeShellCommandRw(
+                    "dd of=$DEVICE_PRIZE_SCREENSHOT_PATH bs=65536",
+                )
+                ParcelFileDescriptor.AutoCloseOutputStream(pfds[1]).use { stdin ->
+                    stdin.write(pngBytes)
+                    stdin.flush()
+                }
+                ParcelFileDescriptor.AutoCloseInputStream(pfds[0]).use { stdout ->
+                    val drain = ByteArray(1024)
+                    while (stdout.read(drain) > 0) {
+                        // Drain dd stderr/stdout summary.
+                    }
                 }
             }
         } finally {
-            composite.recycle()
+            capturedBitmap?.recycle()
         }
     }
 

@@ -205,7 +205,10 @@ async function tryPullDevicePngViaBase64(client, remotePath, targetPath) {
   const res = await client
     .adbShell(
       'sh',
-      ['-c', `if [ -s "${remotePath}" ]; then base64 "${remotePath}" | tr -d '\\r\\n '; fi`],
+      [
+        '-c',
+        `if run-as ${PACKAGE} test -s files/prize-won.png 2>/dev/null; then run-as ${PACKAGE} base64 files/prize-won.png | tr -d '\\r\\n '; elif [ -s "${remotePath}" ]; then base64 "${remotePath}" | tr -d '\\r\\n '; fi`,
+      ],
       { timeoutMs: 25_000 },
     )
     .catch(() => ({ stdout: '', exitCode: 1 }));
@@ -1105,6 +1108,9 @@ async function main() {
       // Android ActivityManager stops & restarts the target package around `am instrument`;
       // suppress the earlier launchApp exit listener while instrumentation owns the process.
       suppressExitWatchForInstrumentation = true;
+      await client
+        .adbShell('sh', ['-c', `run-as ${PACKAGE} rm -f files/prize-won.png 2>/dev/null || true`])
+        .catch(() => {});
       await client.adbShell('rm', ['-f', DEVICE_PRIZE_SCREENSHOT_PATH]).catch(() => {});
       await client.adbShell('input', ['keyevent', 'KEYCODE_WAKEUP']).catch(() => {});
       await client.adbShell('wm', ['dismiss-keyguard']).catch(() => {});
