@@ -80,6 +80,8 @@ const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS ?? 2000);
 const SKIP_ONION_SMOKE = process.env.LIMRUN_SKIP_ONION_SMOKE === '1';
 
 const DEVICE_PRIZE_SCREENSHOT_PATH = '/data/local/tmp/trap-prize-won.png';
+const DEVICE_INST_LOG_PATH = '/data/local/tmp/trap-inst.log';
+const DEVICE_INST_EXIT_PATH = '/data/local/tmp/trap-inst.exit';
 const VALID_V3_ONION_URL_RE = /^https?:\/\/[a-z2-7]{56}\.onion(?:\/.*)?$/i;
 
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -264,6 +266,101 @@ async function installApkOnInstance({ limrun, client, apkFilePath, expectedPacka
     );
   }
   return method;
+}
+
+function shellSingleQuote(str) {
+  return `'${String(str).replace(/'/g, `'\\''`)}'`;
+}
+
+async function runDetachedInstrumentationAndPoll({
+  client,
+  prizeTestClass,
+  totpOnionUrl,
+  runnerComponent,
+  waitSeconds,
+  pollIntervalMs,
+  streamedLogLines,
+  prizeScreenshotPath,
+}) {
+  const cmdParts = [
+    'am',
+    'instrument',
+    '-w',
+    '-r',
+    '-e',
+    'class',
+    shellSingleQuote(prizeTestClass),
+  ];
+  if (totpOnionUrl) {
+    cmdParts.push('-e', 'totpOnionUrl', shellSingleQuote(totpOnionUrl));
+  }
+  cmdParts.push(shellSingleQuote(runnerComponent));
+
+  // Limrun's server-side scrcpy adbShell enforces a ~30s per-command execution ceiling,
+  // whereas Tor v3 .onion rendezvous + 3 OpenPGP TOTP rounds can legitimately take 30-120s.
+  // Spawn `am instrument` detached via `nohup` and poll short <2s status checks until exit.
+  const launchScript =
+    `rm -f ${DEVICE_INST_LOG_PATH} ${DEVICE_INST_EXIT_PATH} && ` +
+    `nohup sh -c ${shellSingleQuote(
+      `${cmdParts.join(' ')} > ${DEVICE_INST_LOG_PATH} 2>&1; printf '%s\\n' "$?" > ${DEVICE_INST_EXIT_PATH}`,
+    )} </dev/null >/dev/null 2>&1 &`;
+
+  const startRes = await client.adbShell('sh', ['-c', launchScript], { timeoutMs: 15_000 });
+  if (startRes.exitCode !== 0) {
+    return {
+      exitCode: startRes.exitCode,
+      stdout: startRes.stdout || '',
+      stderr: startRes.stderr || 'Failed to launch detached am instrument',
+      liveWindowShotCaptured: false,
+    };
+  }
+
+  let liveWindowShotCaptured = false;
+  const started = Date.now();
+  while ((Date.now() - started) / 1000 < waitSeconds) {
+    if (!liveWindowShotCaptured && streamedLogLines.some((l) => l.includes('PRIZE_WON_JSON='))) {
+      try {
+        await saveScreenshot(client, prizeScreenshotPath);
+        liveWindowShotCaptured = true;
+      } catch {}
+    }
+
+    const pollRes = await client
+      .adbShell(
+        'sh',
+        [
+          '-c',
+          `if [ -f ${DEVICE_INST_EXIT_PATH} ]; then printf '__TRAP_INST_EXIT__=%s\\n' "$(cat ${DEVICE_INST_EXIT_PATH})"; cat ${DEVICE_INST_LOG_PATH} 2>/dev/null || true; else echo __TRAP_INST_RUNNING__; fi`,
+        ],
+        { timeoutMs: 15_000 },
+      )
+      .catch(() => ({ stdout: '__TRAP_INST_RUNNING__', exitCode: 0 }));
+
+    const out = String(pollRes.stdout || '');
+    const exitMatch = out.match(/^__TRAP_INST_EXIT__=(-?\d+)\r?\n([\s\S]*)$/);
+    if (exitMatch) {
+      return {
+        exitCode: Number(exitMatch[1]),
+        stdout: exitMatch[2],
+        stderr: '',
+        liveWindowShotCaptured,
+      };
+    }
+
+    await sleep(pollIntervalMs);
+  }
+
+  const tailRes = await client
+    .adbShell('sh', ['-c', `cat ${DEVICE_INST_LOG_PATH} 2>/dev/null || true`], {
+      timeoutMs: 15_000,
+    })
+    .catch(() => ({ stdout: '' }));
+  return {
+    exitCode: 124,
+    stdout: tailRes.stdout || '',
+    stderr: `Detached instrumentation timed out after ${waitSeconds}s`,
+    liveWindowShotCaptured,
+  };
 }
 
 function extractLatestPrizeWonPayload(logText) {
@@ -1115,36 +1212,17 @@ async function main() {
       await client.adbShell('input', ['keyevent', 'KEYCODE_WAKEUP']).catch(() => {});
       await client.adbShell('wm', ['dismiss-keyguard']).catch(() => {});
 
-      const instrumentArgs = ['instrument', '-w', '-r', '-e', 'class', PRIZE_TEST_CLASS];
-      if (TOTP_ONION_URL) {
-        instrumentArgs.push('-e', 'totpOnionUrl', TOTP_ONION_URL);
-      }
-      instrumentArgs.push(`${TEST_PACKAGE}/${TEST_RUNNER}`);
-
-      let liveWindowShotCaptured = false;
-      let instrumentDone = false;
-      const liveShotWatcher = (async () => {
-        while (!instrumentDone) {
-          if (streamedLogLines.some((line) => line.includes('PRIZE_WON_JSON='))) {
-            try {
-              await saveScreenshot(client, prizeScreenshotPath);
-              liveWindowShotCaptured = true;
-            } catch {}
-            return;
-          }
-          await sleep(450);
-        }
-      })();
-
-      let instRes;
-      try {
-        instRes = await client.adbShell('am', instrumentArgs, {
-          timeoutMs: PRIZE_WAIT_SECONDS * 1000,
-        });
-      } finally {
-        instrumentDone = true;
-        await liveShotWatcher.catch(() => {});
-      }
+      const instRes = await runDetachedInstrumentationAndPoll({
+        client,
+        prizeTestClass: PRIZE_TEST_CLASS,
+        totpOnionUrl: TOTP_ONION_URL,
+        runnerComponent: `${TEST_PACKAGE}/${TEST_RUNNER}`,
+        waitSeconds: PRIZE_WAIT_SECONDS,
+        pollIntervalMs: POLL_INTERVAL_MS,
+        streamedLogLines,
+        prizeScreenshotPath,
+      });
+      const liveWindowShotCaptured = instRes.liveWindowShotCaptured === true;
 
       summary.totpPrize.elapsedSeconds = Number(
         ((Date.now() - prizeStarted) / 1000).toFixed(1),

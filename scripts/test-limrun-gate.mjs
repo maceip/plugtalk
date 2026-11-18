@@ -429,18 +429,25 @@ async function startMockLimrunServer(toolsDir, mode) {
           state.navigatedOnion = true;
           out = 'Status: ok\nLaunchState: HOT\n';
         } else if (
-          cmd.includes("'am' 'instrument'") &&
+          cmd.includes('nohup sh -c') &&
           cmd.includes('dev.onionvault.LiveOnionPgpTotpPrizeTest')
         ) {
           state.ranPrizeInstrumentation = true;
-          if (mode === 'prize_gate_failed') {
+          out = '';
+        } else if (cmd.includes('__TRAP_INST_EXIT__=')) {
+          if (!state.ranPrizeInstrumentation) {
+            out = '__TRAP_INST_RUNNING__\n';
+          } else if (mode === 'prize_gate_failed') {
             out =
-              'INSTRUMENTATION_STATUS_CODE: -2\nTime: 4.1\nFAILURES!!!\nTests run: 1,  Failures: 1\n';
-            exitCode = 1;
+              '__TRAP_INST_EXIT__=1\nINSTRUMENTATION_STATUS_CODE: -2\nTime: 4.1\nFAILURES!!!\nTests run: 1,  Failures: 1\n';
           } else {
-            out = 'INSTRUMENTATION_STATUS_CODE: 0\nTime: 18.4\n\nOK (1 test)\n';
+            out =
+              '__TRAP_INST_EXIT__=0\nINSTRUMENTATION_STATUS_CODE: 0\nTime: 18.4\n\nOK (1 test)\n';
           }
-        } else if (cmd.includes('trap-prize-won.png') && cmd.includes('base64')) {
+        } else if (
+          (cmd.includes('trap-prize-won.png') || cmd.includes('files/prize-won.png')) &&
+          cmd.includes('base64')
+        ) {
           if (state.ranPrizeInstrumentation && mode !== 'prize_gate_failed') {
             out = `${ONE_PX_PNG_BASE64}\n`;
           } else {
