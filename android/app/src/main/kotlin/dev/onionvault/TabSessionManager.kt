@@ -1123,21 +1123,66 @@ class TabSessionManager(
         cancelOnionAutoRetry(managed, resetBudget = true)
         managed.pendingNavigationUrl = null
         managed.overrideDisplayUrl = null
+        managed.hadErrorInCurrentLoad = false
 
         val browser = managed.browser
         if (browser != null && browser.canGoBack()) {
-            if (managed.id == _activeTabId.value) {
-                _podsRetracted.value = false
-                if (hadActiveRetry) {
-                    onSecurityNotice("")
+            val entries = runCatching { browser.navigationEntries }.getOrNull()
+            val currentIdx = entries?.indexOfFirst { it.current } ?: -1
+            val targetIdx = if (entries != null && currentIdx > 0) {
+                ((currentIdx - 1) downTo 0).firstOrNull { idx ->
+                    val entryUrl = entries[idx].url?.trim().orEmpty()
+                    !entryUrl.startsWith("chrome-error://")
+                } ?: -1
+            } else {
+                -2
+            }
+
+            if (targetIdx != -1) {
+                if (managed.id == _activeTabId.value) {
+                    _podsRetracted.value = false
+                    if (hadActiveRetry) {
+                        onSecurityNotice("")
+                    }
                 }
+                if (managed.state.isLoading) {
+                    runCatching { browser.stopLoading() }
+                }
+                val targetEntryUrl = if (entries != null && targetIdx >= 0) {
+                    entries[targetIdx].url?.trim().orEmpty()
+                } else {
+                    ""
+                }
+                val returningToStartPage = isBlankOrStartUrl(targetEntryUrl) && targetIdx == 0
+                if (returningToStartPage) {
+                    backStackManager.clearTab(managed.id)
+                    updateTabState(managed.id) {
+                        it.copy(
+                            url = "about:blank",
+                            title = "New Tab",
+                            isLoading = false,
+                            loadProgress = 100,
+                            canGoBack = false,
+                            canGoForward = true,
+                            isOnion = false,
+                            isFullscreenVideo = false,
+                            videoWidth = 0,
+                            videoHeight = 0,
+                        )
+                    }
+                } else {
+                    backStackManager.popNewest(managed.id)
+                }
+                val steps = if (targetIdx >= 0 && currentIdx > targetIdx) {
+                    currentIdx - targetIdx
+                } else {
+                    1
+                }
+                repeat(steps) {
+                    browser.goBack()
+                }
+                return true
             }
-            if (managed.state.isLoading) {
-                runCatching { browser.stopLoading() }
-            }
-            backStackManager.popNewest(managed.id)
-            browser.goBack()
-            return true
         }
 
         if (managed.hasStartPageOrigin && !isBlankOrStartUrl(managed.state.url)) {

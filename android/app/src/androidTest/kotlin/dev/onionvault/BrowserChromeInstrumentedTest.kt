@@ -64,6 +64,7 @@ class BrowserChromeInstrumentedTest {
         composeRule.onNodeWithTag("browser_screen").assertIsDisplayed()
         composeRule.onNodeWithTag("metatools_browser_shell").assertIsDisplayed()
         composeRule.onNodeWithTag("perimeter_steel_rails").assertIsDisplayed()
+        composeRule.onNodeWithTag("kpt_back_pod").assertIsDisplayed()
         composeRule.onNodeWithTag("tor_orb_pod").assertIsDisplayed()
         composeRule.onNodeWithTag("crt_address_pod").assertIsDisplayed()
         composeRule.onNodeWithTag("pgp_rocker_pod").assertIsDisplayed()
@@ -76,11 +77,13 @@ class BrowserChromeInstrumentedTest {
         composeRule.onNodeWithTag("top_identity_header").assertDoesNotExist()
         composeRule.onNodeWithTag("transport_footer").assertDoesNotExist()
 
-        val orbBounds = composeRule.onNodeWithTag("tor_orb_pod").getUnclippedBoundsInRoot()
+        val backBounds = composeRule.onNodeWithTag("kpt_back_pod").getUnclippedBoundsInRoot()
         val crtBounds = composeRule.onNodeWithTag("crt_address_pod").getUnclippedBoundsInRoot()
+        val orbBounds = composeRule.onNodeWithTag("tor_orb_pod").getUnclippedBoundsInRoot()
         val pgpBounds = composeRule.onNodeWithTag("pgp_rocker_pod").getUnclippedBoundsInRoot()
-        assertTrue(crtBounds.left - orbBounds.right >= 10.dp)
-        assertTrue(pgpBounds.left - crtBounds.right >= 10.dp)
+        assertTrue(crtBounds.left - backBounds.right >= 6.dp)
+        assertTrue(orbBounds.left - crtBounds.right >= 6.dp)
+        assertTrue(orbBounds.top - pgpBounds.bottom >= 8.dp)
 
         // 2. Side Remote -> Settings Hardware Pod persists Theme Family & Appearance Mode
         composeRule.onNodeWithTag("side_remote_collapsed_face").performClick()
@@ -204,10 +207,19 @@ class BrowserChromeInstrumentedTest {
                 }
                 composeRule.onNodeWithText("tor.taxi").assertIsDisplayed()
 
+                // Verify KptBackButtonPod (`kpt_back_pod`) + TabSessionManager.goBack() returns cleanly to StartPage!
+                composeRule.onNodeWithTag("kpt_back_pod").performClick()
+                composeRule.waitUntil(timeoutMillis = 10_000L) {
+                    composeRule.onAllNodesWithTag("start_page")
+                        .fetchSemanticsNodes()
+                        .isNotEmpty()
+                }
+                composeRule.onNodeWithTag("start_page").assertIsDisplayed()
+
                 // Custom glob editing + Revoke via TorKnurledOrbPod -> PhotoSoapSideRemote TorCircuit
                 composeRule.onNodeWithTag("side_remote_collapsed_face").performClick()
                 composeRule.waitForIdle()
-                composeRule.onNodeWithTag("remote_new_tab").performClick()
+                composeRule.onNodeWithTag("remote_new_tab").performScrollTo().performClick()
                 composeRule.waitForIdle()
 
                 composeRule.onNodeWithTag("crt_address_pod").performClick()
