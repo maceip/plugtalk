@@ -706,14 +706,24 @@ class MainActivity : FragmentActivity() {
         }
 
         val startTarget = initialUrl.trim().ifEmpty { getString(R.string.start_url) }
-        val tabId = tabSessionManager.ensureInitialTab(
-            if (isBlankOrStartUrl(startTarget)) "about:blank" else "about:blank",
-        )
-        if (prefs.defaultZoomPercent != 100) {
-            tabSessionManager.setZoomPercent(prefs.defaultZoomPercent, tabId)
+        val initFirstTab = {
+            if (!isDestroyed && !isFinishing) {
+                val tabId = tabSessionManager.ensureInitialTab("about:blank")
+                if (prefs.defaultZoomPercent != 100) {
+                    tabSessionManager.setZoomPercent(prefs.defaultZoomPercent, tabId)
+                }
+                if (!isBlankOrStartUrl(startTarget)) {
+                    navigate(startTarget, tabId)
+                }
+            }
         }
-        if (!isBlankOrStartUrl(startTarget)) {
-            navigate(startTarget, tabId)
+        if (isJvmUnitTestRuntime()) {
+            initFirstTab()
+        } else {
+            android.os.Looper.myQueue().addIdleHandler {
+                initFirstTab()
+                false
+            }
         }
     }
 

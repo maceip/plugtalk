@@ -43,6 +43,7 @@ adb shell wm dismiss-keyguard 2>/dev/null || true
 
 echo "== installing $(basename "$APK") =="
 adb install -r -t "$APK" >/dev/null
+adb shell cmd package compile -m speed-profile -f "$PACKAGE" >/dev/null 2>&1 || true
 
 echo "== waiting for post-boot broadcast storm to settle =="
 if command -v timeout >/dev/null 2>&1; then
