@@ -6,7 +6,7 @@ Trap is dual-licensed under **Apache-2.0 OR MIT** ([`LICENSE-APACHE`](LICENSE-AP
 
 | Component | Version / Artifact | Origin | License |
 |---|---|---|---|
-| **Cefpack** (source-built Android Chromium `//content/public/android` embedder, Chromium `156.0.8078.96`) | `cefpack-android.aar` (`v0.2.0`, SHA-256 verified by `:app:resolveCefpackAar`) | [maceip/cefpack](https://github.com/maceip/cefpack) · upstream [Chromium](https://chromium.googlesource.com/chromium/src.git) (`2ad9b7f5a86846e0b264090723a6a78964bb84c4`) | `BSD-3-Clause` (Chromium `//content`, Blink, V8, `cefpack_webview`), `Apache-2.0 OR MIT` (`maceip/cefpack` tooling), plus Chromium third-party notices |
+| **Cefpack** (source-built Android Chromium `//content/public/android` embedder, Chromium `156.0.8078.96`) | `cefpack-android.aar` (`v0.2.1`, SHA-256 verified by `:app:resolveCefpackAar`) | [maceip/cefpack](https://github.com/maceip/cefpack) · upstream [Chromium](https://chromium.googlesource.com/chromium/src.git) (`2ad9b7f5a86846e0b264090723a6a78964bb84c4`) | `BSD-3-Clause` (Chromium `//content`, Blink, V8, `cefpack_webview`), `Apache-2.0 OR MIT` (`maceip/cefpack` tooling), plus Chromium third-party notices |
 | **sequoia-openpgp** | `1.22` | [sequoia-pgp/sequoia-openpgp](https://gitlab.com/sequoia-pgp/sequoia-openpgp) | `LGPL-2.0-or-later` |
 | **arti-client**, **tor-rtcompat** | `0.47` | [Tor Project Arti](https://gitlab.torproject.org/tpo/core/arti) | `MIT OR Apache-2.0` |
 | **rustls** (`ring` provider) | `0.23` | [rustls/rustls](https://github.com/rustls/rustls) | `Apache-2.0 OR ISC OR MIT` |

@@ -474,7 +474,7 @@ def collect_gradle_components(
     if not cefpack_aar_path.is_file():
         raise RuntimeError(f"Resolved Cefpack AAR file not found at {cefpack_aar_path}")
     cefpack_sha256 = sha256_file(cefpack_aar_path)
-    cefpack_tag = str(cefpack_meta.get("tag") or "v0.2.0")
+    cefpack_tag = str(cefpack_meta.get("tag") or "v0.2.1")
     cefpack_ver = str(cefpack_meta.get("version") or cefpack_tag.lstrip("v"))
     cefpack_purl = f"pkg:github/maceip/cefpack@{cefpack_tag}?artifact=cefpack-android.aar"
     cefpack_source = str(cefpack_meta.get("source") or "")

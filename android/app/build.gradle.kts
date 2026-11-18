@@ -64,9 +64,9 @@ val trapResolvedVersionCode = providers.gradleProperty("trap.versionCode")
         ?: trapVersionCodeFloor
 
 // Pinned `maceip/cefpack` GitHub Release artifact coordinates & mandatory SHA-256 digest.
-val cefpackPinnedTag = "v0.2.0"
+val cefpackPinnedTag = "v0.2.1"
 val cefpackPinnedAsset = "cefpack-android.aar"
-val cefpackPinnedSha256 = "PENDING_CEFPACK_V020_RELEASE_SHA256"
+val cefpackPinnedSha256 = "b95f55648a8ff9229d53009c0cea1d1b0c28cc7db07ea959e225ce79da3e359c"
 
 object CefpackAarResolver {
     private const val ASSET_NAME = "cefpack-android.aar"
