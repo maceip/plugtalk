@@ -807,13 +807,27 @@ class LiveOnionPgpTotpPrizeTest {
         activity: MainActivity,
         browser: CefpackSession,
     ): String {
-        val (ok, json) = executeCdpSync(
-            activity = activity,
-            browser = browser,
-            method = "DOM.getDocument",
-            paramsJson = "{\"depth\":-1,\"pierce\":true}",
-        )
-        return if (ok) json else ""
+        val latch = CountDownLatch(1)
+        val jsonRef = AtomicReference("")
+        activity.runOnUiThread {
+            runCatching {
+                browser.executeDevToolsMethod(
+                    "DOM.getDocument",
+                    "{\"depth\":-1,\"pierce\":true}",
+                ) { ok, json ->
+                    if (ok && !json.isNullOrBlank()) {
+                        jsonRef.set(json)
+                    }
+                    latch.countDown()
+                }
+            }.onFailure {
+                latch.countDown()
+            }
+        }
+        // Cross-origin RenderFrameHost swaps (about:blank -> .onion) can drop an in-flight
+        // InspectorDOMAgent request without firing its callback; return empty so callers poll cleanly.
+        latch.await(5, TimeUnit.SECONDS)
+        return jsonRef.get()
     }
 
     private fun awaitControlValueContains(
