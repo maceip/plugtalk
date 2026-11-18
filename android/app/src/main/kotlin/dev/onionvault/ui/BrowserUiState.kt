@@ -54,12 +54,23 @@ data class BrowserUiState(
     val handoffEnabled: Boolean = false,
     val isScreenRecordingActive: Boolean = false,
     val podsRetracted: Boolean = false,
+    val findInPage: FindInPageState = FindInPageState(),
+    val pipFallbackBitmap: ImageBitmap? = null,
 ) {
     val tabCount: Int get() = tabs.size.coerceAtLeast(1)
 
     val isStartPage: Boolean
         get() = isBlankOrStartUrl(url)
 }
+
+@Immutable
+data class FindInPageState(
+    val visible: Boolean = false,
+    val query: String = "",
+    val matchCount: Int = 0,
+    val activeIndex: Int = 0,
+    val activeBounds: NormalizedBounds? = null,
+)
 
 @Immutable
 data class ClearnetPromptState(

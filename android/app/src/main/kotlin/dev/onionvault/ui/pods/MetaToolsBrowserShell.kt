@@ -3,12 +3,14 @@ package dev.onionvault.ui.pods
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.ime
@@ -16,7 +18,12 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -25,43 +32,38 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import dev.onionvault.platform.SurfaceFilterMode
 import dev.onionvault.ui.BrowserUiState
 import dev.onionvault.ui.ClearnetPromptState
 import dev.onionvault.ui.DecryptPassphraseRequestState
 import dev.onionvault.ui.EncryptRequestState
+import dev.onionvault.ui.FindInPageState
 import dev.onionvault.ui.PgpFieldState
 import dev.onionvault.ui.PgpPlaintextState
+import dev.onionvault.ui.TrapGlyph
+import dev.onionvault.ui.TrapIcon
 import dev.onionvault.ui.TrapThemeFamily
 import dev.onionvault.ui.TrapThemeMode
 
 /**
  * Top-level `1.5x` Scaled Zero-Chrome Floating Hardware Pods Orchestrator (`metatools_browser_shell`).
- *
- * Implements Browser-First Ergonomic Arrangement:
- * - Full-bleed webpage [surface] with ZERO toolbar strips and ZERO backdrop blur; touches in all
- *   open gaps, rails, splatters, drips, and cast shadows pass straight through to [surface]!
- * - `4.5.dp` [PerimeterSteelRails] with solid `3.dp` acid-yellow (`#D8FF00`) top ridge load pulse.
- * - **Bottom Primary Browser Row** (`10.dp` above `navigationBarsPadding()`, `8.dp` horizontal
- *   screen padding, `8.dp` open webpage gaps between all 3 pods):
- *   `[ KptBackButtonPod (74dp) ]  (8dp)  [ RecessedCrtAddressPod (weight 1f × 74dp) ]  (8dp)  [ TorKnurledOrbPod (86dp) ]`
- * - **Right-Bezel KPT Tool Dock** above `TorKnurledOrbPod` (`12.dp` vertical gaps, zero collision):
- *   `OpenPgpRockerPod` (`80.dp x 92.dp`, `-8deg` tilt) + `PhotoSoapSideRemote` (`70.dp x 154.dp`).
- *   - On Homepage (`state.isStartPage`) or when pods are summoned: docked cleanly at `100%` along
- *     the right edge above the Tor Orb.
- *   - On live webpages (`!state.isStartPage`) when `podsRetracted == true` (scrolling) OR when no
- *     active PGP block is present, auto-tucks `72%` into the right bezel so only the glowing
- *     `10.5.dp` LED bead column / ruby edge peeks out — tapping slides right out to `100%` in
- *     `120ms`, and when `hasPgpContent == true`, `OpenPgpRockerPod` automatically slides out!
- * - **IME & CRT Edit Choreography** (`imeOpen || crtEditing`):
- *   - Hides Back Pod, Tor Orb, PGP Switch & Side Remote completely, docking CRT Monitor `8.dp`
- *     above IME keyboard at `95%` viewport width (`68.dp` height, `17.sp` input)!
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -91,6 +93,10 @@ fun MetaToolsBrowserShell(
     onHome: () -> Unit = {},
     onZoomIn: () -> Unit = {},
     onZoomOut: () -> Unit = {},
+    onOpenFindInPage: () -> Unit = {},
+    onFindInPageQueryChange: (String) -> Unit = {},
+    onFindInPageStep: (Int) -> Unit = {},
+    onCloseFindInPage: () -> Unit = {},
     onAllowClearnet: (prompt: ClearnetPromptState, pattern: String, ttlSeconds: Long) -> Unit = { _, _, _ -> },
     onBlockClearnet: (prompt: ClearnetPromptState) -> Unit = {},
     onRevokeClearnetRule: (String) -> Unit = {},
@@ -158,7 +164,6 @@ fun MetaToolsBrowserShell(
         if (podsRetracted) {
             rightDockSummoned = false
         } else if (wasRetracted) {
-            // Upward flick after scrolling summons the full hardware tool dock!
             rightDockSummoned = true
         }
         wasRetracted = podsRetracted
@@ -219,7 +224,7 @@ fun MetaToolsBrowserShell(
 
     val imeBottomPx = WindowInsets.ime.getBottom(density)
     val imeOpen = imeVisibleOverride ?: (imeBottomPx > 0)
-    val hideClusterForImeOrEdit = crtEditing || imeOpen
+    val hideClusterForImeOrEdit = crtEditing || imeOpen || state.findInPage.visible
 
     val hasPgpContent = remember(state.pgp, state.selectionPgp, state.contextMenu, clipboardTextOverride) {
         detectContextualPgpPresence(
@@ -240,6 +245,7 @@ fun MetaToolsBrowserShell(
 
     val anyOverlayOpen = !chromeHiddenForPip && (
         crtEditing ||
+            state.findInPage.visible ||
             remoteExpanded ||
             tabsOpen ||
             keyringOpen ||
@@ -278,7 +284,6 @@ fun MetaToolsBrowserShell(
     val remoteShouldTuck = !remoteExpanded && (
         retracted || (!state.isStartPage && !rightDockSummoned)
         )
-    // 72% of 70dp = 50.4dp -> +50.dp off right bezel so glowing 10.5dp green LED column peeks out
     val remoteDockOffsetX by animateDpAsState(
         targetValue = if (remoteShouldTuck) 50.dp else 0.dp,
         animationSpec = tween(
@@ -291,7 +296,6 @@ fun MetaToolsBrowserShell(
     val pgpShouldTuck = retracted || (
         !state.isStartPage && !hasPgpContent && !rightDockSummoned
         )
-    // 72% of 80dp = 57.6dp -> +58.dp off right bezel so glowing ruby polycarbonate edge peeks out
     val pgpDockOffsetX by animateDpAsState(
         targetValue = if (pgpShouldTuck) 58.dp else 0.dp,
         animationSpec = tween(
@@ -301,30 +305,26 @@ fun MetaToolsBrowserShell(
         label = "pgp_dock_offset_x",
     )
 
-    val topStatusBarInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-
     Box(
         modifier = modifier
             .fillMaxSize()
             .testTag("metatools_browser_shell"),
     ) {
-        // 1. Full-bleed Webpage / StartPage Surface (100% unobstructed edge-to-edge)
+        // 1. Full-bleed Webpage / StartPage Surface (100% unobstructed edge-to-edge onto top status bar)
         Box(modifier = Modifier.fillMaxSize()) {
             surface()
         }
 
         if (!chromeHiddenForPip) {
-            // 2. 4.5dp Cylindrical Brushed-Steel Frame + Street Overspray (100% Hit-Test Passthrough!)
+            // 2. 4.5dp Cylindrical Brushed-Steel Frame + Street Overspray flush at y = 0 (100% Hit-Test Passthrough!)
             PerimeterSteelRails(
                 isLoading = state.isLoading,
                 loadProgress = state.loadProgress,
-                topInset = topStatusBarInset,
+                topInset = 0.dp,
             )
 
-            // 3. Right-Bezel KPT Tool Dock above TorKnurledOrbPod (hidden while CRT editing / IME open)
+            // 3. Right-Bezel KPT Tool Dock above TorKnurledOrbPod (hidden while CRT editing / Find / IME open)
             if (!hideClusterForImeOrEdit) {
-                // 3a. OpenPgpRockerPod (80x92dp, -8deg): docked cleanly above 86dp Tor Orb (>= 12dp visual & unclipped gap)
-                //     Hidden while Side Remote drawer is expanded to 268dp so they never overlap!
                 if (!remoteExpanded) {
                     Box(
                         modifier = Modifier
@@ -336,17 +336,17 @@ fun MetaToolsBrowserShell(
                         OpenPgpRockerPod(
                             hasPgpContent = hasPgpContent,
                             hasArmoredCiphertextOrKey = hasArmoredBlock,
+                            onNewTab = {
+                                restoreRetractedPods()
+                                onNewTab()
+                            },
                             onOpenPgpTools = {
-                                if (retracted) {
-                                    restoreRetractedPods()
+                                restoreRetractedPods()
+                                if (state.pgp.fields.isNotEmpty() || state.selectionPgp != null) {
+                                    remoteMode = RemoteMode.PgpActions
+                                    remoteExpanded = true
                                 } else {
-                                    rightDockSummoned = true
-                                    if (state.pgp.fields.isNotEmpty() || state.selectionPgp != null) {
-                                        remoteMode = RemoteMode.PgpActions
-                                        remoteExpanded = true
-                                    } else {
-                                        keyringOpen = true
-                                    }
+                                    keyringOpen = true
                                 }
                             },
                             onQuickVerifyOrDecrypt = {
@@ -370,7 +370,6 @@ fun MetaToolsBrowserShell(
                     }
                 }
 
-                // 3b. PhotoSoapSideRemote (70x154dp collapsed above PGP Rocker at 230dp; 268dp wide at 104dp when expanded)
                 val remoteBottomPadding = if (remoteExpanded) 104.dp else 230.dp
                 Box(
                     modifier = Modifier
@@ -423,6 +422,10 @@ fun MetaToolsBrowserShell(
                         onEncryptSelectedText = onEncryptSelectedText,
                         onZoomIn = onZoomIn,
                         onZoomOut = onZoomOut,
+                        onOpenFindInPage = {
+                            restoreRetractedPods()
+                            onOpenFindInPage()
+                        },
                     )
                 }
             }
@@ -534,6 +537,25 @@ fun MetaToolsBrowserShell(
                 }
             }
 
+            if (state.findInPage.visible && !crtEditing) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .imePadding()
+                        .padding(bottom = if (imeOpen) 8.dp else 104.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    FindInPageHardwarePod(
+                        findState = state.findInPage,
+                        onQueryChange = onFindInPageQueryChange,
+                        onStepMatch = onFindInPageStep,
+                        onClose = onCloseFindInPage,
+                    )
+                }
+            }
+
             // 5. Sculptural Hardware Modal Pods
             val managementModalOpen = tabsOpen || keyringOpen || settingsOpen || legalOpen
 
@@ -634,6 +656,141 @@ fun MetaToolsBrowserShell(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun FindInPageHardwarePod(
+    findState: FindInPageState,
+    onQueryChange: (String) -> Unit,
+    onStepMatch: (Int) -> Unit,
+    onClose: () -> Unit,
+) {
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        runCatching { focusRequester.requestFocus() }
+    }
+    val shape = RoundedCornerShape(18.dp)
+    val countLabel = when {
+        findState.query.isBlank() -> "0/0"
+        findState.matchCount <= 0 -> "0/0"
+        else -> "${findState.activeIndex.coerceAtLeast(1)}/${findState.matchCount}"
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth(0.94f)
+            .metaToolsDropShadow(cornerRadius = 18.dp)
+            .clip(shape)
+            .background(MetaToolsTokens.CrtBlackGlass)
+            .border(1.5.dp, MetaToolsTokens.GrooveHighlight, shape)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .testTag("find_in_page_pod"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        TrapIcon(
+            glyph = TrapGlyph.Search,
+            tint = MetaToolsTokens.PhosphorClearnetGreen,
+            size = 18.dp,
+            forceVector = true,
+        )
+        Box(
+            modifier = Modifier.weight(1f),
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            if (findState.query.isEmpty()) {
+                Text(
+                    text = "Search text on page…",
+                    color = MetaToolsTokens.PhosphorPathDim,
+                    fontSize = 13.sp,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                )
+            }
+            BasicTextField(
+                value = findState.query,
+                onValueChange = onQueryChange,
+                singleLine = true,
+                textStyle = TextStyle(
+                    color = MetaToolsTokens.PhosphorOnionGreen,
+                    fontSize = 13.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Medium,
+                ),
+                cursorBrush = SolidColor(MetaToolsTokens.PhosphorOnionGreen),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(
+                    onSearch = { onStepMatch(1) },
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(focusRequester)
+                    .testTag("find_in_page_input"),
+            )
+        }
+        Text(
+            text = countLabel,
+            color = if (findState.matchCount > 0) {
+                MetaToolsTokens.PhosphorClearnetGreen
+            } else {
+                MetaToolsTokens.StencilInk
+            },
+            fontSize = 11.5.sp,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.testTag("find_in_page_count"),
+        )
+        FindPodMiniButton(
+            label = "▲",
+            enabled = findState.matchCount > 0,
+            onClick = { onStepMatch(-1) },
+            testTag = "find_in_page_prev",
+        )
+        FindPodMiniButton(
+            label = "▼",
+            enabled = findState.matchCount > 0,
+            onClick = { onStepMatch(1) },
+            testTag = "find_in_page_next",
+        )
+        FindPodMiniButton(
+            label = "✕",
+            enabled = true,
+            onClick = onClose,
+            testTag = "find_in_page_close",
+        )
+    }
+}
+
+@Composable
+private fun FindPodMiniButton(
+    label: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    testTag: String,
+) {
+    val shape = RoundedCornerShape(8.dp)
+    Box(
+        modifier = Modifier
+            .size(30.dp)
+            .clip(shape)
+            .background(MetaToolsTokens.AnodizedRecessedWell)
+            .border(1.dp, MetaToolsTokens.GrooveHighlight, shape)
+            .clickable(
+                enabled = enabled,
+                role = Role.Button,
+                onClick = onClick,
+            )
+            .testTag(testTag),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            color = if (enabled) Color.White else MetaToolsTokens.PhosphorPathDim,
+            fontSize = 11.sp,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+        )
     }
 }
 

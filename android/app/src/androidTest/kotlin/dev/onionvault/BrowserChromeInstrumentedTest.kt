@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.doubleClick
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -20,6 +21,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
 import androidx.test.espresso.Espresso
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import dev.cefpack.android.CefpackSession
 import dev.onionvault.ui.TrapPreferences
 import dev.onionvault.ui.TrapThemeFamily
 import dev.onionvault.ui.TrapThemeMode
@@ -60,10 +62,11 @@ class BrowserChromeInstrumentedTest {
             OvNative.nativeClearClearnetRules()
         }
 
-        // 1. Full-bleed MetaToolsBrowserShell + street-zine StartPage (zero BottomControlDock)
+        // 1. Edge-to-edge full-bleed MetaToolsBrowserShell + street-zine StartPage (zero BottomControlDock)
         composeRule.onNodeWithTag("browser_screen").assertIsDisplayed()
         composeRule.onNodeWithTag("metatools_browser_shell").assertIsDisplayed()
         composeRule.onNodeWithTag("perimeter_steel_rails").assertIsDisplayed()
+        composeRule.onNodeWithTag("webpage_viewport_host").assertIsDisplayed()
         composeRule.onNodeWithTag("kpt_back_pod").assertIsDisplayed()
         composeRule.onNodeWithTag("tor_orb_pod").assertIsDisplayed()
         composeRule.onNodeWithTag("crt_address_pod").assertIsDisplayed()
@@ -76,6 +79,11 @@ class BrowserChromeInstrumentedTest {
         composeRule.onNodeWithTag("bottom_control_dock").assertDoesNotExist()
         composeRule.onNodeWithTag("top_identity_header").assertDoesNotExist()
         composeRule.onNodeWithTag("transport_footer").assertDoesNotExist()
+
+        val viewportBounds = composeRule.onNodeWithTag("webpage_viewport_host").getUnclippedBoundsInRoot()
+        val railsBounds = composeRule.onNodeWithTag("perimeter_steel_rails").getUnclippedBoundsInRoot()
+        assertEquals(0.dp, viewportBounds.top)
+        assertEquals(0.dp, railsBounds.top)
 
         val backBounds = composeRule.onNodeWithTag("kpt_back_pod").getUnclippedBoundsInRoot()
         val crtBounds = composeRule.onNodeWithTag("crt_address_pod").getUnclippedBoundsInRoot()
@@ -143,10 +151,15 @@ class BrowserChromeInstrumentedTest {
         composeRule.onNodeWithTag("tabs_new_tab").performClick()
         composeRule.waitForIdle()
 
-        // 5. KeyringHardwarePod via OpenPgpRockerPod tap: generate real Sequoia keypair & Copy PubKey
+        // 5. OpenPgpRockerPod: 1 click opens a new tab; 2 clicks open KeyringHardwarePod
+        composeRule.onNodeWithTag("pgp_rocker_pod").performClick()
+        android.os.SystemClock.sleep(320L)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("keyring_sheet").assertDoesNotExist()
+
         if (OvNative.isLoaded) {
             val beforeCount = OvNative.parseKeys(OvNative.nativeListKeysJson()).size
-            composeRule.onNodeWithTag("pgp_rocker_pod").performClick()
+            composeRule.onNodeWithTag("pgp_rocker_pod").performTouchInput { doubleClick() }
             composeRule.waitForIdle()
             composeRule.onNodeWithTag("keyring_sheet").assertIsDisplayed()
 
@@ -271,7 +284,7 @@ class BrowserChromeInstrumentedTest {
     fun zero_js_cdp_dom_pgp_insert_encrypt_and_decrypt_on_live_cefpack_session() {
         val activity = composeRule.activity
         assertTrue("Native libonion_vault.so must be loaded", OvNative.isLoaded)
-        assertTrue("Cefpack engine must be ready", TrapApplication.isEngineReady)
+        assertTrue("Cefpack 0.2.0 engine must be ready", TrapApplication.isEngineReady)
 
         // Ensure biometric prompt is off for unattended instrumentation execution.
         OvNative.nativeSetRequireBiometric(false)
@@ -279,11 +292,11 @@ class BrowserChromeInstrumentedTest {
         prefs.requireBiometric = false
 
         // Generate a dedicated Sequoia OpenPGP own keypair via the real KeyringHardwarePod UI
-        // (opened via OpenPgpRockerPod) so MainActivity refreshes uiState.keys end-to-end.
+        // (opened via OpenPgpRockerPod double-click) so MainActivity refreshes uiState.keys end-to-end.
         val beforeKeys = OvNative.parseKeys(OvNative.nativeListKeysJson())
         val beforeFingerprints = beforeKeys.map { it.fingerprint }.toSet()
 
-        composeRule.onNodeWithTag("pgp_rocker_pod").performClick()
+        composeRule.onNodeWithTag("pgp_rocker_pod").performTouchInput { doubleClick() }
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("keyring_sheet").assertIsDisplayed()
         composeRule.onNodeWithText("Generate").performClick()
@@ -372,20 +385,16 @@ class BrowserChromeInstrumentedTest {
             )
             assertEquals("Plaintext secret drop", readControlInnerEditorById(initialDom, "msg").trim())
 
-            // 3. Tap "Insert My PubKey" on #pub (first pill) -> verify status banner & Blink #inner-editor read-back.
+            // 3. Tap "Insert My PubKey" on #pub (first pill) -> verify zero top banner & Blink #inner-editor read-back.
             composeRule.onAllNodesWithText("Insert My PubKey")[0].performClick()
-            composeRule.waitUntil(timeoutMillis = 15_000L) {
-                composeRule.onAllNodesWithText("Inserted public key and verified DOM field")
-                    .fetchSemanticsNodes()
-                    .isNotEmpty()
-            }
             val pubFieldValue = awaitControlInnerEditorContains(
                 activity = activity,
                 browser = browser,
                 elementId = "pub",
                 expectedSubstring = "BEGIN PGP PUBLIC KEY BLOCK",
-                timeoutMs = 10_000L,
+                timeoutMs = 15_000L,
             )
+            composeRule.onNodeWithTag("status_notice_banner").assertDoesNotExist()
             val debugDomAfterPub = queryPiercedDomJson(activity, browser)
             val debugMsgAfterPub = readControlInnerEditorById(debugDomAfterPub, "msg")
             assertTrue(
@@ -453,7 +462,7 @@ class BrowserChromeInstrumentedTest {
 
     private fun awaitControlInnerEditorContains(
         activity: MainActivity,
-        browser: dev.cefpack.android.CefpackSession,
+        browser: CefpackSession,
         elementId: String,
         expectedSubstring: String,
         timeoutMs: Long,
@@ -472,7 +481,7 @@ class BrowserChromeInstrumentedTest {
 
     private fun queryPiercedDomJson(
         activity: MainActivity,
-        browser: dev.cefpack.android.CefpackSession,
+        browser: CefpackSession,
     ): String {
         val latch = CountDownLatch(1)
         val resultRef = AtomicReference("")

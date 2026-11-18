@@ -30,7 +30,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.click
+import androidx.compose.ui.test.doubleClick
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -53,6 +55,7 @@ import dev.onionvault.OvNative
 import dev.onionvault.ui.BrowserUiState
 import dev.onionvault.ui.ClearnetPromptState
 import dev.onionvault.ui.EncryptRequestState
+import dev.onionvault.ui.FindInPageState
 import dev.onionvault.ui.KeyInfo
 import dev.onionvault.ui.NormalizedBounds
 import dev.onionvault.ui.PgpFieldState
@@ -847,8 +850,8 @@ class MetaToolsPodsRenderTest {
         compose.waitForIdle()
         assertEquals(ddgOnionUrl, openedContextNewTab)
 
-        // 2. Open PGP Keyring via Rocker tap -> Generate + 2-tap Delete confirm
-        compose.onNodeWithTag("pgp_rocker_pod").performClick()
+        // 2. Open PGP Keyring via Rocker double-click -> Generate + 2-tap Delete confirm
+        compose.onNodeWithTag("pgp_rocker_pod").performTouchInput { doubleClick() }
         compose.waitForIdle()
         compose.onNodeWithTag("keyring_sheet").assertIsDisplayed()
         compose.onNodeWithText("Generate").performClick()
@@ -909,6 +912,92 @@ class MetaToolsPodsRenderTest {
         assertEquals(0, clearedSessionCount)
         compose.onNodeWithTag("settings_clear_session").performScrollTo().performClick()
         assertEquals(1, clearedSessionCount)
+    }
+
+    @Test
+    fun annotated_ui_fixes_edge_to_edge_rocker_clicks_and_find_in_page_pod() {
+        var newTabClicks = 0
+        val stepDeltas = mutableListOf<Int>()
+        var state by mutableStateOf(
+            BrowserUiState(
+                url = "about:blank",
+                tor = TorBootstrapState(percent = 100, stage = "ready", ready = true),
+            ),
+        )
+
+        compose.setContent {
+            TrapTheme {
+                MetaToolsBrowserShell(
+                    state = state,
+                    onNewTab = { newTabClicks += 1 },
+                    onOpenFindInPage = {
+                        state = state.copy(findInPage = state.findInPage.copy(visible = true))
+                    },
+                    onFindInPageQueryChange = { q ->
+                        state = state.copy(
+                            findInPage = state.findInPage.copy(
+                                visible = true,
+                                query = q,
+                                matchCount = if (q.isNotBlank()) 5 else 0,
+                                activeIndex = if (q.isNotBlank()) 2 else 0,
+                            ),
+                        )
+                    },
+                    onFindInPageStep = { delta -> stepDeltas += delta },
+                    onCloseFindInPage = {
+                        state = state.copy(findInPage = FindInPageState())
+                    },
+                )
+            }
+        }
+        compose.waitForIdle()
+
+        // 1. Edge-to-edge top == 0.dp on PerimeterSteelRails
+        assertEquals(
+            0.dp,
+            compose.onNodeWithTag("perimeter_steel_rails").getUnclippedBoundsInRoot().top,
+        )
+
+        // 2. Red Rocker Pod (`pgp_rocker_pod`): 1 click = New Tab (NOT PGP Keyring)
+        compose.onNodeWithTag("pgp_rocker_pod").performClick()
+        compose.mainClock.advanceTimeBy(320L)
+        compose.waitForIdle()
+        assertEquals("Single click on pgp_rocker_pod must open a new tab", 1, newTabClicks)
+        compose.onNodeWithTag("keyring_sheet").assertDoesNotExist()
+
+        // 3. Red Rocker Pod (`pgp_rocker_pod`): 2 clicks = PGP Keyring menu (does not add another tab)
+        compose.onNodeWithTag("pgp_rocker_pod").performTouchInput { doubleClick() }
+        compose.waitForIdle()
+        assertEquals("Double click on pgp_rocker_pod must not trigger onNewTab", 1, newTabClicks)
+        compose.onNodeWithTag("keyring_sheet").assertIsDisplayed()
+        compose.onNodeWithTag("sheet_close_button").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("keyring_sheet").assertDoesNotExist()
+
+        // 4. Side Remote "Text Search" (`remote_text_search`) -> disabled on StartPage, opens FindInPageHardwarePod on loaded page
+        compose.onNodeWithTag("side_remote_collapsed_face").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("remote_text_search").performScrollTo().assertIsNotEnabled()
+
+        state = state.copy(url = "https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/")
+        compose.waitForIdle()
+        compose.onNodeWithTag("remote_text_search").performScrollTo().assertIsEnabled().performClick()
+        compose.waitForIdle()
+
+        compose.onNodeWithTag("find_in_page_pod").assertIsDisplayed()
+        compose.onNodeWithTag("find_in_page_count").assertTextEquals("0/0")
+        compose.onNodeWithTag("find_in_page_input").performTextInput("onion")
+        compose.waitForIdle()
+        compose.onNodeWithTag("find_in_page_count").assertTextEquals("2/5")
+
+        compose.onNodeWithTag("find_in_page_prev").performClick()
+        compose.onNodeWithTag("find_in_page_next").performClick()
+        compose.waitForIdle()
+        assertEquals(listOf(-1, 1), stepDeltas)
+
+        compose.onNodeWithTag("find_in_page_close").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("find_in_page_pod").assertDoesNotExist()
     }
 
     // ========================================================================

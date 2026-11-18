@@ -167,6 +167,7 @@ fun PhotoSoapSideRemote(
     modifier: Modifier = Modifier,
     onZoomIn: () -> Unit = {},
     onZoomOut: () -> Unit = {},
+    onOpenFindInPage: () -> Unit = {},
 ) {
     val haptics = LocalHapticFeedback.current
     val grainBrush = rememberPewterGrainBrush()
@@ -242,6 +243,7 @@ fun PhotoSoapSideRemote(
                 onEncryptSelectedText = onEncryptSelectedText,
                 onZoomIn = onZoomIn,
                 onZoomOut = onZoomOut,
+                onOpenFindInPage = onOpenFindInPage,
             )
         }
     }
@@ -353,6 +355,7 @@ private fun ExpandedRemoteFace(
     onEncryptSelectedText: (String) -> Unit,
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit,
+    onOpenFindInPage: () -> Unit,
 ) {
     val headerLabel = when (mode) {
         RemoteMode.Menu -> "REMOTE"
@@ -430,6 +433,7 @@ private fun ExpandedRemoteFace(
                     onOpenLicences = onOpenLicences,
                     onZoomIn = onZoomIn,
                     onZoomOut = onZoomOut,
+                    onOpenFindInPage = onOpenFindInPage,
                 )
 
                 RemoteMode.TorCircuit -> RemoteTorCircuitBody(
@@ -483,6 +487,7 @@ private fun RemoteMenuBody(
     onOpenLicences: () -> Unit,
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit,
+    onOpenFindInPage: () -> Unit,
 ) {
     RemoteEngravedRowButton(
         label = "Forward",
@@ -502,6 +507,16 @@ private fun RemoteMenuBody(
             onReload()
         },
         testTag = "remote_reload",
+    )
+    RemoteEngravedRowButton(
+        label = "Text Search",
+        glyph = TrapGlyph.Search,
+        enabled = !state.isStartPage,
+        onClick = {
+            onCollapse()
+            onOpenFindInPage()
+        },
+        testTag = "remote_text_search",
     )
     RemoteEngravedRowButton(
         label = "New Tab",

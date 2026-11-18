@@ -240,7 +240,8 @@ class PlatformUpgradesTest {
             }
         }
 
-        compose.onNodeWithTag("screen_recording_warning_banner").assertExists()
+        compose.onAllNodesWithTag("screen_recording_warning_banner").assertCountEquals(0)
+        compose.onAllNodesWithTag("status_notice_banner").assertCountEquals(0)
         compose.onAllNodesWithTag("pgp_field_overlay").assertCountEquals(0)
         compose.onAllNodesWithTag("encrypt_picker_sheet").assertCountEquals(0)
 

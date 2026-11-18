@@ -12,6 +12,7 @@ import android.view.ActionMode
 import android.view.Menu
 import android.view.MenuItem
 import android.view.MotionEvent
+import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.annotation.VisibleForTesting
@@ -318,6 +319,7 @@ class TabSessionManager(
         private const val MENU_ID_PGP_ACTION = 0x54524150
         private const val MIN_ZOOM_PERCENT = 50
         private const val MAX_ZOOM_PERCENT = 300
+        internal const val SURFACE_DARK_BG_COLOR: Int = 0xFF0D0F12.toInt()
         private val HEX_UPPER = "0123456789ABCDEF".toCharArray()
 
         const val DEFAULT_ONION_SEARCH_PREFIX: String =
@@ -325,6 +327,32 @@ class TabSessionManager(
 
         const val SCROLL_RETRACT_THRESHOLD_DP: Float = 12f
         const val SCROLL_RESTORE_THRESHOLD_DP: Float = 10f
+
+        /**
+         * Computes the combined zoom ratio (`(zoomPercent / 100) * pipScaleFactor`) so
+         * Picture-in-Picture windows scale down the full webpage proportionally instead of
+         * showing an unscaled cropped corner.
+         */
+        fun computeEffectiveZoomRatio(
+            zoomPercent: Int,
+            pipScaleFactor: Float = 1.0f,
+        ): Double {
+            val clampedPercent = zoomPercent.coerceIn(MIN_ZOOM_PERCENT, MAX_ZOOM_PERCENT)
+            val clampedPipScale = pipScaleFactor.coerceIn(PipController.MIN_PIP_SCALE_FACTOR, 1.0f)
+            return ((clampedPercent / 100.0) * clampedPipScale.toDouble()).coerceIn(0.20, 3.0)
+        }
+
+        fun computeCefZoomLevel(
+            zoomPercent: Int,
+            pipScaleFactor: Float = 1.0f,
+        ): Double {
+            val effectiveRatio = computeEffectiveZoomRatio(zoomPercent, pipScaleFactor)
+            return if (abs(effectiveRatio - 1.0) < 0.005) {
+                0.0
+            } else {
+                ln(effectiveRatio) / ln(1.2)
+            }
+        }
 
         const val ERR_TIMED_OUT: Int = -7
         const val ERR_CONNECTION_CLOSED: Int = -100
@@ -688,6 +716,9 @@ class TabSessionManager(
     private var touchSuppressed: Boolean = false
 
     @Volatile
+    private var pipScaleFactor: Float = 1.0f
+
+    @Volatile
     private var lastConsentInterceptedUrl: String? = null
 
     fun activeTab(): TabState? {
@@ -739,8 +770,11 @@ class TabSessionManager(
 
         val wrapper = if (browser != null) {
             TouchGateFrameLayout(context, tabId).apply {
+                setBackgroundColor(SURFACE_DARK_BG_COLOR)
                 ScreenRecordingGuard.applyContentSensitivity(this, sensitive = isPrivate)
                 val sessionSurface = browser.surfaceContainer
+                sessionSurface.setBackgroundColor(SURFACE_DARK_BG_COLOR)
+                applyDarkRenderViewBackground(sessionSurface)
                 ScreenRecordingGuard.applyContentSensitivity(sessionSurface, sensitive = isPrivate)
                 (sessionSurface.parent as? ViewGroup)?.removeView(sessionSurface)
                 addView(
@@ -1288,11 +1322,8 @@ class TabSessionManager(
     fun setZoomPercent(percent: Int, tabId: String? = _activeTabId.value) {
         val managed = tabId?.let { sessions[it] } ?: return
         val clamped = percent.coerceIn(MIN_ZOOM_PERCENT, MAX_ZOOM_PERCENT)
-        val chromiumZoomLevel = if (clamped == 100) {
-            0.0
-        } else {
-            ln(clamped / 100.0) / ln(1.2)
-        }
+        val scale = if (managed.id == _activeTabId.value) pipScaleFactor else 1.0f
+        val chromiumZoomLevel = computeCefZoomLevel(clamped, scale)
         managed.browser?.setZoomLevel(chromiumZoomLevel)
         updateTabState(managed.id) { it.copy(zoomPercent = clamped) }
         managed.browser?.let { cdpController.refreshViewportBounds(managed.id, it) }
@@ -1303,6 +1334,89 @@ class TabSessionManager(
         val next = (managed.state.zoomPercent + deltaPercent).coerceIn(MIN_ZOOM_PERCENT, MAX_ZOOM_PERCENT)
         setZoomPercent(next, managed.id)
         return next
+    }
+
+    /**
+     * Applies proportional viewport scaling while in Picture-in-Picture mode so the full
+     * webpage fits cleanly inside the floating PiP window instead of clipping unscaled.
+     * Restores the user's configured [TabState.zoomPercent] when `scale == 1.0f`.
+     */
+    fun setPipScaleFactor(scale: Float) {
+        val clamped = scale.coerceIn(PipController.MIN_PIP_SCALE_FACTOR, 1.0f)
+        if (abs(pipScaleFactor - clamped) < 0.004f) return
+        pipScaleFactor = clamped
+        val activeId = _activeTabId.value ?: return
+        applyEffectiveZoom(activeId)
+        sessions[activeId]?.browser?.let { cdpController.refreshViewportBounds(activeId, it) }
+    }
+
+    /**
+     * Keeps the active tab's `WebContents` visible and actively compositing when Android pauses
+     * the Activity during Picture-in-Picture entry so the PiP window never turns blank/white.
+     */
+    fun ensureActiveTabRenderingForPip() {
+        val activeId = _activeTabId.value ?: return
+        val managed = sessions[activeId] ?: return
+        managed.surfaceWrapper?.let { wrapper ->
+            wrapper.setBackgroundColor(SURFACE_DARK_BG_COLOR)
+            applyDarkRenderViewBackground(wrapper)
+            wrapper.invalidate()
+        }
+        managed.browser?.let { browser ->
+            runCatching {
+                browser.setPageVisible(true)
+                browser.onResume()
+            }
+        }
+    }
+
+    fun findInPage(
+        query: String,
+        stepDelta: Int = 0,
+        tabId: String? = _activeTabId.value,
+        onResult: (CdpDomPgpController.TextSearchOutcome) -> Unit,
+    ) {
+        val managed = tabId?.let { sessions[it] }
+        if (managed == null) {
+            onResult(CdpDomPgpController.TextSearchOutcome(query = query, matchCount = 0, activeIndex = 0))
+            return
+        }
+        cdpController.performTextSearch(
+            tabId = managed.id,
+            browser = managed.browser,
+            query = query,
+            stepDelta = stepDelta,
+            fallbackDomHtml = managed.latestDomHtml,
+            onResult = onResult,
+        )
+    }
+
+    fun clearFindInPage(tabId: String? = _activeTabId.value) {
+        val managed = tabId?.let { sessions[it] } ?: return
+        cdpController.clearTextSearch(managed.id, managed.browser)
+    }
+
+    private fun applyEffectiveZoom(tabId: String) {
+        val managed = sessions[tabId] ?: return
+        val browser = managed.browser ?: return
+        val scale = if (tabId == _activeTabId.value) pipScaleFactor else 1.0f
+        val zoomLevel = computeCefZoomLevel(managed.state.zoomPercent, scale)
+        runCatching { browser.setZoomLevel(zoomLevel) }
+    }
+
+    private fun applyDarkRenderViewBackground(root: View) {
+        runCatching {
+            root.setBackgroundColor(SURFACE_DARK_BG_COLOR)
+            val method = root.javaClass.methods.firstOrNull {
+                it.name == "setSurfaceViewBackgroundColor" && it.parameterTypes.size == 1
+            }
+            method?.invoke(root, SURFACE_DARK_BG_COLOR)
+        }
+        if (root is ViewGroup) {
+            for (i in 0 until root.childCount) {
+                applyDarkRenderViewBackground(root.getChildAt(i))
+            }
+        }
     }
 
     fun setTouchSuppressed(suppressed: Boolean) {
@@ -1674,6 +1788,7 @@ class TabSessionManager(
         sessions.clear()
         _activeTabId.value = null
         _podsRetracted.value = false
+        pipScaleFactor = 1.0f
         cdpController.clearAll()
         backStackManager.clearAll()
         mediaDisplayNormalizer.releaseAll()
@@ -1875,6 +1990,7 @@ class TabSessionManager(
                     if (isLoading) {
                         managed?.hadErrorInCurrentLoad = false
                     }
+                    applyEffectiveZoom(tabId)
                     val playingAudio = runCatching { browser.isPlayingAudio }.getOrDefault(false)
                     val computedBack = if (managed != null) {
                         computeCanGoBack(managed, canGoBack)
@@ -1953,6 +2069,7 @@ class TabSessionManager(
                 mainHandler.post {
                     val managed = sessions[tabId] ?: return@post
                     val current = managed.browser ?: return@post
+                    applyEffectiveZoom(tabId)
                     val effectiveUrl = managed.overrideDisplayUrl ?: current.url.orEmpty()
                     cdpController.attachAndScan(tabId, current, effectiveUrl)
                 }
@@ -2540,7 +2657,12 @@ class TabSessionManager(
             managed.browser?.let { browser ->
                 runCatching {
                     browser.setPageVisible(visible)
-                    if (visible) browser.onResume() else browser.onPause()
+                    if (visible) {
+                        browser.onResume()
+                        applyEffectiveZoom(id)
+                    } else {
+                        browser.onPause()
+                    }
                 }
             }
         }
