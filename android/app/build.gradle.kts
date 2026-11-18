@@ -341,8 +341,15 @@ android {
 
         ndk {
             // arm64-v8a for physical Android devices and Apple Silicon AVDs;
-            // x86_64 for Linux CI KVM emulators.
-            abiFilters += listOf("arm64-v8a", "x86_64")
+            // x86_64 for Linux CI KVM emulators. Allow -PtrapAbiFilters=arm64-v8a for local single-ABI smoke tests.
+            val configuredAbiFilters = providers.gradleProperty("trapAbiFilters")
+                .orNull
+                ?.split(",")
+                ?.map { it.trim() }
+                ?.filter { it.isNotEmpty() }
+                ?.takeIf { it.isNotEmpty() }
+                ?: listOf("arm64-v8a", "x86_64")
+            abiFilters += configuredAbiFilters
         }
     }
 
@@ -385,7 +392,8 @@ android {
         implementation("androidx.mediarouter:mediarouter:1.7.0")
         implementation("androidx.browser:browser:1.8.0")
         implementation("androidx.biometric:biometric:1.1.0")
-        implementation("androidx.core:core-ktx:1.13.1")
+        implementation("androidx.core:core-ktx:1.19.1")
+        implementation("androidx.core:core-animation:1.0.0")
         implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
         // Jetpack Compose UI
