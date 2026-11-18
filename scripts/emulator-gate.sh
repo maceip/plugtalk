@@ -44,6 +44,13 @@ adb shell wm dismiss-keyguard 2>/dev/null || true
 echo "== installing $(basename "$APK") =="
 adb install -r -t "$APK" >/dev/null
 
+echo "== waiting for post-boot broadcast storm to settle =="
+if command -v timeout >/dev/null 2>&1; then
+    timeout 45 adb shell am wait-for-broadcast-idle >/dev/null 2>&1 || true
+else
+    adb shell am wait-for-broadcast-idle >/dev/null 2>&1 || true
+fi
+
 echo "== clearing logcat & stale crash reports =="
 adb shell "run-as ${PACKAGE} rm -f files/crash-java.txt files/crash-native.txt" 2>/dev/null || true
 adb logcat -G 16M 2>/dev/null || true

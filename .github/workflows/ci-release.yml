@@ -343,7 +343,7 @@ jobs:
           heap-size: 512M
           disk-size: 6G
           disable-animations: true
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          emulator-options: -cores 4 -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           script: ./scripts/emulator-gate.sh apk/app-debug.apk dist/emulator-launch.png
 
       - name: Upload emulator runtime screenshot
