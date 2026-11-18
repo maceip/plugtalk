@@ -413,6 +413,47 @@ class TrustedOnionDirectoryTest {
         assertEquals("about:blank", manager.activeTab()!!.url)
         assertFalse(manager.activeTab()!!.canGoBack)
 
+        // Late cancelled-load errors arriving after returning to StartPage must be ignored:
+        val noticeCountBeforeLateErr = notices.size
+        manager.handleLoadErrorOnMainThread(
+            tabId = tabId,
+            errorCode = TabSessionManager.ERR_SOCKS_CONNECTION_FAILED,
+            errorText = "ERR_SOCKS_CONNECTION_FAILED",
+            failedUrl = riseupHttpsUpgrade,
+            reloadUrl = { reloadedUrls += it },
+        )
+        assertEquals(noticeCountBeforeLateErr, notices.size)
+
+        // Verify selectBackTargetIndex skips intermediate HttpsUpgrades & apex->www entries
+        // while preserving distinct subpage navigations:
+        val bellingcatHttps = "https://bellcatmbguthn3age23lrbseln2lryzv3mt7whis7ktjw4qrestbzad.onion/"
+        val bellingcatWwwHttp = "http://www.bellcatmbguthn3age23lrbseln2lryzv3mt7whis7ktjw4qrestbzad.onion/"
+        val bellingcatArticle = "http://www.bellcatmbguthn3age23lrbseln2lryzv3mt7whis7ktjw4qrestbzad.onion/news/2026/story/"
+        assertEquals(
+            0,
+            TabSessionManager.selectBackTargetIndex(
+                entryUrls = listOf("about:blank", bellingcatHttps, bellingcatWwwHttp),
+                currentIdx = 2,
+                currentStateUrl = bellingcatWwwHttp,
+            ),
+        )
+        assertEquals(
+            -1,
+            TabSessionManager.selectBackTargetIndex(
+                entryUrls = listOf("chrome-error://chromewebdata/", bellingcatHttps, bellingcatWwwHttp),
+                currentIdx = 2,
+                currentStateUrl = bellingcatWwwHttp,
+            ),
+        )
+        assertEquals(
+            2,
+            TabSessionManager.selectBackTargetIndex(
+                entryUrls = listOf("about:blank", bellingcatHttps, bellingcatWwwHttp, bellingcatArticle),
+                currentIdx = 3,
+                currentStateUrl = bellingcatArticle,
+            ),
+        )
+
         // Verify >= 110_000 ms elapsed budget stops retrying and surfaces real failure:
         val bbcUrl = "https://www.bbcnewsd73hkzno2ini43t4gblxvycyac5aw4gnv7t2rccijh7745uqd.onion/news"
         manager.beginOnionNavigationForTest(tabId, bbcUrl, fromStartPage = true)

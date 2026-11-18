@@ -371,6 +371,57 @@ class TabSessionManager(
         }
 
         /**
+         * Selects the destination index in Chromium's navigation history when stepping Back,
+         * skipping transient `chrome-error://` frames and duplicate same-`.onion`-service
+         * `HttpsUpgrades` (`https://foo.onion/` -> `http://foo.onion/`) or canonical apex/www
+         * redirects sharing the exact same normalized path + query.
+         *
+         * Returns `-1` when all preceding entries are transient artifacts with no valid prior page.
+         */
+        @VisibleForTesting
+        internal fun selectBackTargetIndex(
+            entryUrls: List<String>,
+            currentIdx: Int,
+            currentStateUrl: String,
+        ): Int {
+            if (currentIdx <= 0 || currentIdx >= entryUrls.size) return -1
+            val currentUrl = entryUrls[currentIdx].trim().ifEmpty { currentStateUrl.trim() }
+            for (idx in (currentIdx - 1) downTo 0) {
+                val candidate = entryUrls[idx].trim()
+                if (candidate.startsWith("chrome-error://", ignoreCase = true)) {
+                    continue
+                }
+                if (!isBlankOrStartUrl(candidate) &&
+                    isTransientSameOnionEntry(candidate, currentUrl)
+                ) {
+                    continue
+                }
+                return idx
+            }
+            return -1
+        }
+
+        private fun isTransientSameOnionEntry(candidateUrl: String, currentUrl: String): Boolean {
+            if (candidateUrl.isBlank() || currentUrl.isBlank()) return false
+            val firstRoot = TrustedOnionDirectory.extractRootV3OnionLabel(
+                TrustedOnionDirectory.extractHost(candidateUrl),
+            ) ?: return false
+            val secondRoot = TrustedOnionDirectory.extractRootV3OnionLabel(
+                TrustedOnionDirectory.extractHost(currentUrl),
+            ) ?: return false
+            if (firstRoot != secondRoot) return false
+            return normalizeOnionPathAndQuery(candidateUrl) == normalizeOnionPathAndQuery(currentUrl)
+        }
+
+        private fun normalizeOnionPathAndQuery(rawUrl: String): String {
+            val trimmed = rawUrl.trim()
+            val parsed = runCatching { java.net.URI(trimmed) }.getOrNull() ?: return trimmed
+            val cleanPath = (parsed.rawPath ?: "/").trim().trimEnd('/').ifEmpty { "/" }
+            val cleanQuery = parsed.rawQuery?.takeIf { it.isNotEmpty() }
+            return if (cleanQuery != null) "$cleanPath?$cleanQuery" else cleanPath
+        }
+
+        /**
          * Normalizes user-entered address bar text:
          * - Preserves `about:` URIs and explicit `http://` or `https://` URLs (plus
          *   explicit schemes so URL policy rejects unsafe schemes fail-closed).
@@ -1130,10 +1181,11 @@ class TabSessionManager(
             val entries = runCatching { browser.navigationEntries }.getOrNull()
             val currentIdx = entries?.indexOfFirst { it.current } ?: -1
             val targetIdx = if (entries != null && currentIdx > 0) {
-                ((currentIdx - 1) downTo 0).firstOrNull { idx ->
-                    val entryUrl = entries[idx].url?.trim().orEmpty()
-                    !entryUrl.startsWith("chrome-error://")
-                } ?: -1
+                selectBackTargetIndex(
+                    entryUrls = entries.map { it.url.orEmpty() },
+                    currentIdx = currentIdx,
+                    currentStateUrl = managed.state.url,
+                )
             } else {
                 -2
             }
@@ -1178,9 +1230,12 @@ class TabSessionManager(
                 } else {
                     1
                 }
-                repeat(steps) {
-                    browser.goBack()
-                }
+                navigateBrowserToHistoryIndex(
+                    browser = browser,
+                    targetIdx = targetIdx,
+                    steps = steps,
+                    fallbackUrl = if (returningToStartPage) "about:blank" else targetEntryUrl,
+                )
                 return true
             }
         }
@@ -2328,6 +2383,10 @@ class TabSessionManager(
     ) {
         if (errorCode == -3) return
         val managed = sessions[tabId] ?: return
+        if (isBlankOrStartUrl(managed.state.url) && managed.pendingNavigationUrl == null) {
+            // Ignore late error callbacks arriving from a cancelled navigation after returning to StartPage.
+            return
+        }
         val candidateUrl = failedUrl?.trim()
             ?.takeIf { it.isNotEmpty() && !it.startsWith("chrome-error://") }
             ?: managed.pendingNavigationUrl
@@ -2383,18 +2442,15 @@ class TabSessionManager(
                     live.pendingRetryRunnable = null
                     live.onionAutoRetryScheduled = false
                     val liveBrowser = live.browser
-                    val liveBrowserUrl = runCatching { liveBrowser?.url.orEmpty() }.getOrDefault("")
-                    val fallbackAlreadyRunning = liveBrowser != null &&
-                        live.lastBrowserLoadingState &&
-                        !liveBrowserUrl.startsWith("chrome-error://")
-                    if (!fallbackAlreadyRunning) {
+                    val fallbackAlreadyRunning = liveBrowser != null && live.lastBrowserLoadingState
+                    if (!fallbackAlreadyRunning && !isBlankOrStartUrl(live.state.url)) {
                         live.pendingNavigationUrl = retryUrl
                         reloadUrl(retryUrl)
                     }
                 }
                 managed.pendingRetryRunnable?.let { mainHandler.removeCallbacks(it) }
                 managed.pendingRetryRunnable = checkFallbackRunnable
-                mainHandler.postDelayed(checkFallbackRunnable, 400L)
+                mainHandler.postDelayed(checkFallbackRunnable, 800L)
                 return
             }
 
@@ -2488,6 +2544,46 @@ class TabSessionManager(
             onSecurityNotice("")
         }
         onNavigationRecovered(tabId)
+    }
+
+    private fun navigateBrowserToHistoryIndex(
+        browser: CefriumBrowser,
+        targetIdx: Int,
+        steps: Int,
+        fallbackUrl: String,
+    ) {
+        if (steps <= 1) {
+            browser.goBack()
+            return
+        }
+        browser.executeDevToolsMethod("Page.getNavigationHistory", "{}") { ok, json ->
+            val entryId = if (ok && !json.isNullOrBlank()) {
+                runCatching {
+                    val entriesArr = JSONObject(json).optJSONArray("entries")
+                    if (entriesArr != null && targetIdx in 0 until entriesArr.length()) {
+                        entriesArr.getJSONObject(targetIdx).optInt("id", -1)
+                    } else {
+                        -1
+                    }
+                }.getOrDefault(-1)
+            } else {
+                -1
+            }
+            mainHandler.post {
+                if (entryId >= 0) {
+                    val params = JSONObject().put("entryId", entryId).toString()
+                    browser.executeDevToolsMethod("Page.navigateToHistoryEntry", params) { navOk, _ ->
+                        if (!navOk && fallbackUrl.isNotBlank()) {
+                            mainHandler.post { runCatching { browser.loadUrl(fallbackUrl) } }
+                        }
+                    }
+                } else if (fallbackUrl.isNotBlank()) {
+                    runCatching { browser.loadUrl(fallbackUrl) }
+                } else {
+                    browser.goBack()
+                }
+            }
+        }
     }
 
     private fun canNavigateForward(browser: CefriumBrowser): Boolean {
