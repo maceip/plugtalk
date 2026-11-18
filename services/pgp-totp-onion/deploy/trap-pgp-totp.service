@@ -1,0 +1,31 @@
+[Unit]
+Description=Trap Zero-JS OpenPGP 3-Round TOTP Hidden Service Backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=trap-pgp-totp
+Group=trap-pgp-totp
+ExecStart=/usr/local/bin/trap-pgp-totp
+Restart=always
+RestartSec=2
+Environment=TRAP_BIND_ADDR=127.0.0.1:8080
+Environment=TRAP_PRIZE_PATH=/etc/trap-pgp-totp/prize.txt
+Environment=TRAP_STATE_DIR=/var/lib/trap-pgp-totp
+
+# Systemd sandboxing & hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/var/lib/trap-pgp-totp
+ReadOnlyPaths=/etc/trap-pgp-totp/prize.txt
+
+[Install]
+WantedBy=multi-user.target
