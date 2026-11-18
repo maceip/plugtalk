@@ -155,7 +155,7 @@ print(f"  [gradle] Verified 0 '{banned_token}' references across {len(gradle_fil
 PY
 
 BADGING="$("$AAPT2" dump badging "$APK")"
-PKG_LINE="$(printf '%s\n' "$BADGING" | grep -m 1 '^package:' || true)"
+PKG_LINE="$(awk '/^package:/ { print; exit }' <<< "$BADGING")"
 if [[ -z "$PKG_LINE" ]]; then
     echo "::error::aapt2 dump badging produced no package header" >&2
     exit 1
@@ -500,14 +500,14 @@ for abi in arm64-v8a x86_64; do
         needed_out="$("$ELF_TOOL" -d "$so_out")"
     fi
 
-    if printf '%s\n' "$needed_out" | grep -qE "libcef\.so|libcefpack_content\.so"; then
+    if grep -qE "libcef\.so|libcefpack_content\.so" <<< "$needed_out"; then
         echo "::error::lib/${abi}/libonion_vault.so has forbidden DT_NEEDED dependency on browser .so" >&2
         printf '%s\n' "$needed_out" >&2
         exit 1
     fi
 
     cefpack_syms="$("$NM_TOOL" -D --defined-only "$cefpack_so_out" | awk '{print $NF}')"
-    if ! printf '%s\n' "$cefpack_syms" | grep -Fxq "JNI_OnLoad"; then
+    if ! grep -Fxq "JNI_OnLoad" <<< "$cefpack_syms"; then
         echo "::error::lib/${abi}/libcefpack_content.so does not export global JNI_OnLoad" >&2
         exit 1
     fi
@@ -515,7 +515,7 @@ for abi in arm64-v8a x86_64; do
     dyn_syms="$("$NM_TOOL" -D --defined-only "$so_out" | awk '{print $NF}')"
     missing_count=0
     for sym in "${EXPECTED_JNI_SYMBOLS[@]}"; do
-        if ! printf '%s\n' "$dyn_syms" | grep -Fxq "$sym"; then
+        if ! grep -Fxq "$sym" <<< "$dyn_syms"; then
             echo "::error::lib/${abi}/libonion_vault.so missing required JNI symbol: ${sym}" >&2
             missing_count=$((missing_count + 1))
         fi
@@ -529,7 +529,7 @@ done
 echo "== [4/5] Auditing APK Signature Scheme v2+ & deterministic debug signing certificate =="
 if [[ -n "$APKSIGNER" ]]; then
     SIGN_OUT="$("$APKSIGNER" verify -v --print-certs "$APK")"
-    if ! printf '%s\n' "$SIGN_OUT" | grep -q "Verified using v2 scheme (APK Signature Scheme v2): true"; then
+    if ! grep -q "Verified using v2 scheme (APK Signature Scheme v2): true" <<< "$SIGN_OUT"; then
         echo "::error::APK Signature Scheme v2 verification failed for ${APK}" >&2
         printf '%s\n' "$SIGN_OUT" >&2
         exit 1

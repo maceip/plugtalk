@@ -241,6 +241,10 @@ abstract class ResolveCefpackAarTask : DefaultTask() {
     abstract val localOverridePath: Property<String>
 
     @get:Input
+    @get:Optional
+    abstract val localOverrideStamp: Property<String>
+
+    @get:Input
     abstract val releaseTag: Property<String>
 
     @get:Input
@@ -311,6 +315,8 @@ val resolveCefpackAar = tasks.register<ResolveCefpackAarTask>("resolveCefpackAar
     description = "Downloads or stages cefpack-android.aar from maceip/cefpack with mandatory SHA-256 verification."
     if (cefpackResolvedLocalOverride != null) {
         localOverridePath.set(cefpackResolvedLocalOverride)
+        val f = File(cefpackResolvedLocalOverride)
+        localOverrideStamp.set(if (f.isFile) "${f.length()}:${f.lastModified()}" else "missing")
     }
     releaseTag.set(cefpackResolvedTag)
     releaseUrl.set(cefpackResolvedUrl)

@@ -255,12 +255,12 @@ jobs:
           set -euo pipefail
           APK="android/app/build/outputs/apk/debug/app-debug.apk"
           ./scripts/audit-apk.sh "$APK"
-          badging="$(aapt2 dump badging "$APK" | grep -m 1 '^package:')"
-          echo "$badging" | grep -Fq "versionName='${{ steps.bump.outputs.version }}'" || {
+          badging="$(aapt2 dump badging "$APK" | awk '/^package:/ && !found { print; found=1 }')"
+          grep -Fq "versionName='${{ steps.bump.outputs.version }}'" <<< "$badging" || {
             echo "::error::APK versionName does not match bumped version ${{ steps.bump.outputs.version }}: $badging"
             exit 1
           }
-          echo "$badging" | grep -Fq "versionCode='${{ steps.bump.outputs.version_code }}'" || {
+          grep -Fq "versionCode='${{ steps.bump.outputs.version_code }}'" <<< "$badging" || {
             echo "::error::APK versionCode does not match bumped versionCode ${{ steps.bump.outputs.version_code }}: $badging"
             exit 1
           }
