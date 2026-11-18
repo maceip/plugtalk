@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# Limrun cloud Android runtime & UI smoke gate wrapper (`dev.onionvault`).
+# Limrun cloud Android runtime, UI smoke & 3-round OpenPGP TOTP .onion prize gate wrapper (`dev.onionvault`).
 #
 # Usage:
-#   LIM_API_KEY=lim_... ./scripts/limrun-gate.sh [path/to/app-debug.apk] [output-dir]
+#   LIM_API_KEY=lim_... ./scripts/limrun-gate.sh [path/to/app-debug.apk] [output-dir] [path/to/app-debug-androidTest.apk]
 #
 # Environment variables:
 #   LIM_API_KEY / LIMRUN_API_KEY  Required. Fails closed (exit 1) when missing/empty.
@@ -11,12 +11,14 @@
 #   LIMRUN_OS_VERSION             Android OS major version ('15' default, or '14').
 #   LIMRUN_MODEL                  Device form factor ('phone' default, or 'tablet').
 #   LIMRUN_BASE_URL               Optional API endpoint override (used by local test harness).
+#   TOTP_ONION_URL                Optional override for the live 3-round OpenPGP TOTP .onion URL.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APK="${1:-${REPO_ROOT}/android/app/build/outputs/apk/debug/app-debug.apk}"
 OUT_DIR="${2:-${REPO_ROOT}/dist/limrun}"
+TEST_APK="${3:-${TEST_APK_PATH:-}}"
 
 API_KEY="${LIM_API_KEY:-${LIMRUN_API_KEY:-}}"
 if [[ -z "${API_KEY//[[:space:]]/}" ]]; then
@@ -72,12 +74,18 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+NODE_ARGS=("$APK" "$OUT_DIR")
+if [[ -n "$TEST_APK" ]]; then
+    NODE_ARGS+=("$TEST_APK")
+fi
+
 LIMRUN_TOOLS_DIR="$TOOLS_DIR" \
 LIMRUN_INSTANCE_ID_FILE="$INSTANCE_ID_FILE" \
-    node "${REPO_ROOT}/scripts/limrun-gate.mjs" "$APK" "$OUT_DIR"
+    node "${REPO_ROOT}/scripts/limrun-gate.mjs" "${NODE_ARGS[@]}"
 
 for required_file in \
     "${OUT_DIR}/limrun-launch.png" \
+    "${OUT_DIR}/limrun-prize.png" \
     "${OUT_DIR}/limrun-logcat.txt" \
     "${OUT_DIR}/limrun-summary.json"; do
     if [[ ! -s "$required_file" ]]; then

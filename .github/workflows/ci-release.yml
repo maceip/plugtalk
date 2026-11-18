@@ -97,7 +97,7 @@ jobs:
         run: |
           python3 scripts/bump-version.py --current
           python3 scripts/bump-version.py --dry-run
-          bash -n scripts/audit-apk.sh scripts/emulator-gate.sh scripts/limrun-gate.sh
+          bash -n scripts/audit-apk.sh scripts/emulator-gate.sh scripts/limrun-gate.sh scripts/run-totp-prize-gate.sh
           node --check scripts/limrun-gate.mjs
           node --check scripts/test-limrun-gate.mjs
 
@@ -244,11 +244,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: ./android/gradlew --project-dir android :app:testDebugUnitTest
 
-      - name: Assemble debug APK
+      - name: Assemble debug APK and androidTest instrumentation APK
         env:
           ONIONVAULT_SKIP_CARGO: "1"
           GH_TOKEN: ${{ github.token }}
-        run: ./android/gradlew --project-dir android :app:assembleDebug
+        run: ./android/gradlew --project-dir android :app:assembleDebug :app:assembleDebugAndroidTest
 
       - name: Audit packaged APK contents, DEX descriptors, and ELF linkage
         run: |
@@ -276,6 +276,13 @@ jobs:
         with:
           name: trap-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Upload androidTest instrumentation APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: trap-debug-androidtest-apk
+          path: android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
           if-no-files-found: error
 
       - name: Upload CycloneDX 1.5 and SPDX 2.3 SBOMs
@@ -401,14 +408,20 @@ jobs:
           name: trap-debug-apk
           path: apk
 
-      - name: Provision Limrun cloud Android 15 phone and run full runtime & .onion UI gate
+      - name: Download androidTest instrumentation APK
+        uses: actions/download-artifact@v8
+        with:
+          name: trap-debug-androidtest-apk
+          path: apk
+
+      - name: Provision Limrun cloud Android 15 phone and run full runtime, .onion & 3-round OpenPGP TOTP prize gate
         env:
           LIM_API_KEY: ${{ secrets.LIM_API_KEY }}
           LIMRUN_API_KEY: ${{ secrets.LIMRUN_API_KEY }}
           LIMRUN_TOOLS_DIR: /tmp/trap-limrun-tools
           LIMRUN_OS_VERSION: "15"
           LIMRUN_MODEL: "phone"
-        run: ./scripts/limrun-gate.sh apk/app-debug.apk dist/limrun
+        run: ./scripts/limrun-gate.sh apk/app-debug.apk dist/limrun apk/app-debug-androidTest.apk
 
       - name: Upload Limrun forensic logs, UI hierarchy, and summary
         if: always()
@@ -425,6 +438,7 @@ jobs:
           path: |
             dist/limrun/limrun-launch.png
             dist/limrun/limrun-onion.png
+            dist/limrun/limrun-prize.png
             dist/limrun/limrun-summary.json
           if-no-files-found: error
 
@@ -524,6 +538,7 @@ jobs:
             emulator-launch.png \
             limrun-launch.png \
             limrun-onion.png \
+            limrun-prize.png \
             limrun-summary.json \
             GPL-3.0.txt \
             LGPL-2.1.txt \
@@ -542,6 +557,7 @@ jobs:
               emulator-launch.png \
               limrun-launch.png \
               limrun-onion.png \
+              limrun-prize.png \
               limrun-summary.json \
               GPL-3.0.txt \
               LGPL-2.1.txt \
@@ -616,6 +632,7 @@ jobs:
             dist/emulator-launch.png \
             dist/limrun-launch.png \
             dist/limrun-onion.png \
+            dist/limrun-prize.png \
             dist/limrun-summary.json \
             dist/GPL-3.0.txt \
             dist/LGPL-2.1.txt \

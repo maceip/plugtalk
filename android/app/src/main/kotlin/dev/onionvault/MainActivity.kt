@@ -2165,6 +2165,14 @@ class MainActivity : FragmentActivity() {
         if (controllersReady) tabSessionManager.activeBrowser() else null
 
     @VisibleForTesting
+    internal fun activeTabIdForTest(): String? =
+        if (controllersReady) tabSessionManager.activeTabId.value else null
+
+    @VisibleForTesting
+    internal fun cdpControllerForTest(): CdpDomPgpController? =
+        if (controllersReady) cdpController else null
+
+    @VisibleForTesting
     internal fun loadZeroJsDocumentForTest(
         html: String,
         displayUrl: String,

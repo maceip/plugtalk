@@ -981,6 +981,7 @@ fun KeyringHardwarePod(
                                             text = "Set Default",
                                             compact = true,
                                             onClick = { onSetDefaultKey(key.fingerprint) },
+                                            modifier = Modifier.testTag("key_set_default_${key.fingerprint}"),
                                         )
                                     }
                                     HardwareBezelButton(

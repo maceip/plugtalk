@@ -19,7 +19,7 @@ Every push to `main` runs Rust workspace checks, multi-ABI (`arm64-v8a` + `x86_6
 | **CycloneDX 1.5 SBOM** | [`app-debug.sbom.cdx.json`](https://github.com/maceip/trap/releases/latest/download/app-debug.sbom.cdx.json) | Complete Cargo + Cefpack + Maven/Android (`debugRuntimeClasspath`) + native `.so` SHA-256 inventory |
 | **SPDX 2.3 SBOM** | [`app-debug.sbom.spdx.json`](https://github.com/maceip/trap/releases/latest/download/app-debug.sbom.spdx.json) | Sigstore-attested SPDX 2.3 JSON inventory for `app-debug.apk` |
 | **SHA-256 Checksums** | [`SHA256SUMS.txt`](https://github.com/maceip/trap/releases/latest/download/SHA256SUMS.txt) | SHA-256 digests of all published release artifacts |
-| **Limrun Cloud Gate Captures** | [`limrun-launch.png`](https://github.com/maceip/trap/releases/latest/download/limrun-launch.png) · [`limrun-onion.png`](https://github.com/maceip/trap/releases/latest/download/limrun-onion.png) · [`limrun-summary.json`](https://github.com/maceip/trap/releases/latest/download/limrun-summary.json) | Live Limrun cloud Android 15 screenshots and telemetry captured during `scripts/limrun-gate.mjs` |
+| **Limrun Cloud Gate Captures** | [`limrun-launch.png`](https://github.com/maceip/trap/releases/latest/download/limrun-launch.png) · [`limrun-onion.png`](https://github.com/maceip/trap/releases/latest/download/limrun-onion.png) · [`limrun-prize.png`](https://github.com/maceip/trap/releases/latest/download/limrun-prize.png) · [`limrun-summary.json`](https://github.com/maceip/trap/releases/latest/download/limrun-summary.json) | Live Limrun cloud Android 15 screenshots (including 3-round OpenPGP TOTP `.onion` prize unlock) and telemetry captured during `scripts/limrun-gate.mjs` |
 | **Emulator Gate Capture** | [`emulator-launch.png`](https://github.com/maceip/trap/releases/latest/download/emulator-launch.png) | Live Android 15 runtime screenshot captured during `scripts/emulator-gate.sh` |
 | **Bundled License Texts** | [`LGPL-3.0.txt`](https://github.com/maceip/trap/releases/latest/download/LGPL-3.0.txt) · [`GPL-3.0.txt`](https://github.com/maceip/trap/releases/latest/download/GPL-3.0.txt) · [`LGPL-2.1.txt`](https://github.com/maceip/trap/releases/latest/download/LGPL-2.1.txt) | Verbatim third-party license texts also embedded offline inside `assets/licenses/` |
 
@@ -59,8 +59,9 @@ trap/
 │   ├── audit-apk.sh            Pre-release APK ARMv9 `memtagMode="off"`, 16KB ELF `PT_LOAD`, DEX, `.pak` & v2 cert gate
 │   ├── generate-sbom.py        Real Cargo + Cefpack + Gradle + APK binary CycloneDX 1.5 & SPDX 2.3 SBOM generator
 │   ├── emulator-gate.sh        Automated Android emulator launch, Cefpack + `ov_tor` SOCKS5 & crash/linkage gate
-│   ├── limrun-gate.sh          Fail-closed Limrun CLI/SDK bootstrap & cloud Android 15 runtime gate wrapper
-│   ├── limrun-gate.mjs         Limrun WebSocket/ADB/UI driver (`syncApp`, `launchApp`, Arti SOCKS5 & `.onion` smoke gate)
+│   ├── limrun-gate.sh          Fail-closed Limrun CLI/SDK bootstrap & cloud Android 15 runtime + TOTP prize gate wrapper
+│   ├── limrun-gate.mjs         Limrun WebSocket/ADB/UI driver (`syncApp`, Arti SOCKS5, `.onion` smoke & 3-round OpenPGP TOTP prize gate)
+│   ├── run-totp-prize-gate.sh  Local ADB/USB/wireless 3-round OpenPGP TOTP `.onion` prize gate runner + screenshot extractor
 │   └── test-limrun-gate.mjs    Self-contained local WebSocket mock server E2E test suite for `limrun-gate.mjs`
 └── android/                    Gradle Android application (`cefpack-android.aar` from `maceip/cefpack`, Jetpack Compose, pinned `app/debug.keystore`)
     └── app/src/main/kotlin/dev/onionvault/
@@ -123,8 +124,9 @@ cargo ndk -t arm64-v8a -t x86_64 --platform 29 -o android/app/src/main/jniLibs b
 # 4. Run JVM / Robolectric Compose UI, screenshot, JNI parity, and crash-guard tests
 ./android/gradlew --project-dir android :app:testDebugUnitTest
 
-# 5. Run on-device / emulator instrumentation tests & runtime stability gates
-./android/gradlew --project-dir android :app:connectedDebugAndroidTest
+# 5. Run on-device / emulator instrumentation tests & 3-round OpenPGP TOTP .onion prize gates
+./android/gradlew --project-dir android :app:assembleDebug :app:assembleDebugAndroidTest
+./scripts/run-totp-prize-gate.sh dist/totp-prize/totp-prize-won.png
 ./scripts/emulator-gate.sh android/app/build/outputs/apk/debug/app-debug.apk
 node scripts/test-limrun-gate.mjs
 LIM_API_KEY="$LIM_API_KEY" ./scripts/limrun-gate.sh android/app/build/outputs/apk/debug/app-debug.apk dist/limrun

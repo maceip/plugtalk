@@ -5,13 +5,18 @@
  * Boots an in-process HTTP + WebSocket test harness speaking the real `@limrun/api`
  * control-plane (`/v1/android_instances`, `/v1/assets`) and Android instance data-plane
  * (`/ws`, `/sync/state`, `/sync`, `/logcat`) protocols, then executes `scripts/limrun-gate.sh`
- * across three mandatory scenarios:
+ * across six mandatory scenarios:
  *   1. Missing `LIM_API_KEY` / `LIMRUN_API_KEY` -> fails closed immediately (exit 1).
  *   2. Immediate launch crash (`appExit` + native `Fatal signal 6`) -> captures forensic
  *      artifacts, deletes the cloud instance cleanly, and fails closed (exit 1).
  *   3. Healthy boot + Arti Tor bootstrap + UI tap on DuckDuckGo `.onion` card + circuit
- *      isolation (`iso-duckduckgogg42xj`) -> writes screenshots/logs/summary, deletes
- *      the cloud instance cleanly, and exits 0.
+ *      isolation (`iso-duckduckgogg42xj`) + 3-round `LiveOnionPgpTotpPrizeTest` prize won
+ *      -> writes launch/onion/prize screenshots + logs + summary, deletes the cloud
+ *      instance cleanly, and exits 0.
+ *   4. ARMv9 MTE child-process `SIGTRAP` (`Fatal signal 5`) -> fails closed (exit 1).
+ *   5. Premature unrendered `.onion` tab (`Stop loading` + missing `OnLoadEnd`) -> fails closed (exit 1).
+ *   6. Failed or unverified `LiveOnionPgpTotpPrizeTest` (missing `PRIZE_WON_JSON` / `roundsCompleted !== 3`)
+ *      -> fails closed and deletes the cloud instance cleanly (exit 1).
  */
 
 import assert from 'node:assert/strict';
@@ -30,6 +35,9 @@ const GATE_SH = path.join(REPO_ROOT, 'scripts/limrun-gate.sh');
 // 1x1 valid RGBA PNG bytes
 const ONE_PX_PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==';
+
+const SAMPLE_TOTP_ONION_URL =
+  'http://b36xrf3dwtizfea3z6pl2i2el2vzraju4gdddben5eqpicdswuvfgoyd.onion/';
 
 function ensureToolsDir() {
   if (
@@ -56,15 +64,14 @@ function ensureToolsDir() {
 }
 
 function createMinimalValidZipApk(destPath) {
-  // Minimal 22-byte End of Central Directory record prefixed by a valid local file header (PK\x03\x04)
   const fileName = Buffer.from('AndroidManifest.xml', 'utf8');
   const data = Buffer.from('trap-test-apk', 'utf8');
 
   const localHeader = Buffer.alloc(30);
-  localHeader.writeUInt32LE(0x04034b50, 0); // signature PK\x03\x04
-  localHeader.writeUInt16LE(20, 4); // version needed
-  localHeader.writeUInt16LE(0, 8); // stored
-  localHeader.writeUInt32LE(0, 14); // crc32 (unused for magic check)
+  localHeader.writeUInt32LE(0x04034b50, 0);
+  localHeader.writeUInt16LE(20, 4);
+  localHeader.writeUInt16LE(0, 8);
+  localHeader.writeUInt32LE(0, 14);
   localHeader.writeUInt32LE(data.length, 18);
   localHeader.writeUInt32LE(data.length, 22);
   localHeader.writeUInt16LE(fileName.length, 26);
@@ -102,8 +109,12 @@ async function startMockLimrunServer(toolsDir, mode) {
     createdInstances: [],
     deletedInstances: [],
     installedPackages: new Set(),
+    assetCounter: 0,
+    assetPackageByUrl: new Map(),
+    syncCalls: 0,
     launched: false,
     navigatedOnion: false,
+    ranPrizeInstrumentation: false,
     createPayloads: [],
   };
 
@@ -133,7 +144,7 @@ async function startMockLimrunServer(toolsDir, mode) {
             },
             spec: {
               inactivityTimeout: parsed?.spec?.inactivityTimeout || '10m',
-              hardTimeout: parsed?.spec?.hardTimeout || '20m',
+              hardTimeout: parsed?.spec?.hardTimeout || '25m',
               region: 'us-west1',
             },
             status: {
@@ -157,21 +168,29 @@ async function startMockLimrunServer(toolsDir, mode) {
 
       if (httpReq.method === 'PUT' && url.pathname === '/v1/assets') {
         const parsed = JSON.parse(rawBody.toString('utf8') || '{}');
+        state.assetCounter += 1;
+        const assetId = `asset_${state.assetCounter}`;
         const base = `http://127.0.0.1:${server.address().port}`;
+        const downloadUrl = `${base}/download/${assetId}`;
+        const isTestApk = String(parsed.name || '').includes('androidTest');
+        state.assetPackageByUrl.set(
+          downloadUrl,
+          isTestApk ? 'dev.onionvault.test' : 'dev.onionvault',
+        );
         httpRes.writeHead(200, { 'Content-Type': 'application/json' });
         httpRes.end(
           JSON.stringify({
-            id: 'asset_1',
+            id: assetId,
             name: parsed.name || 'app-debug.apk',
             kind: 'App',
-            signedUploadUrl: `${base}/upload/asset_1`,
-            signedDownloadUrl: `${base}/download/asset_1`,
+            signedUploadUrl: `${base}/upload/${assetId}`,
+            signedDownloadUrl: downloadUrl,
           }),
         );
         return;
       }
 
-      if (httpReq.method === 'PUT' && url.pathname === '/upload/asset_1') {
+      if (httpReq.method === 'PUT' && url.pathname.startsWith('/upload/')) {
         httpRes.writeHead(200);
         httpRes.end('ok');
         return;
@@ -184,6 +203,11 @@ async function startMockLimrunServer(toolsDir, mode) {
       }
 
       if (httpReq.method === 'POST' && url.pathname.endsWith('/sync')) {
+        state.syncCalls += 1;
+        const udid = String(url.searchParams.get('udid') || '');
+        if (udid.includes('androidTest') || state.installedPackages.has('dev.onionvault')) {
+          state.installedPackages.add('dev.onionvault.test');
+        }
         state.installedPackages.add('dev.onionvault');
         httpRes.writeHead(200, { 'Content-Type': 'application/json' });
         httpRes.end(JSON.stringify({ ok: true }));
@@ -232,7 +256,8 @@ async function startMockLimrunServer(toolsDir, mode) {
       const { type, id } = msg;
 
       if (type === 'asset') {
-        state.installedPackages.add('dev.onionvault');
+        const pkg = state.assetPackageByUrl.get(msg.url) || 'dev.onionvault';
+        state.installedPackages.add(pkg);
         ws.send(JSON.stringify({ type: 'assetResult', url: msg.url, result: 'success' }));
         return;
       }
@@ -371,6 +396,12 @@ async function startMockLimrunServer(toolsDir, mode) {
           out = '1\n';
         } else if (cmd.includes("'pm' 'path' 'android'")) {
           out = 'package:/system/framework/framework-res.apk\n';
+        } else if (cmd.includes("'pm' 'path' 'dev.onionvault.test'")) {
+          if (state.installedPackages.has('dev.onionvault.test')) {
+            out = 'package:/data/app/dev.onionvault.test-1/base.apk\n';
+          } else {
+            exitCode = 1;
+          }
         } else if (cmd.includes("'pm' 'path' 'dev.onionvault'")) {
           if (state.installedPackages.has('dev.onionvault')) {
             out = 'package:/data/app/dev.onionvault-1/base.apk\n';
@@ -391,9 +422,30 @@ async function startMockLimrunServer(toolsDir, mode) {
           out = 'google/sdk_gphone64_x86_64/emu64xa:15/AE3A/1234:userdebug/dev-keys\n';
         } else if (cmd.includes('PAGESIZE')) {
           out = '4096\n';
-        } else if (cmd.includes("'am' 'start'") && cmd.includes('duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion')) {
+        } else if (
+          cmd.includes("'am' 'start'") &&
+          cmd.includes('duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion')
+        ) {
           state.navigatedOnion = true;
           out = 'Status: ok\nLaunchState: HOT\n';
+        } else if (
+          cmd.includes("'am' 'instrument'") &&
+          cmd.includes('dev.onionvault.LiveOnionPgpTotpPrizeTest')
+        ) {
+          state.ranPrizeInstrumentation = true;
+          if (mode === 'prize_gate_failed') {
+            out =
+              'INSTRUMENTATION_STATUS_CODE: -2\nTime: 4.1\nFAILURES!!!\nTests run: 1,  Failures: 1\n';
+            exitCode = 1;
+          } else {
+            out = 'INSTRUMENTATION_STATUS_CODE: 0\nTime: 18.4\n\nOK (1 test)\n';
+          }
+        } else if (cmd.includes('trap-prize-won.png') && cmd.includes('base64')) {
+          if (state.ranPrizeInstrumentation && mode !== 'prize_gate_failed') {
+            out = `${ONE_PX_PNG_BASE64}\n`;
+          } else {
+            out = '';
+          }
         } else if (cmd.includes("'logcat' '-d'")) {
           if (mode === 'crash_on_launch') {
             out = [
@@ -401,8 +453,6 @@ async function startMockLimrunServer(toolsDir, mode) {
               '11-15 03:00:01.150  8129  8129 F DEBUG   : *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***',
             ].join('\n');
           } else if (mode === 'mte_sigtrap_child_process') {
-            // Reproduces exact v0.1.27 ARMv9 MTE renderer crash (#65): main browser PID 9001 stays alive
-            // while :sandboxed_process0 hits SetHeapTaggingLevel failure + Fatal signal 5 (SIGTRAP).
             out = [
               '11-15 03:00:01.010  9001  9001 I Trap    : the engine is ready',
               '11-15 03:00:01.250  9001  9024 I ov_tor  : SOCKS5 listener bound to 127.0.0.1:41955',
@@ -428,6 +478,20 @@ async function startMockLimrunServer(toolsDir, mode) {
                   '11-15 03:00:18.450  9001  9001 I Cefpack : OnLoadEnd: status 200, isMain=1',
                 );
               }
+            }
+            if (state.ranPrizeInstrumentation && mode === 'healthy') {
+              const prizeRecord = JSON.stringify({
+                onionUrl: SAMPLE_TOTP_ONION_URL,
+                roundsCompleted: 3,
+                winnerFingerprint: 'AABBCCDDEEFF00112233445566778899AABBCCDD',
+                prizeBanner: 'HARNESS-PROTOCOL-TEST-VECTOR',
+                decryptedCertificate:
+                  'TRAP OPENPGP TOTP PRIZE CERTIFICATE\n' +
+                  'PRIZE: HARNESS-PROTOCOL-TEST-VECTOR\n' +
+                  'WINNER FINGERPRINT: AABBCCDDEEFF00112233445566778899AABBCCDD\n' +
+                  'ROUNDS VERIFIED: 3 OF 3',
+              });
+              lines.push(`11-15 03:00:36.900  9412  9430 I TrapPrizeGate: PRIZE_WON_JSON=${prizeRecord}`);
             }
             out = `${lines.join('\n')}\n`;
           }
@@ -495,7 +559,9 @@ async function runTests() {
   const toolsDir = ensureToolsDir();
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'trap-limrun-gate-test-'));
   const apkPath = path.join(workDir, 'app-debug.apk');
+  const testApkPath = path.join(workDir, 'app-debug-androidTest.apk');
   createMinimalValidZipApk(apkPath);
+  createMinimalValidZipApk(testApkPath);
 
   console.log('== Test 1: Missing LIM_API_KEY / LIMRUN_API_KEY fails closed immediately ==');
   {
@@ -503,7 +569,7 @@ async function runTests() {
     const cleanEnv = { ...process.env };
     delete cleanEnv.LIM_API_KEY;
     delete cleanEnv.LIMRUN_API_KEY;
-    const res = await runGateAsync([apkPath, outDir], cleanEnv);
+    const res = await runGateAsync([apkPath, outDir, testApkPath], cleanEnv);
     assert.notEqual(res.status, 0, 'Gate must exit non-zero when LIM_API_KEY is missing');
     assert.match(res.stderr, /::error::Missing Limrun API key/);
     console.log('  PASS: Missing API key failed closed with exit code', res.status);
@@ -514,7 +580,7 @@ async function runTests() {
     const mock = await startMockLimrunServer(toolsDir, 'crash_on_launch');
     const outDir = path.join(workDir, 'out-crash');
     try {
-      const res = await runGateAsync([apkPath, outDir], {
+      const res = await runGateAsync([apkPath, outDir, testApkPath], {
         ...process.env,
         LIMRUN_API_KEY: 'lim_test_key_alias',
         LIM_API_KEY: '',
@@ -546,7 +612,7 @@ async function runTests() {
     }
   }
 
-  console.log('== Test 3: Healthy boot + Tor bootstrap + live .onion UI tap passes and deletes instance ==');
+  console.log('== Test 3: Healthy boot + Tor + .onion UI tap + 3-round OpenPGP TOTP Prize Gate passes ==');
   {
     const mock = await startMockLimrunServer(toolsDir, 'healthy');
     const outDir = path.join(workDir, 'out-healthy');
@@ -558,6 +624,7 @@ async function runTests() {
         LIMRUN_TOOLS_DIR: toolsDir,
         BOOT_WAIT_SECONDS: '10',
         ONION_WAIT_SECONDS: '10',
+        PRIZE_WAIT_SECONDS: '30',
         STABILITY_SECONDS: '1',
         POLL_INTERVAL_MS: '200',
         GITHUB_REPOSITORY: 'maceip/trap',
@@ -569,7 +636,7 @@ async function runTests() {
         console.error('STDOUT:\n', res.stdout);
         console.error('STDERR:\n', res.stderr);
       }
-      assert.equal(res.status, 0, 'Healthy gate run must exit 0');
+      assert.equal(res.status, 0, 'Healthy gate run with 3-round TOTP prize won must exit 0');
       assert.deepEqual(
         mock.state.deletedInstances,
         mock.state.createdInstances,
@@ -578,6 +645,7 @@ async function runTests() {
       const summary = JSON.parse(fs.readFileSync(path.join(outDir, 'limrun-summary.json'), 'utf8'));
       assert.equal(summary.passed, true);
       assert.equal(summary.installMethod, 'syncApp');
+      assert.equal(summary.testInstallMethod, 'syncApp');
       assert.equal(summary.readiness.engineReady, true);
       assert.equal(summary.readiness.socksEndpoint, '127.0.0.1:41955');
       assert.equal(summary.readiness.torBootstrapped, true);
@@ -587,12 +655,17 @@ async function runTests() {
       assert.equal(summary.onionSmoke.pageLoadedInLogcat, true);
       assert.equal(summary.onionSmoke.mainFrameHttpStatus, 200);
       assert.equal(summary.onionSmoke.onionTitleRenderedInUi, true);
+      assert.equal(summary.totpPrize.passed, true);
+      assert.equal(summary.totpPrize.roundsCompleted, 3);
+      assert.equal(summary.totpPrize.prizeBanner, 'HARNESS-PROTOCOL-TEST-VECTOR');
+      assert.match(res.stdout, /\[PRIZE WON\]/);
       assert.equal(summary.appPid, '9001');
       assert.ok(fs.statSync(path.join(outDir, 'limrun-launch.png')).size > 0);
       assert.ok(fs.statSync(path.join(outDir, 'limrun-onion.png')).size > 0);
+      assert.ok(fs.statSync(path.join(outDir, 'limrun-prize.png')).size > 0);
       assert.ok(fs.statSync(path.join(outDir, 'limrun-logcat.txt')).size > 0);
       assert.ok(fs.statSync(path.join(outDir, 'limrun-ui-tree.xml')).size > 0);
-      console.log('  PASS: Healthy gate verified syncApp + launchApp + Tor + .onion UI smoke + cleanup');
+      console.log('  PASS: Healthy gate verified syncApp + Tor + .onion smoke + 3-round OpenPGP TOTP prize + cleanup');
     } finally {
       await mock.close();
     }
@@ -603,7 +676,7 @@ async function runTests() {
     const mock = await startMockLimrunServer(toolsDir, 'mte_sigtrap_child_process');
     const outDir = path.join(workDir, 'out-mte-sigtrap');
     try {
-      const res = await runGateAsync([apkPath, outDir], {
+      const res = await runGateAsync([apkPath, outDir, testApkPath], {
         ...process.env,
         LIM_API_KEY: 'lim_test_key_mte',
         LIMRUN_BASE_URL: mock.baseURL,
@@ -640,7 +713,7 @@ async function runTests() {
     const mock = await startMockLimrunServer(toolsDir, 'premature_onion_still_loading');
     const outDir = path.join(workDir, 'out-premature-onion');
     try {
-      const res = await runGateAsync([apkPath, outDir], {
+      const res = await runGateAsync([apkPath, outDir, testApkPath], {
         ...process.env,
         LIM_API_KEY: 'lim_test_key_premature',
         LIMRUN_BASE_URL: mock.baseURL,
@@ -677,8 +750,47 @@ async function runTests() {
     }
   }
 
+  console.log('== Test 6: Failed LiveOnionPgpTotpPrizeTest / missing PRIZE_WON_JSON fails closed ==');
+  {
+    const mock = await startMockLimrunServer(toolsDir, 'prize_gate_failed');
+    const outDir = path.join(workDir, 'out-prize-failed');
+    try {
+      const res = await runGateAsync([apkPath, outDir, testApkPath], {
+        ...process.env,
+        LIM_API_KEY: 'lim_test_key_prize_fail',
+        LIMRUN_BASE_URL: mock.baseURL,
+        LIMRUN_TOOLS_DIR: toolsDir,
+        BOOT_WAIT_SECONDS: '8',
+        ONION_WAIT_SECONDS: '8',
+        PRIZE_WAIT_SECONDS: '15',
+        STABILITY_SECONDS: '0',
+        POLL_INTERVAL_MS: '200',
+      });
+      assert.notEqual(
+        res.status,
+        0,
+        'Gate must fail closed when LiveOnionPgpTotpPrizeTest fails or omits PRIZE_WON_JSON',
+      );
+      assert.deepEqual(mock.state.deletedInstances, mock.state.createdInstances);
+      const summary = JSON.parse(fs.readFileSync(path.join(outDir, 'limrun-summary.json'), 'utf8'));
+      assert.equal(summary.passed, false);
+      assert.equal(summary.totpPrize.passed, false);
+      assert.ok(
+        summary.failures.some((f) => /LiveOnionPgpTotpPrizeTest did not pass/.test(f)),
+        `Expected instrumentation failure in summary.failures: ${JSON.stringify(summary.failures)}`,
+      );
+      assert.ok(
+        summary.failures.some((f) => /PRIZE_WON_JSON/.test(f)),
+        `Expected missing PRIZE_WON_JSON failure in summary.failures: ${JSON.stringify(summary.failures)}`,
+      );
+      console.log('  PASS: Failed TOTP prize test failed closed and deleted instance');
+    } finally {
+      await mock.close();
+    }
+  }
+
   fs.rmSync(workDir, { recursive: true, force: true });
-  console.log('ALL 5 LIMRUN GATE E2E TESTS PASSED');
+  console.log('ALL 6 LIMRUN GATE E2E TESTS PASSED');
 }
 
 runTests().catch((err) => {

@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
- * Limrun Cloud Android Runtime & UI Smoke Gate for Trap (`dev.onionvault`).
+ * Limrun Cloud Android Runtime, `.onion` Smoke & 3-Round OpenPGP TOTP Prize Gate for Trap (`dev.onionvault`).
  *
  * Provisions an isolated cloud Android instance via the official `@limrun/api` SDK,
- * syncs & installs `app-debug.apk` (`syncApp` with `assets.getOrUpload` + `sendAsset`
- * fallback), launches `dev.onionvault` under a live ActivityManager `onExit` crash/ANR
- * watch, and verifies end-to-end:
+ * syncs & installs both `app-debug.apk` and `app-debug-androidTest.apk` (`syncApp` with
+ * `assets.getOrUpload` + `sendAsset` fallback), launches `dev.onionvault` under a live
+ * ActivityManager `onExit` crash/ANR watch, and verifies end-to-end:
  *   1. `TrapApplication` initializes Cefpack (`"Initialized Cefpack content engine"` / `"the engine is ready"`),
  *   2. `ov_tor` binds its loopback SOCKS5 listener (`127.0.0.1:<port>`),
  *   3. Embedded Arti bootstraps against the live Tor network (`"Tor client bootstrapped"`
@@ -13,13 +13,20 @@
  *   4. Compose `StartPage` renders cleanly (zero `OvCrashScreen`),
  *   5. Live `.onion` navigation (`https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/`)
  *      binds per-service circuit isolation (`iso-duckduckgogg42xj`) and renders without error,
- *   6. Zero Java `FATAL EXCEPTION`s, ANRs, native signals/tombstones, DropBox crashes,
+ *   6. Mandatory 3-round OpenPGP TOTP `.onion` Prize Gate (`LiveOnionPgpTotpPrizeTest`):
+ *      cold-boots `MainActivity`, generates a Sequoia + Keystore OpenPGP keypair, connects over
+ *      Tor to our DigitalOcean OpenPGP TOTP `.onion` hidden service, inserts `"Insert My PubKey"`,
+ *      decrypts all 3 OpenPGP TOTP challenges via `DecryptedPlaintextHardwarePod`, submits all 3
+ *      HTML form POSTs over Tor, wins Round 3 (`OK (1 test)` + `TrapPrizeGate: PRIZE_WON_JSON=...`),
+ *      and captures `limrun-prize.png` while the decrypted prize certificate is displayed,
+ *   7. Zero Java `FATAL EXCEPTION`s, ANRs, native signals/tombstones, DropBox crashes,
  *      `CrashReporter` files, or JNI/DEX linkage errors,
- *   7. Captures `limrun-launch.png`, `limrun-onion.png`, `limrun-logcat.txt`,
- *      `limrun-ui-tree.xml`, and `limrun-summary.json`,
- *   8. Always deletes the cloud Android instance in `finally` / `SIGINT` / `SIGTERM`.
+ *   8. Captures `limrun-launch.png`, `limrun-onion.png`, `limrun-prize.png`, `limrun-logcat.txt`,
+ *      `limrun-ui-tree.xml`, and `limrun-summary.json`, and always deletes the cloud Android
+ *      instance in `finally` / `SIGINT` / `SIGTERM`.
  *
- * Fails closed immediately if `LIM_API_KEY` (or `LIMRUN_API_KEY`) is missing or empty.
+ * Fails closed immediately if `LIM_API_KEY` (or `LIMRUN_API_KEY`) is missing or empty, or if
+ * Round 3's OpenPGP TOTP prize is not won and verified.
  */
 
 import fs from 'node:fs';
@@ -31,10 +38,22 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, '..');
 
 const DEFAULT_APK = path.join(REPO_ROOT, 'android/app/build/outputs/apk/debug/app-debug.apk');
+const DEFAULT_TEST_APK = path.join(
+  REPO_ROOT,
+  'android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk',
+);
 const DEFAULT_OUT_DIR = path.join(REPO_ROOT, 'dist/limrun');
 
 const PACKAGE = process.env.PACKAGE || 'dev.onionvault';
+const TEST_PACKAGE = process.env.TEST_PACKAGE || 'dev.onionvault.test';
+const TEST_RUNNER = process.env.TEST_RUNNER || 'androidx.test.runner.AndroidJUnitRunner';
+const PRIZE_TEST_CLASS =
+  process.env.PRIZE_TEST_CLASS || 'dev.onionvault.LiveOnionPgpTotpPrizeTest';
 const ACTIVITY = process.env.ACTIVITY || 'dev.onionvault/.MainActivity';
+const DEFAULT_TOTP_ONION_URL =
+  'http://b36xrf3dwtizfea3z6pl2i2el2vzraju4gdddben5eqpicdswuvfgoyd.onion/';
+const TOTP_ONION_URL = (process.env.TOTP_ONION_URL || DEFAULT_TOTP_ONION_URL).trim();
+
 const ONION_TEST_URL =
   process.env.ONION_TEST_URL ||
   'https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/';
@@ -47,17 +66,21 @@ const ONION_EXPECTED_HOST =
 const LIMRUN_OS_VERSION = process.env.LIMRUN_OS_VERSION || '15';
 const LIMRUN_MODEL = process.env.LIMRUN_MODEL || 'phone';
 const LIMRUN_JURISDICTION = (process.env.LIMRUN_JURISDICTION || '').trim() || undefined;
-const LIMRUN_HARD_TIMEOUT = process.env.LIMRUN_HARD_TIMEOUT || '20m';
+const LIMRUN_HARD_TIMEOUT = process.env.LIMRUN_HARD_TIMEOUT || '25m';
 const LIMRUN_INACTIVITY_TIMEOUT = process.env.LIMRUN_INACTIVITY_TIMEOUT || '10m';
 const LIMRUN_INSTALL_MODE = (process.env.LIMRUN_INSTALL_MODE || 'auto').trim();
 const INSTANCE_ID_FILE = (process.env.LIMRUN_INSTANCE_ID_FILE || '').trim() || null;
 
 const BOOT_WAIT_SECONDS = Number(process.env.BOOT_WAIT_SECONDS ?? 150);
 const ONION_WAIT_SECONDS = Number(process.env.ONION_WAIT_SECONDS ?? 240);
+const PRIZE_WAIT_SECONDS = Number(process.env.PRIZE_WAIT_SECONDS ?? 360);
 const MAX_ONION_ATTEMPTS = Number(process.env.MAX_ONION_ATTEMPTS ?? 4);
-const STABILITY_SECONDS = Number(process.env.STABILITY_SECONDS ?? 12);
+const STABILITY_SECONDS = Number(process.env.STABILITY_SECONDS ?? 8);
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS ?? 2000);
 const SKIP_ONION_SMOKE = process.env.LIMRUN_SKIP_ONION_SMOKE === '1';
+
+const DEVICE_PRIZE_SCREENSHOT_PATH = '/data/local/tmp/trap-prize-won.png';
+const VALID_V3_ONION_URL_RE = /^https?:\/\/[a-z2-7]{56}\.onion(?:\/.*)?$/i;
 
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
@@ -106,6 +129,24 @@ function loadLimrunSdk() {
   );
 }
 
+function resolveTestApkPath(apkPath, explicitArg) {
+  const explicit = String(explicitArg || process.env.TEST_APK_PATH || '').trim();
+  if (explicit) {
+    return path.resolve(explicit);
+  }
+  const candidates = [
+    path.join(path.dirname(apkPath), 'app-debug-androidTest.apk'),
+    path.resolve(path.dirname(apkPath), '../androidTest/debug/app-debug-androidTest.apk'),
+    DEFAULT_TEST_APK,
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return candidates[0];
+}
+
 function assertValidApk(apkPath) {
   let st;
   try {
@@ -129,6 +170,17 @@ function assertValidApk(apkPath) {
   return st.size;
 }
 
+function assertValidPngBuffer(buf, label = 'screenshot') {
+  if (
+    !Buffer.isBuffer(buf) ||
+    buf.length < PNG_MAGIC.length ||
+    !buf.subarray(0, PNG_MAGIC.length).equals(PNG_MAGIC)
+  ) {
+    throw new Error(`Decoded ${label} is not a valid non-empty PNG (${buf?.length ?? 0} bytes)`);
+  }
+  return buf;
+}
+
 function decodeScreenshotDataUri(dataUri) {
   if (typeof dataUri !== 'string' || !dataUri.startsWith('data:image/')) {
     throw new Error('Limrun screenshot response did not contain a valid image dataUri');
@@ -138,10 +190,7 @@ function decodeScreenshotDataUri(dataUri) {
     throw new Error('Malformed dataUri in Limrun screenshot response');
   }
   const buf = Buffer.from(dataUri.slice(commaIdx + 1), 'base64');
-  if (buf.length < PNG_MAGIC.length || !buf.subarray(0, PNG_MAGIC.length).equals(PNG_MAGIC)) {
-    throw new Error(`Decoded screenshot is not a valid non-empty PNG (${buf.length} bytes)`);
-  }
-  return buf;
+  return assertValidPngBuffer(buf, 'screenshot');
 }
 
 async function saveScreenshot(client, targetPath) {
@@ -150,6 +199,83 @@ async function saveScreenshot(client, targetPath) {
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
   fs.writeFileSync(targetPath, pngBytes);
   return pngBytes.length;
+}
+
+async function tryPullDevicePngViaBase64(client, remotePath, targetPath) {
+  const res = await client
+    .adbShell(
+      'sh',
+      ['-c', `if [ -s "${remotePath}" ]; then base64 "${remotePath}" | tr -d '\\r\\n '; fi`],
+      { timeoutMs: 25_000 },
+    )
+    .catch(() => ({ stdout: '', exitCode: 1 }));
+  const b64 = String(res.stdout || '').trim();
+  if (!b64) {
+    return null;
+  }
+  try {
+    const buf = assertValidPngBuffer(Buffer.from(b64, 'base64'), remotePath);
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fs.writeFileSync(targetPath, buf);
+    return buf.length;
+  } catch {
+    return null;
+  }
+}
+
+async function installApkOnInstance({ limrun, client, apkFilePath, expectedPackage }) {
+  let method = null;
+  if (LIMRUN_INSTALL_MODE !== 'asset') {
+    try {
+      await client.syncApp(apkFilePath, {
+        install: true,
+        watch: false,
+        launchMode: 'None',
+      });
+      method = 'syncApp';
+    } catch (syncErr) {
+      if (LIMRUN_INSTALL_MODE === 'sync') {
+        throw syncErr;
+      }
+      console.warn(
+        `  syncApp fallback to assets.getOrUpload + sendAsset for ${path.basename(apkFilePath)}: ${
+          syncErr instanceof Error ? syncErr.message : String(syncErr)
+        }`,
+      );
+    }
+  }
+  if (!method) {
+    const asset = await limrun.assets.getOrUpload({
+      path: apkFilePath,
+      name: path.basename(apkFilePath),
+      ttl: '2h',
+    });
+    await client.sendAsset(asset.signedDownloadUrl, 300_000);
+    method = 'sendAsset';
+  }
+
+  const installedPkg = await client.adbShell('pm', ['path', expectedPackage]);
+  if (installedPkg.exitCode !== 0 || !installedPkg.stdout.trim().startsWith('package:')) {
+    throw new Error(
+      `Package ${expectedPackage} was not installed after ${method}: ${installedPkg.stdout} ${installedPkg.stderr}`,
+    );
+  }
+  return method;
+}
+
+function extractLatestPrizeWonPayload(logText) {
+  if (!logText) return null;
+  const matches = [...logText.matchAll(/TrapPrizeGate\s*:[^\n]*?PRIZE_WON_JSON=(\{[^\r\n]+\})/g)];
+  if (matches.length === 0) return null;
+  const rawJson = matches[matches.length - 1][1];
+  try {
+    return JSON.parse(rawJson);
+  } catch (err) {
+    return {
+      __parseError: err instanceof Error ? err.message : String(err),
+      __raw: rawJson,
+    };
+  }
 }
 
 function detectFatalLogIssues(logText) {
@@ -177,7 +303,9 @@ function detectFatalLogIssues(logText) {
     );
   }
   if (/UnsatisfiedLinkError|ClassNotFoundException|NoSuchMethodError|NoSuchFieldError/.test(logText)) {
-    issues.push('JNI/DEX linkage error (UnsatisfiedLinkError / ClassNotFoundException / NoSuchMethodError / NoSuchFieldError) detected');
+    issues.push(
+      'JNI/DEX linkage error (UnsatisfiedLinkError / ClassNotFoundException / NoSuchMethodError / NoSuchFieldError) detected',
+    );
   }
   if (
     /Trap startup failed|Cefpack initialization failed|Failed to initialize Cefpack content engine|Failed to load libonion_vault\.so/.test(
@@ -284,6 +412,7 @@ function extractLatestMainFrameHttpStatus(logBuffer, targetUrl) {
 async function main() {
   const apkPath = path.resolve(process.argv[2] || DEFAULT_APK);
   const outDir = path.resolve(process.argv[3] || DEFAULT_OUT_DIR);
+  const testApkPath = resolveTestApkPath(apkPath, process.argv[4]);
 
   const apiKey = (process.env.LIM_API_KEY || process.env.LIMRUN_API_KEY || '').trim();
   if (!apiKey) {
@@ -306,8 +435,10 @@ async function main() {
   }
 
   let apkBytes;
+  let testApkBytes;
   try {
     apkBytes = assertValidApk(apkPath);
+    testApkBytes = assertValidApk(testApkPath);
   } catch (err) {
     failClosedError(err instanceof Error ? err.message : String(err));
     process.exit(1);
@@ -325,6 +456,7 @@ async function main() {
   let instanceDeleted = false;
   let client = null;
   let logcatProc = null;
+  let suppressExitWatchForInstrumentation = false;
 
   const deleteInstanceSafely = async (reason) => {
     if (!instanceId || instanceDeleted) return;
@@ -364,7 +496,10 @@ async function main() {
     startedAt: new Date().toISOString(),
     apkPath,
     apkBytes,
+    testApkPath,
+    testApkBytes,
     package: PACKAGE,
+    testPackage: TEST_PACKAGE,
     activity: ACTIVITY,
     requestedSpec: {
       osVersion: LIMRUN_OS_VERSION,
@@ -376,6 +511,7 @@ async function main() {
     instance: null,
     deviceProps: {},
     installMethod: null,
+    testInstallMethod: null,
     readiness: {
       engineReady: false,
       socksEndpoint: null,
@@ -396,6 +532,18 @@ async function main() {
       onionTitleRenderedInUi: false,
       elapsedSeconds: null,
     },
+    totpPrize: {
+      testClass: PRIZE_TEST_CLASS,
+      runner: `${TEST_PACKAGE}/${TEST_RUNNER}`,
+      instrumentationPassed: false,
+      onionUrl: null,
+      roundsCompleted: 0,
+      winnerFingerprint: null,
+      prizeBanner: null,
+      decryptedCertificate: null,
+      elapsedSeconds: null,
+      passed: false,
+    },
     appPid: null,
     unexpectedExit: null,
     artifacts: {},
@@ -411,6 +559,21 @@ async function main() {
       return `${streamed}\n${latestDumpLogText}`;
     }
     return streamed || latestDumpLogText;
+  };
+
+  const handleUnexpectedAppExit = (logs, info) => {
+    if (suppressExitWatchForInstrumentation) {
+      return;
+    }
+    summary.unexpectedExit = {
+      at: new Date().toISOString(),
+      info,
+      recentLogs: Array.isArray(logs) ? logs.slice(-80) : [],
+    };
+    console.error(
+      `::error::${PACKAGE} exited unexpectedly during gate (reason=${info?.reason}): ` +
+        `${info?.crash?.shortMsg || info?.anr?.processName || 'process exited'}`,
+    );
   };
 
   try {
@@ -438,7 +601,7 @@ async function main() {
       : `trap-gate-${Date.now()}`;
 
     console.log(
-      `== [1/7] Creating Limrun cloud Android instance (Android ${LIMRUN_OS_VERSION}, model=${LIMRUN_MODEL}) ==`,
+      `== [1/8] Creating Limrun cloud Android instance (Android ${LIMRUN_OS_VERSION}, model=${LIMRUN_MODEL}) ==`,
     );
     const createStarted = Date.now();
     const instance = await limrun.androidInstances.create({
@@ -483,7 +646,7 @@ async function main() {
       `  Provisioned ${instanceId} in region=${summary.instance.region || 'auto'} (${summary.instance.createSeconds}s)`,
     );
 
-    console.log('== [2/7] Connecting InstanceClient & inspecting cloud Android device ==');
+    console.log('== [2/8] Connecting InstanceClient & inspecting cloud Android device ==');
     client = await createInstanceClient({
       apiUrl,
       adbUrl: instance?.status?.adbWebSocketUrl,
@@ -523,50 +686,30 @@ async function main() {
     await client.adbShell('wm', ['dismiss-keyguard']).catch(() => {});
 
     console.log(
-      `== [3/7] Syncing & installing ${path.basename(apkPath)} (${(apkBytes / (1024 * 1024)).toFixed(2)} MiB) ==`,
+      `== [3/8] Syncing & installing ${path.basename(apkPath)} (${(apkBytes / (1024 * 1024)).toFixed(2)} MiB) + ${path.basename(testApkPath)} (${(testApkBytes / (1024 * 1024)).toFixed(2)} MiB) ==`,
     );
     const installStarted = Date.now();
-    if (LIMRUN_INSTALL_MODE !== 'asset') {
-      try {
-        await client.syncApp(apkPath, {
-          install: true,
-          watch: false,
-          launchMode: 'None',
-        });
-        summary.installMethod = 'syncApp';
-      } catch (syncErr) {
-        if (LIMRUN_INSTALL_MODE === 'sync') {
-          throw syncErr;
-        }
-        console.warn(
-          `  syncApp fallback to assets.getOrUpload + sendAsset: ${
-            syncErr instanceof Error ? syncErr.message : String(syncErr)
-          }`,
-        );
-      }
-    }
-    if (!summary.installMethod) {
-      const asset = await limrun.assets.getOrUpload({
-        path: apkPath,
-        name: path.basename(apkPath),
-        ttl: '2h',
-      });
-      await client.sendAsset(asset.signedDownloadUrl, 300_000);
-      summary.installMethod = 'sendAsset';
-    }
-
-    const installedPkg = await client.adbShell('pm', ['path', PACKAGE]);
-    if (installedPkg.exitCode !== 0 || !installedPkg.stdout.trim().startsWith('package:')) {
-      throw new Error(
-        `Package ${PACKAGE} was not installed after ${summary.installMethod}: ${installedPkg.stdout} ${installedPkg.stderr}`,
-      );
-    }
+    summary.installMethod = await installApkOnInstance({
+      limrun,
+      client,
+      apkFilePath: apkPath,
+      expectedPackage: PACKAGE,
+    });
+    summary.testInstallMethod = await installApkOnInstance({
+      limrun,
+      client,
+      apkFilePath: testApkPath,
+      expectedPackage: TEST_PACKAGE,
+    });
     console.log(
-      `  Installed ${PACKAGE} via ${summary.installMethod} in ${((Date.now() - installStarted) / 1000).toFixed(1)}s`,
+      `  Installed ${PACKAGE} (${summary.installMethod}) and ${TEST_PACKAGE} (${summary.testInstallMethod}) in ${((Date.now() - installStarted) / 1000).toFixed(1)}s`,
     );
 
     await client
-      .adbShell('sh', ['-c', `run-as ${PACKAGE} rm -f files/crash-java.txt files/crash-native.txt 2>/dev/null || true`])
+      .adbShell('sh', [
+        '-c',
+        `run-as ${PACKAGE} rm -f files/crash-java.txt files/crash-native.txt 2>/dev/null || true`,
+      ])
       .catch(() => {});
     await client.adbShell('logcat', ['-G', '16M']).catch(() => {});
     await client.adbShell('logcat', ['-c']).catch(() => {});
@@ -587,24 +730,14 @@ async function main() {
       );
     }
 
-    console.log(`== [4/7] Launching ${PACKAGE} under ActivityManager crash/ANR watch ==`);
+    console.log(`== [4/8] Launching ${PACKAGE} under ActivityManager crash/ANR watch ==`);
     await client.launchApp(PACKAGE, {
       mode: 'RelaunchIfRunning',
-      onExit: (logs, info) => {
-        summary.unexpectedExit = {
-          at: new Date().toISOString(),
-          info,
-          recentLogs: Array.isArray(logs) ? logs.slice(-80) : [],
-        };
-        console.error(
-          `::error::${PACKAGE} exited unexpectedly during gate (reason=${info?.reason}): ` +
-            `${info?.crash?.shortMsg || info?.anr?.processName || 'process exited'}`,
-        );
-      },
+      onExit: handleUnexpectedAppExit,
     });
 
     console.log(
-      `== [5/7] Waiting up to ${BOOT_WAIT_SECONDS}s for Cefpack engine + ov_tor SOCKS5 + Arti Tor bootstrap ==`,
+      `== [5/8] Waiting up to ${BOOT_WAIT_SECONDS}s for Cefpack engine + ov_tor SOCKS5 + Arti Tor bootstrap ==`,
     );
     const bootLoopStarted = Date.now();
     while ((Date.now() - bootLoopStarted) / 1000 < BOOT_WAIT_SECONDS) {
@@ -633,8 +766,14 @@ async function main() {
         summary.readiness.torBootstrapped = true;
       }
 
-      if (!summary.readiness.torBootstrapped && summary.readiness.engineReady && summary.readiness.socksEndpoint) {
-        const treeProbe = await client.getElementTree({ waitForIdleTimeoutMs: 1000 }).catch(() => null);
+      if (
+        !summary.readiness.torBootstrapped &&
+        summary.readiness.engineReady &&
+        summary.readiness.socksEndpoint
+      ) {
+        const treeProbe = await client
+          .getElementTree({ waitForIdleTimeoutMs: 1000 })
+          .catch(() => null);
         if (treeProbe && /\bTor ready\b/.test(treeProbe.xml || '')) {
           summary.readiness.torBootstrapped = true;
         }
@@ -670,7 +809,9 @@ async function main() {
       );
     }
 
-    const startTree = await client.getElementTree({ waitForIdleTimeoutMs: 2500 }).catch(() => null);
+    const startTree = await client
+      .getElementTree({ waitForIdleTimeoutMs: 2500 })
+      .catch(() => null);
     if (startTree) {
       if (detectCrashScreenInTree(startTree)) {
         summary.failures.push('OvCrashScreen was rendered on startup instead of BrowserScreen');
@@ -705,7 +846,7 @@ async function main() {
       summary.failures.length === 0 &&
       !summary.unexpectedExit
     ) {
-      console.log(`== [6/7] Navigating live over Tor to ${ONION_TEST_URL} ==`);
+      console.log(`== [6/8] Navigating live over Tor to ${ONION_TEST_URL} ==`);
       const onionStarted = Date.now();
 
       let tappedCard = false;
@@ -835,7 +976,6 @@ async function main() {
                       .tap({ x: resetNode.parsedBounds.centerX, y: resetNode.parsedBounds.centerY })
                       .catch(() => {});
                     await sleep(600);
-                    // 2-tap confirm on PhotoSoapSideRemote ('Confirm New ID?')
                     await client
                       .tap({ x: resetNode.parsedBounds.centerX, y: resetNode.parsedBounds.centerY })
                       .catch(() => {});
@@ -939,7 +1079,8 @@ async function main() {
         );
       }
 
-      finalTree = (await client.getElementTree({ waitForIdleTimeoutMs: 2000 }).catch(() => null)) || finalTree;
+      finalTree =
+        (await client.getElementTree({ waitForIdleTimeoutMs: 2000 }).catch(() => null)) || finalTree;
       if (finalTree) {
         const uiXmlPath = path.join(outDir, 'limrun-ui-tree.xml');
         fs.writeFileSync(uiXmlPath, finalTree.xml || '', 'utf8');
@@ -954,7 +1095,183 @@ async function main() {
       summary.artifacts.uiTreeXml = uiXmlPath;
     }
 
-    console.log('== [7/7] Running final forensic crash, tombstone, DropBox & PID audit ==');
+    if (summary.failures.length === 0 && !summary.unexpectedExit) {
+      console.log(
+        `== [7/8] Running mandatory 3-round OpenPGP TOTP .onion Prize Gate (${PRIZE_TEST_CLASS}) ==`,
+      );
+      const prizeStarted = Date.now();
+      const prizeScreenshotPath = path.join(outDir, 'limrun-prize.png');
+
+      // Android ActivityManager stops & restarts the target package around `am instrument`;
+      // suppress the earlier launchApp exit listener while instrumentation owns the process.
+      suppressExitWatchForInstrumentation = true;
+      await client.adbShell('rm', ['-f', DEVICE_PRIZE_SCREENSHOT_PATH]).catch(() => {});
+      await client.adbShell('input', ['keyevent', 'KEYCODE_WAKEUP']).catch(() => {});
+      await client.adbShell('wm', ['dismiss-keyguard']).catch(() => {});
+
+      const instrumentArgs = ['instrument', '-w', '-r', '-e', 'class', PRIZE_TEST_CLASS];
+      if (TOTP_ONION_URL) {
+        instrumentArgs.push('-e', 'totpOnionUrl', TOTP_ONION_URL);
+      }
+      instrumentArgs.push(`${TEST_PACKAGE}/${TEST_RUNNER}`);
+
+      let liveWindowShotCaptured = false;
+      let instrumentDone = false;
+      const liveShotWatcher = (async () => {
+        while (!instrumentDone) {
+          if (streamedLogLines.some((line) => line.includes('PRIZE_WON_JSON='))) {
+            try {
+              await saveScreenshot(client, prizeScreenshotPath);
+              liveWindowShotCaptured = true;
+            } catch {}
+            return;
+          }
+          await sleep(450);
+        }
+      })();
+
+      let instRes;
+      try {
+        instRes = await client.adbShell('am', instrumentArgs, {
+          timeoutMs: PRIZE_WAIT_SECONDS * 1000,
+        });
+      } finally {
+        instrumentDone = true;
+        await liveShotWatcher.catch(() => {});
+      }
+
+      summary.totpPrize.elapsedSeconds = Number(
+        ((Date.now() - prizeStarted) / 1000).toFixed(1),
+      );
+
+      const instCombined = `${instRes?.stdout || ''}\n${instRes?.stderr || ''}`;
+      const instOk =
+        instRes?.exitCode === 0 &&
+        /\bOK \(\d+ tests?\)/.test(instCombined) &&
+        !/FAILURES!!!|INSTRUMENTATION_FAILED|INSTRUMENTATION_ABORTED|Process crashed/i.test(
+          instCombined,
+        );
+      summary.totpPrize.instrumentationPassed = instOk;
+      if (!instOk) {
+        summary.failures.push(
+          `${PRIZE_TEST_CLASS} did not pass 'OK (1 test)' (exit=${instRes?.exitCode}): ${instCombined
+            .trim()
+            .slice(-600)}`,
+        );
+      }
+
+      // Prefer the frame-accurate screencap written by LiveOnionPgpTotpPrizeTest while
+      // DecryptedPlaintextHardwarePod is open on screen; otherwise use live/current screenshot.
+      let prizePngBytes = await tryPullDevicePngViaBase64(
+        client,
+        DEVICE_PRIZE_SCREENSHOT_PATH,
+        prizeScreenshotPath,
+      );
+      if (!prizePngBytes && liveWindowShotCaptured && fs.existsSync(prizeScreenshotPath)) {
+        prizePngBytes = fs.statSync(prizeScreenshotPath).size;
+      }
+      if (!prizePngBytes) {
+        try {
+          prizePngBytes = await saveScreenshot(client, prizeScreenshotPath);
+        } catch (shotErr) {
+          summary.failures.push(
+            `Failed to capture prize screenshot (${prizeScreenshotPath}): ${
+              shotErr instanceof Error ? shotErr.message : String(shotErr)
+            }`,
+          );
+        }
+      }
+      if (prizePngBytes) {
+        summary.artifacts.prizeScreenshot = prizeScreenshotPath;
+        console.log(
+          `  Captured TOTP prize screenshot: ${prizeScreenshotPath} (${prizePngBytes} bytes)`,
+        );
+      }
+
+      const postPrizeDump = await client
+        .adbShell('logcat', ['-d', '-v', 'threadtime'], { timeoutMs: 25_000 })
+        .catch(() => ({ stdout: '' }));
+      if (postPrizeDump.stdout) {
+        latestDumpLogText = postPrizeDump.stdout;
+      }
+
+      const prizePayload =
+        extractLatestPrizeWonPayload(latestDumpLogText) ??
+        extractLatestPrizeWonPayload(streamedLogLines.join('\n'));
+      if (!prizePayload) {
+        summary.failures.push(
+          `Missing mandatory 'TrapPrizeGate: PRIZE_WON_JSON=...' logcat record from ${PRIZE_TEST_CLASS}`,
+        );
+      } else if (prizePayload.__parseError) {
+        summary.failures.push(
+          `Malformed PRIZE_WON_JSON emitted by ${PRIZE_TEST_CLASS}: ${prizePayload.__parseError}`,
+        );
+      } else {
+        const wonUrl = String(prizePayload.onionUrl || '').trim();
+        const rounds = Number(prizePayload.roundsCompleted ?? 0);
+        const banner = String(prizePayload.prizeBanner || '').trim();
+        const cert = String(prizePayload.decryptedCertificate || '').trim();
+        const winnerFp = String(prizePayload.winnerFingerprint || '').trim() || null;
+
+        summary.totpPrize.onionUrl = wonUrl || null;
+        summary.totpPrize.roundsCompleted = rounds;
+        summary.totpPrize.winnerFingerprint = winnerFp;
+        summary.totpPrize.prizeBanner = banner || null;
+        summary.totpPrize.decryptedCertificate = cert || null;
+
+        if (!VALID_V3_ONION_URL_RE.test(wonUrl)) {
+          summary.failures.push(
+            `PRIZE_WON_JSON onionUrl is not a valid Tor v3 .onion URL: '${wonUrl}'`,
+          );
+        }
+        if (rounds !== 3) {
+          summary.failures.push(
+            `PRIZE_WON_JSON roundsCompleted must equal 3 (got ${JSON.stringify(prizePayload.roundsCompleted)})`,
+          );
+        }
+        if (!banner) {
+          summary.failures.push('PRIZE_WON_JSON prizeBanner is empty');
+        }
+        if (!cert || (banner && !cert.includes(banner))) {
+          summary.failures.push(
+            'PRIZE_WON_JSON decryptedCertificate is empty or does not match won prizeBanner',
+          );
+        }
+
+        if (
+          instOk &&
+          VALID_V3_ONION_URL_RE.test(wonUrl) &&
+          rounds === 3 &&
+          banner.length > 0 &&
+          cert.includes(banner) &&
+          Boolean(summary.artifacts.prizeScreenshot)
+        ) {
+          summary.totpPrize.passed = true;
+          console.log('== [PRIZE WON] Trap completed 3/3 OpenPGP TOTP rounds over Tor! ==');
+          console.log(`  Onion Service : ${wonUrl}`);
+          console.log(`  Prize Banner  : ${banner}`);
+          console.log(`  Certificate   : ${cert.replace(/\s*\n\s*/g, ' | ')}`);
+          console.log(`  Screenshot    : ${prizeScreenshotPath}`);
+        }
+      }
+
+      // ActivityManager force-stops the target app when `am instrument` finishes; relaunch
+      // cleanly so final PID & live stability audit verifies the post-gate browser process.
+      suppressExitWatchForInstrumentation = false;
+      await client.launchApp(PACKAGE, {
+        mode: 'RelaunchIfRunning',
+        onExit: handleUnexpectedAppExit,
+      });
+      for (let waitAttempt = 0; waitAttempt < 10; waitAttempt += 1) {
+        const probePid = await client.adbShell('pidof', [PACKAGE]).catch(() => ({ stdout: '' }));
+        if (probePid.stdout.trim()) {
+          break;
+        }
+        await sleep(500);
+      }
+    }
+
+    console.log('== [8/8] Running final forensic crash, tombstone, DropBox & PID audit ==');
     try {
       logcatProc?.stop();
     } catch {}
@@ -1053,6 +1370,7 @@ async function main() {
       `(${summary.deviceProps.abi}, pageSize=${summary.deviceProps.pageSize}): Cefpack ready, ` +
       `ov_tor SOCKS5=${summary.readiness.socksEndpoint}, Arti bootstrapped, ` +
       `${SKIP_ONION_SMOKE ? 'onion smoke skipped' : `isolated ${ONION_EXPECTED_ISOLATION} .onion loaded`}, ` +
+      `3/3 OpenPGP TOTP rounds won (PRIZE="${summary.totpPrize.prizeBanner}"), ` +
       `zero crashes/tombstones/ANRs.`,
   );
   process.exit(0);

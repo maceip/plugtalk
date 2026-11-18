@@ -1,0 +1,943 @@
+package dev.onionvault
+
+import android.app.KeyguardManager
+import android.os.ParcelFileDescriptor
+import android.os.SystemClock
+import android.util.Log
+import android.view.WindowManager
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performImeAction
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.unit.dp
+import androidx.test.espresso.Espresso
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import dev.cefpack.android.CefpackSession
+import dev.onionvault.ui.TrapPreferences
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileOutputStream
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
+import org.json.JSONArray
+import org.json.JSONObject
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+
+/**
+ * Mandatory live Tor v3 `.onion` 3-round OpenPGP TOTP Prize Gate (`TrapPrizeGate`).
+ *
+ * Cold-boots [MainActivity] with JavaScript completely disabled, waits for real embedded
+ * Arti Tor bootstrap, generates a fresh ephemeral Sequoia OpenPGP keypair wrapped in
+ * Android Keystore via `KeyringHardwarePod`, navigates over Tor to the DigitalOcean
+ * OpenPGP TOTP `.onion` hidden service, inserts the public key via `"Insert My PubKey"`,
+ * decrypts all 3 OpenPGP-encrypted TOTP challenge rounds through Trap's hardware UI
+ * (`OpenPgpRockerPod` -> `DecryptedPlaintextHardwarePod`), submits all 3 answers via
+ * zero-JS HTML `<form method="POST">` over Tor, verifies Round 3 prize unlock, displays
+ * the decrypted OpenPGP Prize Certificate on screen, captures `/data/local/tmp/trap-prize-won.png`,
+ * and logs `PRIZE_WON_JSON=...` for fail-closed verification.
+ */
+@RunWith(AndroidJUnit4::class)
+class LiveOnionPgpTotpPrizeTest {
+
+    companion object {
+        const val TAG = "TrapPrizeGate"
+        const val DEVICE_PRIZE_SCREENSHOT_PATH = "/data/local/tmp/trap-prize-won.png"
+
+        /**
+         * Live DigitalOcean Tor v3 `.onion` OpenPGP TOTP service URL (overridable via
+         * `-e totpOnionUrl http://<56-char>.onion/`).
+         */
+        const val DEFAULT_TOTP_ONION_URL: String =
+            "http://b36xrf3dwtizfea3z6pl2i2el2vzraju4gdddben5eqpicdswuvfgoyd.onion/"
+
+        private val SIX_DIGIT_TOTP_REGEX = Regex("\\b(\\d{6})\\b")
+    }
+
+    @get:Rule
+    val composeRule = createAndroidComposeRule<MainActivity>()
+
+    @Test
+    fun cold_boot_tor_three_round_openpgp_totp_unlocks_and_decrypts_live_onion_prize() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val args = InstrumentationRegistry.getArguments()
+        val targetOnionUrl = args.getString("totpOnionUrl")
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: DEFAULT_TOTP_ONION_URL
+        val prizeHoldMs = args.getString("prizeHoldMs")
+            ?.trim()
+            ?.toLongOrNull()
+            ?.coerceIn(500L, 15_000L)
+            ?: 2_500L
+
+        assertTrue(
+            "totpOnionUrl must be configured to a live v3 .onion URL",
+            targetOnionUrl.isNotBlank(),
+        )
+
+        wakeAndUnlockDisplay(instrumentation)
+        val activity = composeRule.activity
+        activity.runOnUiThread {
+            activity.setShowWhenLocked(true)
+            activity.setTurnScreenOn(true)
+            activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            val km = activity.getSystemService(KeyguardManager::class.java)
+            km?.requestDismissKeyguard(activity, null)
+        }
+
+        assertTrue("Native libonion_vault.so must be loaded", OvNative.isLoaded)
+        assertTrue("Cefpack content engine must be ready", TrapApplication.isEngineReady)
+
+        // Strict fail-closed policy check: target MUST be a valid Tor v3 .onion URL (zero clearnet backdoors).
+        val policy = OvNative.parseUrlPolicy(OvNative.nativeCheckUrlPolicy(targetOnionUrl, true))
+        assertTrue(
+            "Prize gate target URL must pass strict .onion-only policy ($targetOnionUrl): ${policy.reason}",
+            policy.allowed && policy.isOnion,
+        )
+
+        val prefs = TrapPreferences(activity)
+        val previousBiometric = prefs.requireBiometric
+        val previousDefaultFp = prefs.defaultKeyFingerprint
+        OvNative.nativeSetRequireBiometric(false)
+        prefs.requireBiometric = false
+
+        // 1. Verify cold-start MetaToolsBrowserShell chrome & wait up to 90s for real Arti Tor bootstrap.
+        composeRule.onNodeWithTag("browser_screen").assertIsDisplayed()
+        composeRule.onNodeWithTag("metatools_browser_shell").assertIsDisplayed()
+        composeRule.onNodeWithTag("crt_address_pod").assertIsDisplayed()
+        composeRule.onNodeWithTag("pgp_rocker_pod").assertIsDisplayed()
+        composeRule.onNodeWithTag("tor_orb_pod").assertIsDisplayed()
+
+        val torBootDeadline = SystemClock.uptimeMillis() + 90_000L
+        var lastTorSnapshot = OvNative.TorStatusSnapshot()
+        var boundSocksPort = 0
+        while (SystemClock.uptimeMillis() < torBootDeadline) {
+            lastTorSnapshot = OvNative.parseTorStatus(OvNative.nativeTorStatusJson("about:blank"))
+            val resolvedAddr = lastTorSnapshot.socksAddr.ifBlank { OvNative.nativeSocksProxy() }.trim()
+            boundSocksPort = extractSocksPort(resolvedAddr)
+            if (lastTorSnapshot.bootstrapped && boundSocksPort > 1) {
+                break
+            }
+            SystemClock.sleep(400L)
+        }
+        assertTrue(
+            "Arti Tor failed to bootstrap within 90s (percent=${lastTorSnapshot.bootstrapPercent}, " +
+                "stage=${lastTorSnapshot.bootstrapSummary}, socks=${lastTorSnapshot.socksAddr})",
+            lastTorSnapshot.bootstrapped && boundSocksPort > 1,
+        )
+        Log.i(TAG, "Arti Tor bootstrapped on loopback SOCKS5 port $boundSocksPort")
+
+        // Ensure live CefpackSession is attached and zero-JS enforcement is active.
+        composeRule.waitUntil(timeoutMillis = 15_000L) {
+            activity.activeCefpackSessionForTest() != null
+        }
+        val browser = activity.activeCefpackSessionForTest()
+        assertNotNull("Active CefpackSession must be non-null", browser)
+        enforceZeroJsCdp(activity, browser!!)
+
+        // 2. Generate a fresh ephemeral Sequoia OpenPGP keypair via Trap's real KeyringHardwarePod UI.
+        val beforeFingerprints = OvNative.parseKeys(OvNative.nativeListKeysJson())
+            .map { it.fingerprint }
+            .toSet()
+        val challengerEmail = "prize-${System.currentTimeMillis()}@onion"
+        val challengerUserId = "Trap Prize Challenger <$challengerEmail>"
+
+        composeRule.onNodeWithTag("pgp_rocker_pod").performClick()
+        composeRule.waitUntil(timeoutMillis = 10_000L) {
+            composeRule.onAllNodesWithTag("keyring_sheet").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("keyring_sheet").assertIsDisplayed()
+        composeRule.onNodeWithText("Generate").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("keygen_userid_input").performTextInput(challengerUserId)
+        Espresso.closeSoftKeyboard()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("keygen_submit_button").performClick()
+
+        composeRule.waitUntil(timeoutMillis = 20_000L) {
+            OvNative.parseKeys(OvNative.nativeListKeysJson()).any {
+                it.userId.contains(challengerEmail) &&
+                    it.fingerprint !in beforeFingerprints &&
+                    it.hasSecret
+            } && composeRule.onAllNodesWithText(challengerUserId)
+                .fetchSemanticsNodes()
+                .isNotEmpty()
+        }
+        val createdKey = OvNative.parseKeys(OvNative.nativeListKeysJson()).first {
+            it.userId.contains(challengerEmail) &&
+                it.fingerprint !in beforeFingerprints &&
+                it.hasSecret
+        }
+        assertFalse("Generated Sequoia key fingerprint must be non-blank", createdKey.fingerprint.isBlank())
+
+        try {
+            val setDefaultTag = "key_set_default_${createdKey.fingerprint}"
+            if (composeRule.onAllNodesWithTag(setDefaultTag).fetchSemanticsNodes().isNotEmpty()) {
+                composeRule.onNodeWithTag(setDefaultTag).performScrollTo().performClick()
+                composeRule.waitForIdle()
+            }
+            composeRule.onNodeWithTag("sheet_close_button").performClick()
+            composeRule.waitUntil(timeoutMillis = 5_000L) {
+                composeRule.onAllNodesWithTag("keyring_sheet").fetchSemanticsNodes().isEmpty()
+            }
+
+            // 3. Enter the live DigitalOcean .onion URL into Trap's RecessedCrtAddressPod and submit.
+            composeRule.onNodeWithTag("crt_address_pod").performClick()
+            composeRule.waitUntil(timeoutMillis = 5_000L) {
+                composeRule.onAllNodesWithTag("crt_address_input").fetchSemanticsNodes().isNotEmpty()
+            }
+            composeRule.onNodeWithTag("crt_address_input").performTextReplacement(targetOnionUrl)
+            composeRule.onNodeWithTag("crt_address_input").performImeAction()
+
+            // 4. Enrollment (GET / -> POST /enroll): wait up to 120s for .onion rendezvous + "Insert My PubKey" pill.
+            awaitEnrollmentPageAndPubKeyPill(
+                activity = activity,
+                browser = browser,
+                targetOnionUrl = targetOnionUrl,
+                timeoutMs = 120_000L,
+            )
+            composeRule.onNodeWithTag("pgp_field_overlay").assertIsDisplayed()
+            composeRule.onAllNodesWithText("Insert My PubKey")[0].performClick()
+
+            composeRule.waitUntil(timeoutMillis = 20_000L) {
+                composeRule.onAllNodesWithText("Inserted public key and verified DOM field")
+                    .fetchSemanticsNodes()
+                    .isNotEmpty()
+            }
+            val pubKeyFieldText = awaitControlValueContains(
+                activity = activity,
+                browser = browser,
+                elementId = "pubkey",
+                expectedSubstring = "-----BEGIN PGP PUBLIC KEY BLOCK-----",
+                timeoutMs = 10_000L,
+            )
+            assertTrue(
+                "Expected ASCII-armored PGP public key in #pubkey, got len=${pubKeyFieldText.length}",
+                pubKeyFieldText.contains("-----BEGIN PGP PUBLIC KEY BLOCK-----") &&
+                    pubKeyFieldText.contains("-----END PGP PUBLIC KEY BLOCK-----"),
+            )
+
+            clickElementByIdZeroJsCdp(activity, browser, "enroll-submit")
+
+            // 5. Complete Rounds 1, 2, and 3 (POST /verify x 3) strictly via Trap's OpenPGP UI + zero-JS CDP.
+            val seenChallengeCiphertexts = HashSet<String>()
+            val submittedTotpCodes = ArrayList<String>(3)
+
+            for (expectedRound in 1..3) {
+                val challengeDoc = awaitChallengeRoundDom(
+                    activity = activity,
+                    browser = browser,
+                    expectedRound = expectedRound,
+                    timeoutMs = 60_000L,
+                )
+                val challengeCiphertext = readElementVisibleTextById(challengeDoc, "pgp-challenge").trim()
+                assertTrue(
+                    "Round $expectedRound #pgp-challenge must contain armored PGP MESSAGE",
+                    challengeCiphertext.contains("-----BEGIN PGP MESSAGE-----") &&
+                        challengeCiphertext.contains("-----END PGP MESSAGE-----"),
+                )
+                assertTrue(
+                    "Round $expectedRound must emit a fresh OpenPGP ciphertext distinct from prior rounds",
+                    seenChallengeCiphertexts.add(challengeCiphertext),
+                )
+
+                val decryptedPlaintext = decryptCurrentPageBlockViaRockerUi(
+                    activity = activity,
+                    browser = browser,
+                    expectedSubstring = "ROUND $expectedRound OF 3",
+                    timeoutMs = 25_000L,
+                )
+                assertTrue(
+                    "Decrypted plaintext must confirm ROUND $expectedRound OF 3: $decryptedPlaintext",
+                    decryptedPlaintext.contains("ROUND $expectedRound OF 3"),
+                )
+                val codeMatch = SIX_DIGIT_TOTP_REGEX.find(decryptedPlaintext)
+                assertNotNull(
+                    "Decrypted plaintext in DecryptedPlaintextHardwarePod must contain 6-digit TOTP code: $decryptedPlaintext",
+                    codeMatch,
+                )
+                val totpCode = codeMatch!!.groupValues[1]
+                submittedTotpCodes.add(totpCode)
+                Log.i(TAG, "Decrypted Round $expectedRound/3 TOTP challenge via DecryptedPlaintextHardwarePod")
+
+                // Close DecryptedPlaintextHardwarePod before interacting with the page form.
+                composeRule.onNodeWithTag("plaintext_close").performClick()
+                composeRule.waitUntil(timeoutMillis = 5_000L) {
+                    composeRule.onAllNodesWithTag("plaintext_sheet").fetchSemanticsNodes().isEmpty()
+                }
+
+                // Write the 6-digit TOTP code into <input id="totp-code"> via zero-JS CdpDomPgpController
+                // and submit <button id="verify-submit"> via zero-JS CDP mouse dispatch.
+                writeInputByIdZeroJs(
+                    activity = activity,
+                    browser = browser,
+                    elementId = "totp-code",
+                    value = totpCode,
+                )
+                clickElementByIdZeroJsCdp(activity, browser, "verify-submit")
+            }
+
+            assertEquals("All 3 TOTP rounds must be submitted", 3, submittedTotpCodes.size)
+
+            // 6. Prize Verification (Round 3 won!): verify data-won="true", non-blank #prize-banner,
+            //    and pull OpenPgpRockerPod upward on <pre id="pgp-prize"> so DecryptedPlaintextHardwarePod
+            //    remains visibly open displaying the decrypted OpenPGP Prize Certificate.
+            val wonDoc = awaitPrizeWonDom(
+                activity = activity,
+                browser = browser,
+                timeoutMs = 60_000L,
+            )
+            val prizeBanner = readElementVisibleTextById(wonDoc, "prize-banner").trim()
+            assertTrue("Won #prize-banner text in DOM must be non-blank", prizeBanner.isNotBlank())
+
+            val armoredPrizeCert = readElementVisibleTextById(wonDoc, "pgp-prize").trim()
+            assertTrue(
+                "Won #pgp-prize must contain an ASCII-armored OpenPGP message",
+                armoredPrizeCert.contains("-----BEGIN PGP MESSAGE-----") &&
+                    armoredPrizeCert.contains("-----END PGP MESSAGE-----"),
+            )
+
+            val decryptedCertificate = decryptCurrentPageBlockViaRockerUi(
+                activity = activity,
+                browser = browser,
+                expectedSubstring = prizeBanner,
+                timeoutMs = 25_000L,
+            )
+            composeRule.onNodeWithTag("plaintext_sheet").assertIsDisplayed()
+            assertTrue(
+                "Decrypted OpenPGP Prize Certificate must include won prize banner",
+                decryptedCertificate.contains(prizeBanner),
+            )
+            assertTrue(
+                "Decrypted OpenPGP Prize Certificate must bind winner key fingerprint ${createdKey.fingerprint}",
+                decryptedCertificate.contains(createdKey.fingerprint, ignoreCase = true),
+            )
+
+            // Allow RenderThread & SurfaceFlinger to commit the frame with plaintext_sheet open,
+            // then capture the frame-accurate PNG screenshot before logging PRIZE_WON_JSON.
+            composeRule.waitForIdle()
+            SystemClock.sleep(650L)
+            capturePrizeScreenshotToDeviceTmp(instrumentation, activity)
+
+            val prizePayload = JSONObject()
+                .put("onionUrl", targetOnionUrl)
+                .put("roundsCompleted", 3)
+                .put("winnerFingerprint", createdKey.fingerprint)
+                .put("prizeBanner", prizeBanner)
+                .put("decryptedCertificate", decryptedCertificate)
+            Log.i(TAG, "PRIZE_WON_JSON=$prizePayload")
+
+            // Keep DecryptedPlaintextHardwarePod visibly open briefly for outer gate screenshot capture.
+            SystemClock.sleep(prizeHoldMs)
+        } finally {
+            runCatching { OvNative.nativeDeleteKey(createdKey.fingerprint) }
+            prefs.defaultKeyFingerprint = previousDefaultFp
+            prefs.requireBiometric = previousBiometric
+            runCatching { OvNative.nativeSetRequireBiometric(previousBiometric) }
+        }
+    }
+
+    private fun awaitEnrollmentPageAndPubKeyPill(
+        activity: MainActivity,
+        browser: CefpackSession,
+        targetOnionUrl: String,
+        timeoutMs: Long,
+    ) {
+        val deadline = SystemClock.uptimeMillis() + timeoutMs
+        var lastStage = ""
+        var lastScanKickMs = 0L
+        while (SystemClock.uptimeMillis() < deadline) {
+            val liveBrowser = activity.activeCefpackSessionForTest() ?: browser
+            val domJson = queryPiercedDomJson(activity, liveBrowser)
+            val root = parseDomRoot(domJson)
+            if (root != null) {
+                val statusNode = findElementById(root, "totp-status")
+                val pubkeyNode = findElementById(root, "pubkey")
+                val submitNode = findElementById(root, "enroll-submit")
+                lastStage = extractAttribute(statusNode?.optJSONArray("attributes"), "data-stage")
+
+                if (pubkeyNode != null && submitNode != null) {
+                    val now = SystemClock.uptimeMillis()
+                    if (now - lastScanKickMs >= 1_200L) {
+                        lastScanKickMs = now
+                        val tabId = activity.activeTabIdForTest()
+                        if (tabId != null) {
+                            activity.cdpControllerForTest()?.attachAndScan(tabId, liveBrowser, targetOnionUrl)
+                        }
+                    }
+                    val hasInsertPill = runCatching {
+                        composeRule.onAllNodesWithText("Insert My PubKey")
+                            .fetchSemanticsNodes()
+                            .isNotEmpty()
+                    }.getOrDefault(false)
+                    if (hasInsertPill) {
+                        return
+                    }
+                }
+            }
+            SystemClock.sleep(350L)
+        }
+        fail(
+            "Timed out after ${timeoutMs}ms waiting for .onion enrollment page ($targetOnionUrl) " +
+                "and 'Insert My PubKey' Compose pill (lastStage='$lastStage')",
+        )
+    }
+
+    private fun awaitChallengeRoundDom(
+        activity: MainActivity,
+        browser: CefpackSession,
+        expectedRound: Int,
+        timeoutMs: Long,
+    ): String {
+        val deadline = SystemClock.uptimeMillis() + timeoutMs
+        var lastStage = ""
+        var lastRound = ""
+        while (SystemClock.uptimeMillis() < deadline) {
+            val liveBrowser = activity.activeCefpackSessionForTest() ?: browser
+            val domJson = queryPiercedDomJson(activity, liveBrowser)
+            val root = parseDomRoot(domJson)
+            if (root != null) {
+                val statusNode = findElementById(root, "totp-status")
+                if (statusNode != null) {
+                    val attrs = statusNode.optJSONArray("attributes")
+                    lastStage = extractAttribute(attrs, "data-stage")
+                    lastRound = extractAttribute(attrs, "data-round")
+                    if (lastStage.equals("failed", ignoreCase = true)) {
+                        val failBody = readElementVisibleTextById(domJson, "totp-status")
+                        fail("Hidden service rejected TOTP submission on round $expectedRound: $failBody")
+                    }
+                    if (lastStage == "challenge" &&
+                        lastRound == expectedRound.toString() &&
+                        findElementById(root, "pgp-challenge") != null &&
+                        findElementById(root, "totp-code") != null &&
+                        findElementById(root, "verify-submit") != null
+                    ) {
+                        return domJson
+                    }
+                }
+            }
+            SystemClock.sleep(250L)
+        }
+        fail(
+            "Timed out waiting for challenge round $expectedRound DOM " +
+                "(lastStage='$lastStage', lastRound='$lastRound')",
+        )
+        return ""
+    }
+
+    private fun awaitPrizeWonDom(
+        activity: MainActivity,
+        browser: CefpackSession,
+        timeoutMs: Long,
+    ): String {
+        val deadline = SystemClock.uptimeMillis() + timeoutMs
+        var lastStage = ""
+        var lastRound = ""
+        var lastWon = ""
+        while (SystemClock.uptimeMillis() < deadline) {
+            val liveBrowser = activity.activeCefpackSessionForTest() ?: browser
+            val domJson = queryPiercedDomJson(activity, liveBrowser)
+            val root = parseDomRoot(domJson)
+            if (root != null) {
+                val statusNode = findElementById(root, "totp-status")
+                if (statusNode != null) {
+                    val attrs = statusNode.optJSONArray("attributes")
+                    lastStage = extractAttribute(attrs, "data-stage")
+                    lastRound = extractAttribute(attrs, "data-round")
+                    lastWon = extractAttribute(attrs, "data-won")
+                    if (lastStage.equals("failed", ignoreCase = true)) {
+                        val failBody = readElementVisibleTextById(domJson, "totp-status")
+                        fail("Hidden service rejected Round 3 TOTP verification: $failBody")
+                    }
+                    if (lastWon.equals("true", ignoreCase = true) &&
+                        lastStage == "won" &&
+                        lastRound == "3" &&
+                        findElementById(root, "prize-banner") != null &&
+                        findElementById(root, "pgp-prize") != null
+                    ) {
+                        return domJson
+                    }
+                }
+            }
+            SystemClock.sleep(250L)
+        }
+        fail(
+            "Timed out waiting for Round 3 prize won DOM " +
+                "(lastStage='$lastStage', lastRound='$lastRound', lastWon='$lastWon')",
+        )
+        return ""
+    }
+
+    private fun decryptCurrentPageBlockViaRockerUi(
+        activity: MainActivity,
+        browser: CefpackSession,
+        expectedSubstring: String,
+        timeoutMs: Long,
+    ): String {
+        val deadline = SystemClock.uptimeMillis() + timeoutMs
+        var lastSheetText = ""
+
+        while (SystemClock.uptimeMillis() < deadline) {
+            val liveBrowser = activity.activeCefpackSessionForTest() ?: browser
+            val tabId = activity.activeTabIdForTest()
+            if (tabId != null) {
+                activity.cdpControllerForTest()?.attachAndScan(
+                    tabId = tabId,
+                    browser = liveBrowser,
+                    currentUrl = liveBrowser.url.orEmpty(),
+                )
+            }
+
+            // Wait for CdpDomPgpController to classify the current armored block so OpenPgpRockerPod arms.
+            val pillDeadline = minOf(deadline, SystemClock.uptimeMillis() + 4_000L)
+            while (SystemClock.uptimeMillis() < pillDeadline) {
+                val armed = runCatching {
+                    composeRule.onAllNodesWithText("Decrypt Block")
+                        .fetchSemanticsNodes()
+                        .isNotEmpty()
+                }.getOrDefault(false)
+                if (armed) break
+                SystemClock.sleep(150L)
+            }
+            composeRule.waitForIdle()
+            SystemClock.sleep(180L)
+
+            // Pull OpenPgpRockerPod's mechanical latch upward (`dy <= -18.dp`) to decrypt primaryArmoredBlock.
+            composeRule.onNodeWithTag("pgp_rocker_pod").performTouchInput {
+                down(center)
+                moveBy(Offset(0f, -28.dp.toPx()))
+                up()
+            }
+
+            val sheetWaitDeadline = minOf(deadline, SystemClock.uptimeMillis() + 5_000L)
+            var sheetVisible = false
+            while (SystemClock.uptimeMillis() < sheetWaitDeadline) {
+                sheetVisible = runCatching {
+                    composeRule.onAllNodesWithTag("plaintext_sheet")
+                        .fetchSemanticsNodes()
+                        .isNotEmpty()
+                }.getOrDefault(false)
+                if (sheetVisible) break
+                SystemClock.sleep(120L)
+            }
+
+            if (!sheetVisible) {
+                val decryptPills = runCatching {
+                    composeRule.onAllNodesWithText("Decrypt Block").fetchSemanticsNodes().size
+                }.getOrDefault(0)
+                if (decryptPills > 0) {
+                    composeRule.onAllNodesWithText("Decrypt Block")[0].performClick()
+                    val fallbackDeadline = minOf(deadline, SystemClock.uptimeMillis() + 4_000L)
+                    while (SystemClock.uptimeMillis() < fallbackDeadline) {
+                        sheetVisible = runCatching {
+                            composeRule.onAllNodesWithTag("plaintext_sheet")
+                                .fetchSemanticsNodes()
+                                .isNotEmpty()
+                        }.getOrDefault(false)
+                        if (sheetVisible) break
+                        SystemClock.sleep(120L)
+                    }
+                }
+            }
+
+            if (sheetVisible) {
+                composeRule.waitForIdle()
+                lastSheetText = readSemanticsTextUnderTag("plaintext_sheet")
+                if (lastSheetText.contains(expectedSubstring)) {
+                    return lastSheetText
+                }
+                // Stale block from previous DOM scan still in flight; dismiss and re-pull once updated.
+                composeRule.onNodeWithTag("plaintext_close").performClick()
+                composeRule.waitUntil(timeoutMillis = 5_000L) {
+                    composeRule.onAllNodesWithTag("plaintext_sheet").fetchSemanticsNodes().isEmpty()
+                }
+            }
+
+            SystemClock.sleep(300L)
+        }
+
+        fail(
+            "Timed out decrypting current OpenPGP block expecting '$expectedSubstring' " +
+                "(lastSheetText='${lastSheetText.take(200)}')",
+        )
+        return ""
+    }
+
+    private fun readSemanticsTextUnderTag(tag: String): String {
+        val rootNode = composeRule.onNodeWithTag(tag, useUnmergedTree = true).fetchSemanticsNode()
+        val lines = ArrayList<String>()
+        fun collect(node: SemanticsNode) {
+            node.config.getOrNull(SemanticsProperties.Text)?.forEach { annotated ->
+                if (annotated.text.isNotEmpty()) {
+                    lines.add(annotated.text)
+                }
+            }
+            node.children.forEach { collect(it) }
+        }
+        collect(rootNode)
+        return lines.joinToString("\n")
+    }
+
+    private fun writeInputByIdZeroJs(
+        activity: MainActivity,
+        browser: CefpackSession,
+        elementId: String,
+        value: String,
+    ) {
+        val liveBrowser = activity.activeCefpackSessionForTest() ?: browser
+        val domJson = queryPiercedDomJson(activity, liveBrowser)
+        val root = parseDomRoot(domJson)
+        assertNotNull("DOM root must exist when locating #$elementId", root)
+        val target = findElementById(root!!, elementId)
+        assertNotNull("Input element #$elementId must exist in DOM", target)
+
+        val nodeId = target!!.optInt("nodeId", 0)
+        val backendNodeId = target.optInt("backendNodeId", 0)
+        val controller = activity.cdpControllerForTest()
+        assertNotNull("CdpDomPgpController must be initialized", controller)
+
+        val writeLatch = CountDownLatch(1)
+        val outcomeRef = AtomicReference<CdpDomPgpController.FieldMutationOutcome?>()
+        controller!!.writeFieldValue(
+            browser = liveBrowser,
+            nodeId = nodeId,
+            backendNodeId = backendNodeId,
+            newValue = value,
+            tabId = activity.activeTabIdForTest(),
+        ) { outcome ->
+            outcomeRef.set(outcome)
+            writeLatch.countDown()
+        }
+        assertTrue("Zero-JS field write to #$elementId timed out", writeLatch.await(15, TimeUnit.SECONDS))
+        val outcome = outcomeRef.get()
+        assertNotNull("Zero-JS field write outcome missing", outcome)
+        assertTrue(
+            "Zero-JS field write to #$elementId failed verification: ${outcome!!.error}",
+            outcome.ok && outcome.verified,
+        )
+    }
+
+    private fun clickElementByIdZeroJsCdp(
+        activity: MainActivity,
+        browser: CefpackSession,
+        elementId: String,
+    ) {
+        val liveBrowser = activity.activeCefpackSessionForTest() ?: browser
+        val domJson = queryPiercedDomJson(activity, liveBrowser)
+        val root = parseDomRoot(domJson)
+        assertNotNull("DOM root must exist when clicking #$elementId", root)
+        val target = findElementById(root!!, elementId)
+        assertNotNull("Button/element #$elementId must exist in DOM", target)
+
+        val nodeId = target!!.optInt("nodeId", 0)
+        val backendNodeId = target.optInt("backendNodeId", 0)
+        val locatorJson = JSONObject().apply {
+            if (backendNodeId > 0) {
+                put("backendNodeId", backendNodeId)
+            } else {
+                put("nodeId", nodeId)
+            }
+        }.toString()
+
+        executeCdpSync(activity, liveBrowser, "DOM.scrollIntoViewIfNeeded", locatorJson)
+
+        val (_, layoutJson) = executeCdpSync(activity, liveBrowser, "Page.getLayoutMetrics", "{}")
+        var pageX = 0.0
+        var pageY = 0.0
+        if (layoutJson.isNotBlank()) {
+            runCatching {
+                val rootMetrics = JSONObject(layoutJson)
+                val vp = rootMetrics.optJSONObject("cssVisualViewport")
+                    ?: rootMetrics.optJSONObject("cssLayoutViewport")
+                if (vp != null) {
+                    pageX = vp.optDouble("pageX", 0.0)
+                    pageY = vp.optDouble("pageY", 0.0)
+                }
+            }
+        }
+
+        val (boxOk, boxJson) = executeCdpSync(activity, liveBrowser, "DOM.getBoxModel", locatorJson)
+        assertTrue("DOM.getBoxModel failed for #$elementId: $boxJson", boxOk && boxJson.isNotBlank())
+
+        val model = JSONObject(boxJson).getJSONObject("model")
+        val quad = model.optJSONArray("border") ?: model.getJSONArray("content")
+        var minX = Double.POSITIVE_INFINITY
+        var maxX = Double.NEGATIVE_INFINITY
+        var minY = Double.POSITIVE_INFINITY
+        var maxY = Double.NEGATIVE_INFINITY
+        for (i in 0 until 8 step 2) {
+            val x = quad.getDouble(i)
+            val y = quad.getDouble(i + 1)
+            if (x < minX) minX = x
+            if (x > maxX) maxX = x
+            if (y < minY) minY = y
+            if (y > maxY) maxY = y
+        }
+        val centerX = (minX + maxX) / 2.0 - pageX
+        val centerY = (minY + maxY) / 2.0 - pageY
+
+        val moveParams = JSONObject()
+            .put("type", "mouseMoved")
+            .put("x", centerX)
+            .put("y", centerY)
+            .put("button", "none")
+            .put("buttons", 0)
+            .toString()
+        val pressParams = JSONObject()
+            .put("type", "mousePressed")
+            .put("x", centerX)
+            .put("y", centerY)
+            .put("button", "left")
+            .put("buttons", 1)
+            .put("clickCount", 1)
+            .toString()
+        val releaseParams = JSONObject()
+            .put("type", "mouseReleased")
+            .put("x", centerX)
+            .put("y", centerY)
+            .put("button", "left")
+            .put("buttons", 0)
+            .put("clickCount", 1)
+            .toString()
+
+        executeCdpSync(activity, liveBrowser, "Input.dispatchMouseEvent", moveParams)
+        val (pressOk, pressResp) = executeCdpSync(activity, liveBrowser, "Input.dispatchMouseEvent", pressParams)
+        val (relOk, relResp) = executeCdpSync(activity, liveBrowser, "Input.dispatchMouseEvent", releaseParams)
+        assertTrue(
+            "Zero-JS CDP click on #$elementId failed (press=$pressOk/$pressResp, release=$relOk/$relResp)",
+            pressOk && relOk,
+        )
+    }
+
+    private fun enforceZeroJsCdp(activity: MainActivity, browser: CefpackSession) {
+        val (ok, resp) = executeCdpSync(
+            activity = activity,
+            browser = browser,
+            method = "Emulation.setScriptExecutionDisabled",
+            paramsJson = "{\"value\":true}",
+        )
+        assertTrue("Emulation.setScriptExecutionDisabled(true) must succeed ($resp)", ok)
+    }
+
+    private fun executeCdpSync(
+        activity: MainActivity,
+        browser: CefpackSession,
+        method: String,
+        paramsJson: String,
+    ): Pair<Boolean, String> {
+        val latch = CountDownLatch(1)
+        val okRef = AtomicReference(false)
+        val jsonRef = AtomicReference("")
+        activity.runOnUiThread {
+            browser.executeDevToolsMethod(method, paramsJson) { ok, json ->
+                okRef.set(ok)
+                jsonRef.set(json.orEmpty())
+                latch.countDown()
+            }
+        }
+        assertTrue("CDP $method timed out", latch.await(15, TimeUnit.SECONDS))
+        return okRef.get() to jsonRef.get()
+    }
+
+    private fun queryPiercedDomJson(
+        activity: MainActivity,
+        browser: CefpackSession,
+    ): String {
+        val (ok, json) = executeCdpSync(
+            activity = activity,
+            browser = browser,
+            method = "DOM.getDocument",
+            paramsJson = "{\"depth\":-1,\"pierce\":true}",
+        )
+        return if (ok) json else ""
+    }
+
+    private fun awaitControlValueContains(
+        activity: MainActivity,
+        browser: CefpackSession,
+        elementId: String,
+        expectedSubstring: String,
+        timeoutMs: Long,
+    ): String {
+        val deadline = SystemClock.uptimeMillis() + timeoutMs
+        var lastValue = ""
+        while (SystemClock.uptimeMillis() < deadline) {
+            val liveBrowser = activity.activeCefpackSessionForTest() ?: browser
+            lastValue = readControlInnerEditorById(queryPiercedDomJson(activity, liveBrowser), elementId)
+            if (lastValue.contains(expectedSubstring)) {
+                return lastValue
+            }
+            SystemClock.sleep(150L)
+        }
+        return lastValue
+    }
+
+    private fun parseDomRoot(rawDocJson: String): JSONObject? {
+        if (rawDocJson.isBlank()) return null
+        return runCatching { JSONObject(rawDocJson).optJSONObject("root") }.getOrNull()
+    }
+
+    private fun readElementVisibleTextById(rawDocJson: String, elementId: String): String {
+        val root = parseDomRoot(rawDocJson) ?: return ""
+        val target = findElementById(root, elementId) ?: return ""
+        val sb = StringBuilder()
+        collectTextNodes(target, sb)
+        return sb.toString()
+    }
+
+    private fun readControlInnerEditorById(rawDocJson: String, elementId: String): String {
+        val root = parseDomRoot(rawDocJson) ?: return ""
+        val target = findElementById(root, elementId) ?: return ""
+        val shadowRoots = target.optJSONArray("shadowRoots")
+        if (shadowRoots != null && shadowRoots.length() > 0) {
+            val sb = StringBuilder()
+            for (i in 0 until shadowRoots.length()) {
+                val sr = shadowRoots.optJSONObject(i) ?: continue
+                val innerEditor = findElementById(sr, "inner-editor")
+                collectTextNodes(innerEditor ?: sr, sb)
+            }
+            if (sb.isNotEmpty()) return sb.toString()
+        }
+        val childSb = StringBuilder()
+        collectTextNodes(target, childSb)
+        if (childSb.isNotEmpty()) return childSb.toString()
+        return extractAttribute(target.optJSONArray("attributes"), "value")
+    }
+
+    private fun findElementById(node: JSONObject, targetId: String): JSONObject? {
+        if (node.optInt("nodeType") == 1) {
+            val idVal = extractAttribute(node.optJSONArray("attributes"), "id")
+            if (idVal == targetId) return node
+        }
+        val children = node.optJSONArray("children")
+        if (children != null) {
+            for (i in 0 until children.length()) {
+                val child = children.optJSONObject(i) ?: continue
+                findElementById(child, targetId)?.let { return it }
+            }
+        }
+        val shadowRoots = node.optJSONArray("shadowRoots")
+        if (shadowRoots != null) {
+            for (i in 0 until shadowRoots.length()) {
+                val sr = shadowRoots.optJSONObject(i) ?: continue
+                findElementById(sr, targetId)?.let { return it }
+            }
+        }
+        node.optJSONObject("contentDocument")?.let { doc ->
+            findElementById(doc, targetId)?.let { return it }
+        }
+        return null
+    }
+
+    private fun extractAttribute(attrs: JSONArray?, key: String): String {
+        if (attrs == null) return ""
+        var i = 0
+        while (i + 1 < attrs.length()) {
+            if (attrs.optString(i).equals(key, ignoreCase = true)) {
+                return attrs.optString(i + 1, "")
+            }
+            i += 2
+        }
+        return ""
+    }
+
+    private fun collectTextNodes(node: JSONObject, out: StringBuilder) {
+        if (node.optInt("nodeType") == 1) {
+            val attrs = node.optJSONArray("attributes")
+            val idAttr = extractAttribute(attrs, "id")
+            val pseudo = extractAttribute(attrs, "pseudo")
+            if (idAttr.equals("placeholder", ignoreCase = true) ||
+                pseudo.contains("placeholder", ignoreCase = true)
+            ) {
+                return
+            }
+            val tag = node.optString("localName", node.optString("nodeName", "")).lowercase()
+            if (tag == "script" || tag == "style") {
+                return
+            }
+        }
+        val nodeType = node.optInt("nodeType")
+        if (nodeType == 3) {
+            out.append(node.optString("nodeValue", ""))
+        } else if (nodeType == 1 && node.optString("nodeName").equals("BR", ignoreCase = true)) {
+            out.append('\n')
+        }
+        val children = node.optJSONArray("children")
+        if (children != null) {
+            for (i in 0 until children.length()) {
+                val child = children.optJSONObject(i) ?: continue
+                collectTextNodes(child, out)
+            }
+        }
+    }
+
+    private fun extractSocksPort(rawAddr: String): Int {
+        val clean = rawAddr.trim().removePrefix("socks5://").removePrefix("socks5h://")
+        return clean.substringAfterLast(':', "").toIntOrNull() ?: 0
+    }
+
+    private fun wakeAndUnlockDisplay(instrumentation: android.app.Instrumentation) {
+        runShellCommandDrained(instrumentation, "input keyevent KEYCODE_WAKEUP")
+        runShellCommandDrained(instrumentation, "wm dismiss-keyguard")
+    }
+
+    private fun capturePrizeScreenshotToDeviceTmp(
+        instrumentation: android.app.Instrumentation,
+        activity: MainActivity,
+    ) {
+        runShellCommandDrained(instrumentation, "rm -f $DEVICE_PRIZE_SCREENSHOT_PATH")
+        runShellCommandDrained(instrumentation, "screencap -p $DEVICE_PRIZE_SCREENSHOT_PATH")
+
+        // Also save via UiAutomation.takeScreenshot() into externalCacheDir as secondary forensic copy.
+        runCatching {
+            val bmp = instrumentation.uiAutomation.takeScreenshot()
+            if (bmp != null) {
+                val outFile = File(activity.externalCacheDir ?: activity.cacheDir, "trap-prize-won.png")
+                FileOutputStream(outFile).use { out ->
+                    bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+                }
+                bmp.recycle()
+            }
+        }
+    }
+
+    private fun runShellCommandDrained(
+        instrumentation: android.app.Instrumentation,
+        command: String,
+    ): String {
+        return runCatching {
+            val pfd = instrumentation.uiAutomation.executeShellCommand(command)
+            ParcelFileDescriptor.AutoCloseInputStream(pfd).use { input ->
+                val out = ByteArrayOutputStream()
+                val buf = ByteArray(4096)
+                while (true) {
+                    val read = input.read(buf)
+                    if (read <= 0) break
+                    out.write(buf, 0, read)
+                }
+                out.toString(Charsets.UTF_8.name())
+            }
+        }.getOrDefault("")
+    }
+}
