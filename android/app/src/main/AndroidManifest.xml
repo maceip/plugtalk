@@ -3,15 +3,16 @@
     Trap Android Manifest.
 
     Chromium's isolated renderer, GPU, and network child-process services are
-    contributed by the Cefrium SDK AAR manifest merger (`:sandboxed_process0..39`
-    and `:privileged_process0..2`). `TrapApplication` checks `getProcessName()`
-    and skips Arti Tor / Rust / browser initialization inside child processes.
+    contributed by the Cefpack AAR manifest merger (`:sandboxed_process0..39`
+    and `:privileged_process0..4`). `TrapApplication` initializes process type
+    via `CefpackEngine.initProcess` and skips Arti Tor / Rust / browser startup
+    inside child processes.
 
     Window & lifecycle configuration:
       * `android:enableOnBackInvokedCallback="true"` hands system back gestures
         to `PredictiveBackHandler` so live visual page snapshots render smoothly.
       * `android:launchMode="singleTask"` keeps Trap in a single browser task.
-      * `android:configChanges` preserves active `CefriumBrowser` surfaces and
+      * `android:configChanges` preserves active `CefpackSession` surfaces and
         Tor circuits across rotation, split-screen resize, and theme switches.
       * `android:windowSoftInputMode="adjustResize"` works with Compose edge-to-edge
         `WindowInsets` (`statusBars`, `navigationBars`, `ime`) so bottom chrome

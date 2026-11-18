@@ -585,7 +585,7 @@ fun SecurityCircuitSheet(
                 )
                 VerticalTelemetryRow(
                     title = "JavaScript & WebAssembly",
-                    value = "Disabled (Cefrium + CDP)",
+                    value = "Disabled (Cefpack + CDP)",
                     accent = colors.green,
                 )
             }
@@ -1048,7 +1048,7 @@ fun BrowserMenuSheet(
 }
 
 /**
- * Page / Link Context Menu Sheet surfaced from `CefriumBrowser.setOnContextMenuListener`.
+ * Page / Link Context Menu Sheet surfaced from `CefpackSession.setOnContextMenuListener`.
  */
 @Composable
 fun ContextMenuSheet(

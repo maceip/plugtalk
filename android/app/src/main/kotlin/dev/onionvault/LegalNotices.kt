@@ -8,15 +8,12 @@ import java.io.IOException
 /**
  * The licence documents that travel with the application.
  *
- * The LGPL-3.0 of the engine requires that the recipient of the binary can
- * read the licence of the library: the texts are therefore packaged into the
- * APK and shown by the interface, instead of being a footnote in the
- * repository.
+ * Bundled open-source licences (Sequoia OpenPGP LGPL-2.0-or-later, Arti Tor
+ * MIT OR Apache-2.0, and Cefpack / Chromium MIT OR Apache-2.0 & BSD-3-Clause)
+ * are packaged into APK assets and shown directly in the interface offline.
  *
- * The documents are read from the assets of the application.  The directory is
- * filled by the Gradle build: the texts of this repository are copied into it
- * and the continuous integration adds the notice of the engine, which belongs
- * to the exact build that is packaged into the APK.
+ * The documents are read from `assets/licenses/`, populated during the Gradle
+ * build from the repository's `licenses/` directory alongside engine notices.
  */
 object LegalNotices {
 
@@ -35,7 +32,8 @@ object LegalNotices {
         "LGPL-3.0.txt" to "GNU Lesser General Public License 3.0",
         "GPL-3.0.txt" to "GNU General Public License 3.0",
         "LGPL-2.1.txt" to "GNU Lesser General Public License 2.1",
-        "CEF-LICENSE.txt" to "The licence of the CEF engine",
+        "CEFPACK-LICENSE.txt" to "Cefpack / Chromium Engine Notices",
+        "CEF-LICENSE.txt" to "Cefpack / Chromium Engine Notices",
     )
 
     /**

@@ -318,7 +318,7 @@ fun LegalNoticesPreview() {
                 LegalDocument("LGPL-2.1.txt", "GNU Lesser General Public License 2.1", 26_001),
                 LegalDocument("GPL-3.0.txt", "GNU General Public License 3.0", 34_674),
                 LegalDocument("LGPL-3.0.txt", "GNU Lesser General Public License 3.0", 42_098),
-                LegalDocument("CEF-LICENSE.txt", "Cefrium / Chromium Engine Notices", 2_273_727),
+                LegalDocument("CEFPACK-LICENSE.txt", "Cefpack / Chromium Engine Notices", 2_273_727),
             ),
         ),
         showLegalNotices = true,

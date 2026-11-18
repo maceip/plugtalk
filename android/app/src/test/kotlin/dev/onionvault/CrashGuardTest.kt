@@ -112,7 +112,7 @@ class CrashGuardTest {
             cl.getSwitchValue("disable-features", ""),
         )
 
-        // Simulate Cefrium.initialize's private disableFeature(...) appending onto disable-features.
+        // Simulate engine startup appending additional disabled features onto disable-features.
         val existing = cl.getSwitchValue("disable-features", "")
         cl.appendSwitchWithValue("disable-features", "$existing,NetworkTimeServiceQuerying")
         assertEquals(
@@ -132,12 +132,52 @@ class CrashGuardTest {
         // Re-applying comma-joined list must remain deduplicated in exact order.
         TrapApplication.appendDisabledFeature(
             cl,
-            "AutofillServerCommunication,OptimizationHints,Translate,MediaRouter",
+            "AutofillServerCommunication,OptimizationHints,Translate,MediaRouter,HttpsUpgrades,HttpsFirstBalancedMode",
         )
 
         assertEquals(
-            "PartitionAllocMemoryTagging,AutofillServerCommunication,OptimizationHints,Translate,MediaRouter",
+            "PartitionAllocMemoryTagging,AutofillServerCommunication,OptimizationHints,Translate," +
+                "MediaRouter,WebRtcHideLocalIpsWithMdns,HttpsUpgrades,HttpsFirstBalancedMode," +
+                "HttpsFirstBalancedModeAutoEnable",
             cl.getSwitchValue("disable-features", ""),
         )
+    }
+
+    @Test
+    fun socks_proxy_starts_fail_closed_and_normalizes_dynamic_updates() {
+        TrapApplication.applyProfileSocksServer("")
+        assertEquals(TrapApplication.FAIL_CLOSED_SOCKS_SERVER, TrapApplication.currentSocksProxyServer())
+
+        TrapApplication.applyProfileSocksServer("127.0.0.1:41905")
+        assertEquals("socks5://127.0.0.1:41905", TrapApplication.currentSocksProxyServer())
+
+        TrapApplication.applyProfileSocksServer("socks5h://127.0.0.1:41906")
+        assertEquals("socks5://127.0.0.1:41906", TrapApplication.currentSocksProxyServer())
+
+        TrapApplication.applyProfileSocksServer("   ")
+        assertEquals("socks5://127.0.0.1:1", TrapApplication.currentSocksProxyServer())
+    }
+
+    @Test
+    fun android_source_tree_wires_cefpack_with_zero_legacy_vendor_imports() {
+        val candidates = listOf(
+            File("src"),
+            File("app/src"),
+            File("android/app/src"),
+        )
+        val srcRoot = candidates.firstOrNull { File(it, "main/AndroidManifest.xml").isFile }
+        assertTrue("Expected android/app/src tree", srcRoot != null)
+
+        val bannedToken = "cef" + "rium"
+        val offenders = ArrayList<String>()
+        srcRoot!!.walkTopDown()
+            .filter { it.isFile && (it.extension == "kt" || it.extension == "xml") }
+            .forEach { file ->
+                val text = file.readText()
+                if (text.contains(bannedToken, ignoreCase = true)) {
+                    offenders.add(file.path)
+                }
+            }
+        assertEquals("Legacy engine token must be 0 across android/app/src", emptyList<String>(), offenders)
     }
 }

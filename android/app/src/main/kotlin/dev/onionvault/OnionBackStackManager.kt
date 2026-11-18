@@ -5,7 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
-import com.cefrium.CefriumBrowser
+import dev.cefpack.android.CefpackSession
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -15,7 +15,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * gesture (`PredictiveBackHandler`).
  *
  * Snapshots are captured from live Chromium compositor frames via
- * [CefriumBrowser.captureBitmap] (`PixelCopy` on Android's `SurfaceView`) and
+ * [CefpackSession.captureBitmap] (`PixelCopy` on Android's `SurfaceView`) and
  * retained strictly in RAM (capped at [maxEntriesPerTab] per tab; wiped
  * immediately on tab close or `New Identity`).
  */
@@ -48,7 +48,7 @@ class OnionBackStackManager(
 
     fun capture(
         tabId: String,
-        browser: CefriumBrowser,
+        browser: CefpackSession,
         domHtml: String = "",
         nodes: List<CdpDomPgpController.DetectedPgpNode> = emptyList(),
         scrollOffsetY: Int = 0,
@@ -167,10 +167,12 @@ class OnionBackStackManager(
         }
     }
 
-    private fun resolveCurrentTitle(browser: CefriumBrowser, fallbackUrl: String): String {
+    private fun resolveCurrentTitle(browser: CefpackSession, fallbackUrl: String): String {
         val entries = runCatching { browser.navigationEntries }.getOrNull()
-        val current = entries?.firstOrNull { it.current }
-        val title = current?.title?.trim().orEmpty()
+        val current = entries?.firstOrNull { it.isCurrent }
+        val title = current?.title?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: runCatching { browser.title?.trim() }.getOrNull().orEmpty()
         return title.ifEmpty { fallbackUrl }
     }
 }

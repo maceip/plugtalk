@@ -1364,7 +1364,7 @@ fun SettingsHardwarePod(
 
             HardwareToggleRow(
                 title = "Hidden Service Only",
-                subtitle = "Block non-.onion traffic in Cefrium & SOCKS5",
+                subtitle = "Block non-.onion traffic in Cefpack & SOCKS5",
                 checked = state.hiddenServiceOnly,
                 onCheckedChange = onToggleHiddenServiceOnly,
                 testTag = "settings_hidden_service_switch",
@@ -1535,7 +1535,7 @@ fun LegalNoticesHardwarePod(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
-                    text = "Trap bundles Cefrium 0.19.0 (LGPL-3.0-or-later / Chromium BSD-3-Clause), Sequoia OpenPGP (LGPL-2.0-or-later), and Arti (MIT OR Apache-2.0).",
+                    text = "Trap bundles Cefpack (MIT OR Apache-2.0 / Chromium BSD-3-Clause), Sequoia OpenPGP (LGPL-2.0-or-later), and Arti (MIT OR Apache-2.0).",
                     color = MetaToolsTokens.StencilInk,
                     fontSize = 12.sp,
                 )
