@@ -69,6 +69,8 @@ adb -s "$SERIAL" shell rm -f "$DEVICE_TMP_PNG" >/dev/null 2>&1 || true
 echo "== [2/4] Installing $(basename "$APK") and $(basename "$TEST_APK") =="
 adb -s "$SERIAL" install -r -t "$APK"
 adb -s "$SERIAL" install -r -t "$TEST_APK"
+adb -s "$SERIAL" shell "run-as dev.onionvault rm -f files/crash-java.txt files/crash-native.txt 2>/dev/null || true"
+adb -s "$SERIAL" shell cmd statusbar collapse >/dev/null 2>&1 || true
 
 adb -s "$SERIAL" logcat -G 16M >/dev/null 2>&1 || true
 adb -s "$SERIAL" logcat -c >/dev/null 2>&1 || true

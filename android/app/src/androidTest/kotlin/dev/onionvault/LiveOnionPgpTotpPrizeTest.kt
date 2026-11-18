@@ -1,6 +1,8 @@
 package dev.onionvault
 
 import android.app.KeyguardManager
+import android.content.Context
+import android.content.Intent
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.util.Log
@@ -10,7 +12,7 @@ import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -22,6 +24,8 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
+import androidx.test.core.app.ActivityScenario
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.espresso.Espresso
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -75,11 +79,12 @@ class LiveOnionPgpTotpPrizeTest {
     }
 
     @get:Rule
-    val composeRule = createAndroidComposeRule<MainActivity>()
+    val composeRule = createEmptyComposeRule()
 
     @Test
     fun cold_boot_tor_three_round_openpgp_totp_unlocks_and_decrypts_live_onion_prize() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val appContext = ApplicationProvider.getApplicationContext<Context>()
         val args = InstrumentationRegistry.getArguments()
         val targetOnionUrl = args.getString("totpOnionUrl")
             ?.trim()
@@ -96,265 +101,284 @@ class LiveOnionPgpTotpPrizeTest {
             targetOnionUrl.isNotBlank(),
         )
 
+        // Clear any stale crash file from earlier sessions before cold-launching MainActivity,
+        // and ensure the Activity window wakes & renders above any device lockscreen.
+        CrashReporter.clear(appContext)
         wakeAndUnlockDisplay(instrumentation)
-        val activity = composeRule.activity
-        activity.runOnUiThread {
-            activity.setShowWhenLocked(true)
-            activity.setTurnScreenOn(true)
-            activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            val km = activity.getSystemService(KeyguardManager::class.java)
-            km?.requestDismissKeyguard(activity, null)
-        }
 
-        assertTrue("Native libonion_vault.so must be loaded", OvNative.isLoaded)
-        assertTrue("Cefpack content engine must be ready", TrapApplication.isEngineReady)
-
-        // Strict fail-closed policy check: target MUST be a valid Tor v3 .onion URL (zero clearnet backdoors).
-        val policy = OvNative.parseUrlPolicy(OvNative.nativeCheckUrlPolicy(targetOnionUrl, true))
-        assertTrue(
-            "Prize gate target URL must pass strict .onion-only policy ($targetOnionUrl): ${policy.reason}",
-            policy.allowed && policy.isOnion,
-        )
-
-        val prefs = TrapPreferences(activity)
+        val prefs = TrapPreferences(appContext)
         val previousBiometric = prefs.requireBiometric
         val previousDefaultFp = prefs.defaultKeyFingerprint
-        OvNative.nativeSetRequireBiometric(false)
         prefs.requireBiometric = false
+        if (OvNative.isLoaded) {
+            OvNative.nativeSetRequireBiometric(false)
+        }
 
-        // 1. Verify cold-start MetaToolsBrowserShell chrome & wait up to 90s for real Arti Tor bootstrap.
-        composeRule.onNodeWithTag("browser_screen").assertIsDisplayed()
-        composeRule.onNodeWithTag("metatools_browser_shell").assertIsDisplayed()
-        composeRule.onNodeWithTag("crt_address_pod").assertIsDisplayed()
-        composeRule.onNodeWithTag("pgp_rocker_pod").assertIsDisplayed()
-        composeRule.onNodeWithTag("tor_orb_pod").assertIsDisplayed()
+        val launchIntent = Intent(appContext, MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+            putExtra(MainActivity.EXTRA_SHOW_OVER_KEYGUARD_FOR_TEST, true)
+        }
 
-        val torBootDeadline = SystemClock.uptimeMillis() + 90_000L
-        var lastTorSnapshot = OvNative.TorStatusSnapshot()
-        var boundSocksPort = 0
-        while (SystemClock.uptimeMillis() < torBootDeadline) {
-            lastTorSnapshot = OvNative.parseTorStatus(OvNative.nativeTorStatusJson("about:blank"))
-            val resolvedAddr = lastTorSnapshot.socksAddr.ifBlank { OvNative.nativeSocksProxy() }.trim()
-            boundSocksPort = extractSocksPort(resolvedAddr)
-            if (lastTorSnapshot.bootstrapped && boundSocksPort > 1) {
-                break
+        ActivityScenario.launch<MainActivity>(launchIntent).use { scenario ->
+            val activityRef = AtomicReference<MainActivity>()
+            scenario.onActivity { act ->
+                act.setShowWhenLocked(true)
+                act.setTurnScreenOn(true)
+                act.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                act.getSystemService(KeyguardManager::class.java)?.requestDismissKeyguard(act, null)
+                activityRef.set(act)
             }
-            SystemClock.sleep(400L)
-        }
-        assertTrue(
-            "Arti Tor failed to bootstrap within 90s (percent=${lastTorSnapshot.bootstrapPercent}, " +
-                "stage=${lastTorSnapshot.bootstrapSummary}, socks=${lastTorSnapshot.socksAddr})",
-            lastTorSnapshot.bootstrapped && boundSocksPort > 1,
-        )
-        Log.i(TAG, "Arti Tor bootstrapped on loopback SOCKS5 port $boundSocksPort")
+            val activity = activityRef.get()
+            assertNotNull("MainActivity instance must be created", activity)
 
-        // Ensure live CefpackSession is attached and zero-JS enforcement is active.
-        composeRule.waitUntil(timeoutMillis = 15_000L) {
-            activity.activeCefpackSessionForTest() != null
-        }
-        val browser = activity.activeCefpackSessionForTest()
-        assertNotNull("Active CefpackSession must be non-null", browser)
-        enforceZeroJsCdp(activity, browser!!)
+            assertTrue("Native libonion_vault.so must be loaded", OvNative.isLoaded)
+            assertTrue("Cefpack content engine must be ready", TrapApplication.isEngineReady)
+            OvNative.nativeSetRequireBiometric(false)
 
-        // 2. Generate a fresh ephemeral Sequoia OpenPGP keypair via Trap's real KeyringHardwarePod UI.
-        val beforeFingerprints = OvNative.parseKeys(OvNative.nativeListKeysJson())
-            .map { it.fingerprint }
-            .toSet()
-        val challengerEmail = "prize-${System.currentTimeMillis()}@onion"
-        val challengerUserId = "Trap Prize Challenger <$challengerEmail>"
-
-        composeRule.onNodeWithTag("pgp_rocker_pod").performClick()
-        composeRule.waitUntil(timeoutMillis = 10_000L) {
-            composeRule.onAllNodesWithTag("keyring_sheet").fetchSemanticsNodes().isNotEmpty()
-        }
-        composeRule.onNodeWithTag("keyring_sheet").assertIsDisplayed()
-        composeRule.onNodeWithText("Generate").performClick()
-        composeRule.waitForIdle()
-        composeRule.onNodeWithTag("keygen_userid_input").performTextInput(challengerUserId)
-        Espresso.closeSoftKeyboard()
-        composeRule.waitForIdle()
-        composeRule.onNodeWithTag("keygen_submit_button").performClick()
-
-        composeRule.waitUntil(timeoutMillis = 20_000L) {
-            OvNative.parseKeys(OvNative.nativeListKeysJson()).any {
-                it.userId.contains(challengerEmail) &&
-                    it.fingerprint !in beforeFingerprints &&
-                    it.hasSecret
-            } && composeRule.onAllNodesWithText(challengerUserId)
-                .fetchSemanticsNodes()
-                .isNotEmpty()
-        }
-        val createdKey = OvNative.parseKeys(OvNative.nativeListKeysJson()).first {
-            it.userId.contains(challengerEmail) &&
-                it.fingerprint !in beforeFingerprints &&
-                it.hasSecret
-        }
-        assertFalse("Generated Sequoia key fingerprint must be non-blank", createdKey.fingerprint.isBlank())
-
-        try {
-            val setDefaultTag = "key_set_default_${createdKey.fingerprint}"
-            if (composeRule.onAllNodesWithTag(setDefaultTag).fetchSemanticsNodes().isNotEmpty()) {
-                composeRule.onNodeWithTag(setDefaultTag).performScrollTo().performClick()
-                composeRule.waitForIdle()
-            }
-            composeRule.onNodeWithTag("sheet_close_button").performClick()
-            composeRule.waitUntil(timeoutMillis = 5_000L) {
-                composeRule.onAllNodesWithTag("keyring_sheet").fetchSemanticsNodes().isEmpty()
-            }
-
-            // 3. Enter the live DigitalOcean .onion URL into Trap's RecessedCrtAddressPod and submit.
-            composeRule.onNodeWithTag("crt_address_pod").performClick()
-            composeRule.waitUntil(timeoutMillis = 5_000L) {
-                composeRule.onAllNodesWithTag("crt_address_input").fetchSemanticsNodes().isNotEmpty()
-            }
-            composeRule.onNodeWithTag("crt_address_input").performTextReplacement(targetOnionUrl)
-            composeRule.onNodeWithTag("crt_address_input").performImeAction()
-
-            // 4. Enrollment (GET / -> POST /enroll): wait up to 120s for .onion rendezvous + "Insert My PubKey" pill.
-            awaitEnrollmentPageAndPubKeyPill(
-                activity = activity,
-                browser = browser,
-                targetOnionUrl = targetOnionUrl,
-                timeoutMs = 120_000L,
+            // Strict fail-closed policy check: target MUST be a valid Tor v3 .onion URL (zero clearnet backdoors).
+            val policy = OvNative.parseUrlPolicy(OvNative.nativeCheckUrlPolicy(targetOnionUrl, true))
+            assertTrue(
+                "Prize gate target URL must pass strict .onion-only policy ($targetOnionUrl): ${policy.reason}",
+                policy.allowed && policy.isOnion,
             )
-            composeRule.onNodeWithTag("pgp_field_overlay").assertIsDisplayed()
-            composeRule.onAllNodesWithText("Insert My PubKey")[0].performClick()
+
+            // 1. Verify cold-start MetaToolsBrowserShell chrome & wait up to 90s for real Arti Tor bootstrap.
+            composeRule.waitUntil(timeoutMillis = 15_000L) {
+                composeRule.onAllNodesWithTag("browser_screen").fetchSemanticsNodes().isNotEmpty()
+            }
+            composeRule.onNodeWithTag("browser_screen").assertIsDisplayed()
+            composeRule.onNodeWithTag("metatools_browser_shell").assertIsDisplayed()
+            composeRule.onNodeWithTag("crt_address_pod").assertIsDisplayed()
+            composeRule.onNodeWithTag("pgp_rocker_pod").assertIsDisplayed()
+            composeRule.onNodeWithTag("tor_orb_pod").assertIsDisplayed()
+
+            val torBootDeadline = SystemClock.uptimeMillis() + 90_000L
+            var lastTorSnapshot = OvNative.TorStatusSnapshot()
+            var boundSocksPort = 0
+            while (SystemClock.uptimeMillis() < torBootDeadline) {
+                lastTorSnapshot = OvNative.parseTorStatus(OvNative.nativeTorStatusJson("about:blank"))
+                val resolvedAddr = lastTorSnapshot.socksAddr.ifBlank { OvNative.nativeSocksProxy() }.trim()
+                boundSocksPort = extractSocksPort(resolvedAddr)
+                if (lastTorSnapshot.bootstrapped && boundSocksPort > 1) {
+                    break
+                }
+                SystemClock.sleep(400L)
+            }
+            assertTrue(
+                "Arti Tor failed to bootstrap within 90s (percent=${lastTorSnapshot.bootstrapPercent}, " +
+                    "stage=${lastTorSnapshot.bootstrapSummary}, socks=${lastTorSnapshot.socksAddr})",
+                lastTorSnapshot.bootstrapped && boundSocksPort > 1,
+            )
+            Log.i(TAG, "Arti Tor bootstrapped on loopback SOCKS5 port $boundSocksPort")
+
+            // Ensure live CefpackSession is attached and zero-JS enforcement is active.
+            composeRule.waitUntil(timeoutMillis = 15_000L) {
+                activity.activeCefpackSessionForTest() != null
+            }
+            val browser = activity.activeCefpackSessionForTest()
+            assertNotNull("Active CefpackSession must be non-null", browser)
+            enforceZeroJsCdp(activity, browser!!)
+
+            // 2. Generate a fresh ephemeral Sequoia OpenPGP keypair via Trap's real KeyringHardwarePod UI.
+            val beforeFingerprints = OvNative.parseKeys(OvNative.nativeListKeysJson())
+                .map { it.fingerprint }
+                .toSet()
+            val challengerEmail = "prize-${System.currentTimeMillis()}@onion"
+            val challengerUserId = "Trap Prize Challenger <$challengerEmail>"
+
+            composeRule.onNodeWithTag("pgp_rocker_pod").performClick()
+            composeRule.waitUntil(timeoutMillis = 10_000L) {
+                composeRule.onAllNodesWithTag("keyring_sheet").fetchSemanticsNodes().isNotEmpty()
+            }
+            composeRule.onNodeWithTag("keyring_sheet").assertIsDisplayed()
+            composeRule.onNodeWithText("Generate").performClick()
+            composeRule.waitForIdle()
+            composeRule.onNodeWithTag("keygen_userid_input").performTextInput(challengerUserId)
+            Espresso.closeSoftKeyboard()
+            composeRule.waitForIdle()
+            composeRule.onNodeWithTag("keygen_submit_button").performClick()
 
             composeRule.waitUntil(timeoutMillis = 20_000L) {
-                composeRule.onAllNodesWithText("Inserted public key and verified DOM field")
+                OvNative.parseKeys(OvNative.nativeListKeysJson()).any {
+                    it.userId.contains(challengerEmail) &&
+                        it.fingerprint !in beforeFingerprints &&
+                        it.hasSecret
+                } && composeRule.onAllNodesWithText(challengerUserId)
                     .fetchSemanticsNodes()
                     .isNotEmpty()
             }
-            val pubKeyFieldText = awaitControlValueContains(
-                activity = activity,
-                browser = browser,
-                elementId = "pubkey",
-                expectedSubstring = "-----BEGIN PGP PUBLIC KEY BLOCK-----",
-                timeoutMs = 10_000L,
-            )
-            assertTrue(
-                "Expected ASCII-armored PGP public key in #pubkey, got len=${pubKeyFieldText.length}",
-                pubKeyFieldText.contains("-----BEGIN PGP PUBLIC KEY BLOCK-----") &&
-                    pubKeyFieldText.contains("-----END PGP PUBLIC KEY BLOCK-----"),
-            )
+            val createdKey = OvNative.parseKeys(OvNative.nativeListKeysJson()).first {
+                it.userId.contains(challengerEmail) &&
+                    it.fingerprint !in beforeFingerprints &&
+                    it.hasSecret
+            }
+            assertFalse("Generated Sequoia key fingerprint must be non-blank", createdKey.fingerprint.isBlank())
 
-            clickElementByIdZeroJsCdp(activity, browser, "enroll-submit")
-
-            // 5. Complete Rounds 1, 2, and 3 (POST /verify x 3) strictly via Trap's OpenPGP UI + zero-JS CDP.
-            val seenChallengeCiphertexts = HashSet<String>()
-            val submittedTotpCodes = ArrayList<String>(3)
-
-            for (expectedRound in 1..3) {
-                val challengeDoc = awaitChallengeRoundDom(
-                    activity = activity,
-                    browser = browser,
-                    expectedRound = expectedRound,
-                    timeoutMs = 60_000L,
-                )
-                val challengeCiphertext = readElementVisibleTextById(challengeDoc, "pgp-challenge").trim()
-                assertTrue(
-                    "Round $expectedRound #pgp-challenge must contain armored PGP MESSAGE",
-                    challengeCiphertext.contains("-----BEGIN PGP MESSAGE-----") &&
-                        challengeCiphertext.contains("-----END PGP MESSAGE-----"),
-                )
-                assertTrue(
-                    "Round $expectedRound must emit a fresh OpenPGP ciphertext distinct from prior rounds",
-                    seenChallengeCiphertexts.add(challengeCiphertext),
-                )
-
-                val decryptedPlaintext = decryptCurrentPageBlockViaRockerUi(
-                    activity = activity,
-                    browser = browser,
-                    expectedSubstring = "ROUND $expectedRound OF 3",
-                    timeoutMs = 25_000L,
-                )
-                assertTrue(
-                    "Decrypted plaintext must confirm ROUND $expectedRound OF 3: $decryptedPlaintext",
-                    decryptedPlaintext.contains("ROUND $expectedRound OF 3"),
-                )
-                val codeMatch = SIX_DIGIT_TOTP_REGEX.find(decryptedPlaintext)
-                assertNotNull(
-                    "Decrypted plaintext in DecryptedPlaintextHardwarePod must contain 6-digit TOTP code: $decryptedPlaintext",
-                    codeMatch,
-                )
-                val totpCode = codeMatch!!.groupValues[1]
-                submittedTotpCodes.add(totpCode)
-                Log.i(TAG, "Decrypted Round $expectedRound/3 TOTP challenge via DecryptedPlaintextHardwarePod")
-
-                // Close DecryptedPlaintextHardwarePod before interacting with the page form.
-                composeRule.onNodeWithTag("plaintext_close").performClick()
+            try {
+                val setDefaultTag = "key_set_default_${createdKey.fingerprint}"
+                if (composeRule.onAllNodesWithTag(setDefaultTag).fetchSemanticsNodes().isNotEmpty()) {
+                    composeRule.onNodeWithTag(setDefaultTag).performScrollTo().performClick()
+                    composeRule.waitForIdle()
+                }
+                composeRule.onNodeWithTag("sheet_close_button").performClick()
                 composeRule.waitUntil(timeoutMillis = 5_000L) {
-                    composeRule.onAllNodesWithTag("plaintext_sheet").fetchSemanticsNodes().isEmpty()
+                    composeRule.onAllNodesWithTag("keyring_sheet").fetchSemanticsNodes().isEmpty()
                 }
 
-                // Write the 6-digit TOTP code into <input id="totp-code"> via zero-JS CdpDomPgpController
-                // and submit <button id="verify-submit"> via zero-JS CDP mouse dispatch.
-                writeInputByIdZeroJs(
+                // 3. Enter the live DigitalOcean .onion URL into Trap's RecessedCrtAddressPod and submit.
+                composeRule.onNodeWithTag("crt_address_pod").performClick()
+                composeRule.waitUntil(timeoutMillis = 5_000L) {
+                    composeRule.onAllNodesWithTag("crt_address_input").fetchSemanticsNodes().isNotEmpty()
+                }
+                composeRule.onNodeWithTag("crt_address_input").performTextReplacement(targetOnionUrl)
+                composeRule.onNodeWithTag("crt_address_input").performImeAction()
+
+                // 4. Enrollment (GET / -> POST /enroll): wait up to 120s for .onion rendezvous + "Insert My PubKey" pill.
+                awaitEnrollmentPageAndPubKeyPill(
                     activity = activity,
                     browser = browser,
-                    elementId = "totp-code",
-                    value = totpCode,
+                    targetOnionUrl = targetOnionUrl,
+                    timeoutMs = 120_000L,
                 )
-                clickElementByIdZeroJsCdp(activity, browser, "verify-submit")
+                composeRule.onNodeWithTag("pgp_field_overlay").assertIsDisplayed()
+                composeRule.onAllNodesWithText("Insert My PubKey")[0].performClick()
+
+                composeRule.waitUntil(timeoutMillis = 20_000L) {
+                    composeRule.onAllNodesWithText("Inserted public key and verified DOM field")
+                        .fetchSemanticsNodes()
+                        .isNotEmpty()
+                }
+                val pubKeyFieldText = awaitControlValueContains(
+                    activity = activity,
+                    browser = browser,
+                    elementId = "pubkey",
+                    expectedSubstring = "-----BEGIN PGP PUBLIC KEY BLOCK-----",
+                    timeoutMs = 10_000L,
+                )
+                assertTrue(
+                    "Expected ASCII-armored PGP public key in #pubkey, got len=${pubKeyFieldText.length}",
+                    pubKeyFieldText.contains("-----BEGIN PGP PUBLIC KEY BLOCK-----") &&
+                        pubKeyFieldText.contains("-----END PGP PUBLIC KEY BLOCK-----"),
+                )
+
+                clickElementByIdZeroJsCdp(activity, browser, "enroll-submit")
+
+                // 5. Complete Rounds 1, 2, and 3 (POST /verify x 3) strictly via Trap's OpenPGP UI + zero-JS CDP.
+                val seenChallengeCiphertexts = HashSet<String>()
+                val submittedTotpCodes = ArrayList<String>(3)
+
+                for (expectedRound in 1..3) {
+                    val challengeDoc = awaitChallengeRoundDom(
+                        activity = activity,
+                        browser = browser,
+                        expectedRound = expectedRound,
+                        timeoutMs = 60_000L,
+                    )
+                    val challengeCiphertext = readElementVisibleTextById(challengeDoc, "pgp-challenge").trim()
+                    assertTrue(
+                        "Round $expectedRound #pgp-challenge must contain armored PGP MESSAGE",
+                        challengeCiphertext.contains("-----BEGIN PGP MESSAGE-----") &&
+                            challengeCiphertext.contains("-----END PGP MESSAGE-----"),
+                    )
+                    assertTrue(
+                        "Round $expectedRound must emit a fresh OpenPGP ciphertext distinct from prior rounds",
+                        seenChallengeCiphertexts.add(challengeCiphertext),
+                    )
+
+                    val decryptedPlaintext = decryptCurrentPageBlockViaRockerUi(
+                        activity = activity,
+                        browser = browser,
+                        expectedSubstring = "ROUND $expectedRound OF 3",
+                        timeoutMs = 25_000L,
+                    )
+                    assertTrue(
+                        "Decrypted plaintext must confirm ROUND $expectedRound OF 3: $decryptedPlaintext",
+                        decryptedPlaintext.contains("ROUND $expectedRound OF 3"),
+                    )
+                    val codeMatch = SIX_DIGIT_TOTP_REGEX.find(decryptedPlaintext)
+                    assertNotNull(
+                        "Decrypted plaintext in DecryptedPlaintextHardwarePod must contain 6-digit TOTP code: $decryptedPlaintext",
+                        codeMatch,
+                    )
+                    val totpCode = codeMatch!!.groupValues[1]
+                    submittedTotpCodes.add(totpCode)
+                    Log.i(TAG, "Decrypted Round $expectedRound/3 TOTP challenge via DecryptedPlaintextHardwarePod")
+
+                    // Close DecryptedPlaintextHardwarePod before interacting with the page form.
+                    composeRule.onNodeWithTag("plaintext_close").performClick()
+                    composeRule.waitUntil(timeoutMillis = 5_000L) {
+                        composeRule.onAllNodesWithTag("plaintext_sheet").fetchSemanticsNodes().isEmpty()
+                    }
+
+                    // Write the 6-digit TOTP code into <input id="totp-code"> via zero-JS CdpDomPgpController
+                    // and submit <button id="verify-submit"> via zero-JS CDP mouse dispatch.
+                    writeInputByIdZeroJs(
+                        activity = activity,
+                        browser = browser,
+                        elementId = "totp-code",
+                        value = totpCode,
+                    )
+                    clickElementByIdZeroJsCdp(activity, browser, "verify-submit")
+                }
+
+                assertEquals("All 3 TOTP rounds must be submitted", 3, submittedTotpCodes.size)
+
+                // 6. Prize Verification (Round 3 won!): verify data-won="true", non-blank #prize-banner,
+                //    and pull OpenPgpRockerPod upward on <pre id="pgp-prize"> so DecryptedPlaintextHardwarePod
+                //    remains visibly open displaying the decrypted OpenPGP Prize Certificate.
+                val wonDoc = awaitPrizeWonDom(
+                    activity = activity,
+                    browser = browser,
+                    timeoutMs = 60_000L,
+                )
+                val prizeBanner = readElementVisibleTextById(wonDoc, "prize-banner").trim()
+                assertTrue("Won #prize-banner text in DOM must be non-blank", prizeBanner.isNotBlank())
+
+                val armoredPrizeCert = readElementVisibleTextById(wonDoc, "pgp-prize").trim()
+                assertTrue(
+                    "Won #pgp-prize must contain an ASCII-armored OpenPGP message",
+                    armoredPrizeCert.contains("-----BEGIN PGP MESSAGE-----") &&
+                        armoredPrizeCert.contains("-----END PGP MESSAGE-----"),
+                )
+
+                val decryptedCertificate = decryptCurrentPageBlockViaRockerUi(
+                    activity = activity,
+                    browser = browser,
+                    expectedSubstring = prizeBanner,
+                    timeoutMs = 25_000L,
+                )
+                composeRule.onNodeWithTag("plaintext_sheet").assertIsDisplayed()
+                assertTrue(
+                    "Decrypted OpenPGP Prize Certificate must include won prize banner",
+                    decryptedCertificate.contains(prizeBanner),
+                )
+                assertTrue(
+                    "Decrypted OpenPGP Prize Certificate must bind winner key fingerprint ${createdKey.fingerprint}",
+                    decryptedCertificate.contains(createdKey.fingerprint, ignoreCase = true),
+                )
+
+                // Allow RenderThread & SurfaceFlinger to commit the frame with plaintext_sheet open,
+                // then capture the frame-accurate PNG screenshot before logging PRIZE_WON_JSON.
+                composeRule.waitForIdle()
+                SystemClock.sleep(650L)
+                capturePrizeScreenshotToDeviceTmp(instrumentation, activity)
+
+                val prizePayload = JSONObject()
+                    .put("onionUrl", targetOnionUrl)
+                    .put("roundsCompleted", 3)
+                    .put("winnerFingerprint", createdKey.fingerprint)
+                    .put("prizeBanner", prizeBanner)
+                    .put("decryptedCertificate", decryptedCertificate)
+                Log.i(TAG, "PRIZE_WON_JSON=$prizePayload")
+
+                // Keep DecryptedPlaintextHardwarePod visibly open briefly for outer gate screenshot capture.
+                SystemClock.sleep(prizeHoldMs)
+            } finally {
+                runCatching { OvNative.nativeDeleteKey(createdKey.fingerprint) }
+                prefs.defaultKeyFingerprint = previousDefaultFp
+                prefs.requireBiometric = previousBiometric
+                runCatching { OvNative.nativeSetRequireBiometric(previousBiometric) }
             }
-
-            assertEquals("All 3 TOTP rounds must be submitted", 3, submittedTotpCodes.size)
-
-            // 6. Prize Verification (Round 3 won!): verify data-won="true", non-blank #prize-banner,
-            //    and pull OpenPgpRockerPod upward on <pre id="pgp-prize"> so DecryptedPlaintextHardwarePod
-            //    remains visibly open displaying the decrypted OpenPGP Prize Certificate.
-            val wonDoc = awaitPrizeWonDom(
-                activity = activity,
-                browser = browser,
-                timeoutMs = 60_000L,
-            )
-            val prizeBanner = readElementVisibleTextById(wonDoc, "prize-banner").trim()
-            assertTrue("Won #prize-banner text in DOM must be non-blank", prizeBanner.isNotBlank())
-
-            val armoredPrizeCert = readElementVisibleTextById(wonDoc, "pgp-prize").trim()
-            assertTrue(
-                "Won #pgp-prize must contain an ASCII-armored OpenPGP message",
-                armoredPrizeCert.contains("-----BEGIN PGP MESSAGE-----") &&
-                    armoredPrizeCert.contains("-----END PGP MESSAGE-----"),
-            )
-
-            val decryptedCertificate = decryptCurrentPageBlockViaRockerUi(
-                activity = activity,
-                browser = browser,
-                expectedSubstring = prizeBanner,
-                timeoutMs = 25_000L,
-            )
-            composeRule.onNodeWithTag("plaintext_sheet").assertIsDisplayed()
-            assertTrue(
-                "Decrypted OpenPGP Prize Certificate must include won prize banner",
-                decryptedCertificate.contains(prizeBanner),
-            )
-            assertTrue(
-                "Decrypted OpenPGP Prize Certificate must bind winner key fingerprint ${createdKey.fingerprint}",
-                decryptedCertificate.contains(createdKey.fingerprint, ignoreCase = true),
-            )
-
-            // Allow RenderThread & SurfaceFlinger to commit the frame with plaintext_sheet open,
-            // then capture the frame-accurate PNG screenshot before logging PRIZE_WON_JSON.
-            composeRule.waitForIdle()
-            SystemClock.sleep(650L)
-            capturePrizeScreenshotToDeviceTmp(instrumentation, activity)
-
-            val prizePayload = JSONObject()
-                .put("onionUrl", targetOnionUrl)
-                .put("roundsCompleted", 3)
-                .put("winnerFingerprint", createdKey.fingerprint)
-                .put("prizeBanner", prizeBanner)
-                .put("decryptedCertificate", decryptedCertificate)
-            Log.i(TAG, "PRIZE_WON_JSON=$prizePayload")
-
-            // Keep DecryptedPlaintextHardwarePod visibly open briefly for outer gate screenshot capture.
-            SystemClock.sleep(prizeHoldMs)
-        } finally {
-            runCatching { OvNative.nativeDeleteKey(createdKey.fingerprint) }
-            prefs.defaultKeyFingerprint = previousDefaultFp
-            prefs.requireBiometric = previousBiometric
-            runCatching { OvNative.nativeSetRequireBiometric(previousBiometric) }
         }
     }
 

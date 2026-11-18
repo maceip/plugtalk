@@ -8,12 +8,15 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
+import android.app.KeyguardManager
+import android.content.pm.ApplicationInfo
 import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.compose.setContent
@@ -84,10 +87,13 @@ import kotlinx.coroutines.withContext
  */
 class MainActivity : FragmentActivity() {
 
-    private companion object {
-        const val TAG = "Trap"
-        const val STATE_URL = "url"
-        const val ZOOM_STEP_PERCENT = 15
+    companion object {
+        private const val TAG = "Trap"
+        private const val STATE_URL = "url"
+        private const val ZOOM_STEP_PERCENT = 15
+
+        @VisibleForTesting
+        const val EXTRA_SHOW_OVER_KEYGUARD_FOR_TEST = "dev.onionvault.SHOW_OVER_KEYGUARD_FOR_TEST"
 
         @Volatile
         var nativeRuntimeInitialized: Boolean = false
@@ -170,6 +176,13 @@ class MainActivity : FragmentActivity() {
     private var crashReport by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        val isDebuggable = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        if (isDebuggable && intent?.getBooleanExtra(EXTRA_SHOW_OVER_KEYGUARD_FOR_TEST, false) == true) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            getSystemService(KeyguardManager::class.java)?.requestDismissKeyguard(this, null)
+        }
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
