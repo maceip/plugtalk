@@ -1,12 +1,12 @@
 package dev.onionvault
 
-import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.util.Log
 import android.view.WindowManager
+import android.view.inputmethod.InputMethodManager
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -26,7 +26,6 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
-import androidx.test.espresso.Espresso
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.cefpack.android.CefpackSession
@@ -125,7 +124,6 @@ class LiveOnionPgpTotpPrizeTest {
                 act.setShowWhenLocked(true)
                 act.setTurnScreenOn(true)
                 act.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                act.getSystemService(KeyguardManager::class.java)?.requestDismissKeyguard(act, null)
                 activityRef.set(act)
             }
             val activity = activityRef.get()
@@ -194,7 +192,7 @@ class LiveOnionPgpTotpPrizeTest {
             composeRule.onNodeWithText("Generate").performClick()
             composeRule.waitForIdle()
             composeRule.onNodeWithTag("keygen_userid_input").performTextInput(challengerUserId)
-            Espresso.closeSoftKeyboard()
+            hideSoftKeyboard(activity)
             composeRule.waitForIdle()
             composeRule.onNodeWithTag("keygen_submit_button").performClick()
 
@@ -922,8 +920,17 @@ class LiveOnionPgpTotpPrizeTest {
     }
 
     private fun wakeAndUnlockDisplay(instrumentation: android.app.Instrumentation) {
+        // Wake display and collapse any open shade/bouncer without invoking wm dismiss-keyguard
+        // (which summons the biometric/PIN bouncer overlay on secure-lock devices).
         runShellCommandDrained(instrumentation, "input keyevent KEYCODE_WAKEUP")
-        runShellCommandDrained(instrumentation, "wm dismiss-keyguard")
+        runShellCommandDrained(instrumentation, "cmd statusbar collapse")
+    }
+
+    private fun hideSoftKeyboard(activity: MainActivity) {
+        activity.runOnUiThread {
+            val imm = activity.getSystemService(InputMethodManager::class.java)
+            imm?.hideSoftInputFromWindow(activity.window.decorView.windowToken, 0)
+        }
     }
 
     private fun capturePrizeScreenshotToDeviceTmp(

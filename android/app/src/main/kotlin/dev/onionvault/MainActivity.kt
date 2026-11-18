@@ -175,13 +175,17 @@ class MainActivity : FragmentActivity() {
     private var uiState by mutableStateOf(BrowserUiState())
     private var crashReport by mutableStateOf<String?>(null)
 
+    @Suppress("DEPRECATION")
     override fun onCreate(savedInstanceState: Bundle?) {
         val isDebuggable = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
         if (isDebuggable && intent?.getBooleanExtra(EXTRA_SHOW_OVER_KEYGUARD_FOR_TEST, false) == true) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
-            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            getSystemService(KeyguardManager::class.java)?.requestDismissKeyguard(this, null)
+            window.addFlags(
+                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+                    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                    WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON,
+            )
         }
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)

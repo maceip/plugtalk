@@ -63,7 +63,8 @@ ABI="$(adb -s "$SERIAL" shell getprop ro.product.cpu.abi | tr -d '\r\n')"
 echo "== [1/4] Target device: ${SERIAL} (${MODEL}, Android ${REL} API ${SDK}, ${ABI}) =="
 
 adb -s "$SERIAL" shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1 || true
-adb -s "$SERIAL" shell wm dismiss-keyguard >/dev/null 2>&1 || true
+adb -s "$SERIAL" shell input keyevent KEYCODE_BACK >/dev/null 2>&1 || true
+adb -s "$SERIAL" shell cmd statusbar collapse >/dev/null 2>&1 || true
 adb -s "$SERIAL" shell rm -f "$DEVICE_TMP_PNG" >/dev/null 2>&1 || true
 
 echo "== [2/4] Installing $(basename "$APK") and $(basename "$TEST_APK") =="
