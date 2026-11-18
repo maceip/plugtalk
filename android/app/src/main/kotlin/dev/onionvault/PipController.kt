@@ -209,8 +209,8 @@ class PipController(
     }
 
     /**
-     * Resolves window metadata (`title` + `subtitle`) and the 3 adaptive [RemoteAction]
-     * slot specs + custom close action spec for the active tab's current activity.
+     * Resolves window metadata (`title` + `subtitle`) and the 3 PiP [RemoteAction]
+     * slot specs (`Back`, `Reload` / `Stop`, `Text Search`) + custom close action spec.
      */
     fun resolveOverlayModel(snapshot: PipSnapshot): OverlayModel {
         val subtitle = extractEtldPlusOneOrigin(snapshot.activeUrl)
@@ -224,115 +224,41 @@ class PipController(
             snapshot.hasWebRtcAudio ||
             snapshot.isMediaPausedByUser
 
-        val actions = if (isMediaMode) {
-            val primaryAction = if (snapshot.hasWebRtcAudio) {
-                if (snapshot.isAudioMuted) {
-                    PipActionSpec(
-                        command = PipActionReceiver.Command.TOGGLE_MUTE,
-                        iconRes = R.drawable.ic_ov_pip_mic_off,
-                        title = "Unmute Mic",
-                        contentDescription = "Unmute microphone",
-                    )
-                } else {
-                    PipActionSpec(
-                        command = PipActionReceiver.Command.TOGGLE_MUTE,
-                        iconRes = R.drawable.ic_ov_pip_mic_on,
-                        title = "Mute Mic",
-                        contentDescription = "Mute microphone",
-                    )
-                }
-            } else {
-                val activelyPlaying = (
-                    snapshot.isPlayingAudio ||
-                        snapshot.hasActiveVideo ||
-                        snapshot.isFullscreenVideo
-                    ) && !snapshot.isMediaPausedByUser
-                if (activelyPlaying) {
-                    PipActionSpec(
-                        command = PipActionReceiver.Command.PLAY_PAUSE,
-                        iconRes = R.drawable.ic_ov_pip_pause,
-                        title = "Pause",
-                        contentDescription = "Pause active media",
-                    )
-                } else {
-                    PipActionSpec(
-                        command = PipActionReceiver.Command.PLAY_PAUSE,
-                        iconRes = R.drawable.ic_ov_pip_play,
-                        title = "Play",
-                        contentDescription = "Resume active media",
-                    )
-                }
-            }
+        val backAction = PipActionSpec(
+            command = PipActionReceiver.Command.HISTORY_BACK,
+            iconRes = R.drawable.ic_ov_back,
+            title = "Back",
+            contentDescription = "Navigate back",
+            enabled = snapshot.canGoBack,
+        )
 
-            val seekAction = PipActionSpec(
-                command = PipActionReceiver.Command.SEEK_FORWARD,
-                iconRes = R.drawable.ic_ov_pip_seek_forward,
-                title = "Seek +10s",
-                contentDescription = "Seek forward 10 seconds or next track",
+        val reloadOrStopAction = if (snapshot.isLoading) {
+            PipActionSpec(
+                command = PipActionReceiver.Command.RELOAD_OR_STOP,
+                iconRes = R.drawable.ic_ov_pip_stop,
+                title = "Stop",
+                contentDescription = "Abort current page load",
+                enabled = true,
             )
-
-            val switchTabAction = PipActionSpec(
-                command = PipActionReceiver.Command.SWITCH_TAB,
-                iconRes = R.drawable.ic_ov_tabs,
-                title = "Switch Tab",
-                contentDescription = "Switch to next tab",
-                enabled = snapshot.tabCount > 1,
-            )
-
-            listOf(primaryAction, seekAction, switchTabAction)
         } else {
-            val scrollAction = if (snapshot.atDocumentBottom) {
-                PipActionSpec(
-                    command = PipActionReceiver.Command.SCROLL_VIEWPORT,
-                    iconRes = R.drawable.ic_ov_pip_scroll_up,
-                    title = "Scroll Up",
-                    contentDescription = "Scroll back to top of page",
-                )
-            } else {
-                PipActionSpec(
-                    command = PipActionReceiver.Command.SCROLL_VIEWPORT,
-                    iconRes = R.drawable.ic_ov_pip_scroll_down,
-                    title = "Scroll Down",
-                    contentDescription = "Scroll down 75 percent of viewport",
-                )
-            }
-
-            val reloadOrStopAction = if (snapshot.isLoading) {
-                PipActionSpec(
-                    command = PipActionReceiver.Command.RELOAD_OR_STOP,
-                    iconRes = R.drawable.ic_ov_pip_stop,
-                    title = "Stop",
-                    contentDescription = "Abort current page load",
-                )
-            } else {
-                PipActionSpec(
-                    command = PipActionReceiver.Command.RELOAD_OR_STOP,
-                    iconRes = R.drawable.ic_ov_reload,
-                    title = "Reload",
-                    contentDescription = "Reload current tab",
-                )
-            }
-
-            val thirdSlotAction = if (snapshot.tabCount > 1) {
-                PipActionSpec(
-                    command = PipActionReceiver.Command.SWITCH_TAB,
-                    iconRes = R.drawable.ic_ov_tabs,
-                    title = "Switch Tab",
-                    contentDescription = "Cycle to next open tab",
-                    enabled = true,
-                )
-            } else {
-                PipActionSpec(
-                    command = PipActionReceiver.Command.HISTORY_BACK,
-                    iconRes = R.drawable.ic_ov_back,
-                    title = "Back",
-                    contentDescription = "Navigate back",
-                    enabled = snapshot.canGoBack,
-                )
-            }
-
-            listOf(scrollAction, reloadOrStopAction, thirdSlotAction)
+            PipActionSpec(
+                command = PipActionReceiver.Command.RELOAD_OR_STOP,
+                iconRes = R.drawable.ic_ov_reload,
+                title = "Reload",
+                contentDescription = "Reload current tab",
+                enabled = true,
+            )
         }
+
+        val textSearchAction = PipActionSpec(
+            command = PipActionReceiver.Command.TEXT_SEARCH,
+            iconRes = R.drawable.ic_ov_search,
+            title = "Text Search",
+            contentDescription = "Search text on page",
+            enabled = true,
+        )
+
+        val actions = listOf(backAction, reloadOrStopAction, textSearchAction)
 
         val closeSpec = PipActionSpec(
             command = PipActionReceiver.Command.CLOSE_PIP,
@@ -359,13 +285,17 @@ class PipController(
         context: Context,
         spec: PipActionSpec,
     ): RemoteAction {
-        val intent = Intent(spec.command.action).setPackage(context.packageName)
-        val pendingIntent = PendingIntent.getBroadcast(
-            context,
-            spec.command.requestCode,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        val pendingIntent = if (spec.command == PipActionReceiver.Command.TEXT_SEARCH) {
+            val activityIntent = Intent(context, MainActivity::class.java)
+                .setAction(spec.command.action)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                .putExtra(EXTRA_OPEN_TEXT_SEARCH, true)
+            PendingIntent.getActivity(context, spec.command.requestCode, activityIntent, flags)
+        } else {
+            val broadcastIntent = Intent(spec.command.action).setPackage(context.packageName)
+            PendingIntent.getBroadcast(context, spec.command.requestCode, broadcastIntent, flags)
+        }
         val icon = Icon.createWithResource(context, spec.iconRes)
         return RemoteAction(icon, spec.title, spec.contentDescription, pendingIntent).apply {
             isEnabled = spec.enabled
@@ -396,10 +326,13 @@ class PipController(
         }
 
         if (environment.sdkInt >= Build.VERSION_CODES.S) {
+            // Enable seamless resize for all eligible PiP sessions so Android 12–17
+            // PipTaskOrganizer keeps rendering the live Chromium SurfaceView instead of
+            // masking non-video PiP transitions with a blank white splash overlay.
             Api31Impl.applyAutoEnterAndSeamlessResize(
                 builder = builder,
                 autoEnterEnabled = eligibility.eligible,
-                seamlessResizeEnabled = snapshot.isFullscreenVideo,
+                seamlessResizeEnabled = eligibility.eligible,
             )
         }
 
@@ -470,7 +403,13 @@ class PipController(
     companion object {
         const val ACTION_PICTURE_IN_PICTURE_SETTINGS =
             "android.settings.PICTURE_IN_PICTURE_SETTINGS"
+        const val EXTRA_OPEN_TEXT_SEARCH = "dev.onionvault.extra.OPEN_TEXT_SEARCH"
         const val MAX_PIP_REMOTE_ACTIONS = 3
+
+        /** Subtle window/surface translucency applied while in Picture-in-Picture mode. */
+        const val PIP_WINDOW_ALPHA = 0.88f
+        const val FULLSCREEN_WINDOW_ALPHA = 1.0f
+        const val MIN_PIP_SCALE_FACTOR = 0.25f
 
         val MIN_ASPECT_RATIO = Rational(100, 239)
         val MAX_ASPECT_RATIO = Rational(239, 100)
@@ -502,6 +441,24 @@ class PipController(
             isInPictureInPictureMode: Boolean,
             isTransitioningToPip: Boolean,
         ): Boolean = isInPictureInPictureMode || isTransitioningToPip
+
+        fun resolveWindowAlpha(isInPictureInPictureMode: Boolean): Float =
+            if (isInPictureInPictureMode) PIP_WINDOW_ALPHA else FULLSCREEN_WINDOW_ALPHA
+
+        /**
+         * Computes the proportional zoom scale factor (`pipWidth / fullViewportWidth`) so the
+         * full desktop/mobile webpage width fits inside the miniaturized PiP window without
+         * clipping or horizontal overflow.
+         */
+        fun computePipScaleFactor(
+            viewportWidthPx: Int,
+            fullViewportWidthPx: Int,
+        ): Float {
+            if (viewportWidthPx <= 0 || fullViewportWidthPx <= 0) return 1.0f
+            if (viewportWidthPx >= fullViewportWidthPx) return 1.0f
+            return (viewportWidthPx.toFloat() / fullViewportWidthPx.toFloat())
+                .coerceIn(MIN_PIP_SCALE_FACTOR, 1.0f)
+        }
 
         /**
          * Extracts a clean `eTLD+1` origin display string (including `.onion` v3 apex

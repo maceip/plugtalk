@@ -245,6 +245,9 @@ class ScreenshotTest {
         // 2. MetaToolsBrowserShell + 1.5x floating KPT islands + TRAP street-zine StartPage + TrustedOnionDirectory.
         compose.onNodeWithTag("metatools_browser_shell").assertIsDisplayed()
         compose.onNodeWithTag("perimeter_steel_rails").assertIsDisplayed()
+        compose.onNodeWithTag("webpage_viewport_host").assertIsDisplayed()
+        assertEquals(0.dp, compose.onNodeWithTag("webpage_viewport_host").getUnclippedBoundsInRoot().top)
+        assertEquals(0.dp, compose.onNodeWithTag("perimeter_steel_rails").getUnclippedBoundsInRoot().top)
         compose.onNodeWithTag("kpt_back_pod").assertIsDisplayed()
         compose.onNodeWithTag("tor_orb_pod").assertIsDisplayed()
         compose.onNodeWithTag("crt_address_pod").assertIsDisplayed()

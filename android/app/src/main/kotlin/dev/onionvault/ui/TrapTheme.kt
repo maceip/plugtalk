@@ -313,6 +313,7 @@ enum class TrapGlyph(
     ZoomOut(R.drawable.ic_ov_zoom_out, R.drawable.ic_neon_zoom_out),
     Onion(R.drawable.ic_ov_onion, R.drawable.ic_neon_onion),
     RefreshIdentity(R.drawable.ic_ov_refresh_id, R.drawable.ic_neon_update),
+    Search(R.drawable.ic_ov_search, null),
 }
 
 /**

@@ -13,14 +13,14 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * 100% Zero-JavaScript DOM OpenPGP scanner and form-field mutator powered by
- * Cefpack's in-process Chrome DevTools Protocol (`executeDevToolsMethod`).
+ * 100% Zero-JavaScript DOM OpenPGP scanner, in-page text searcher, and form-field mutator
+ * powered by Cefpack's in-process Chrome DevTools Protocol (`executeDevToolsMethod`).
  *
  * Operates exclusively through Chromium's C++ `InspectorDOMAgent`, `InspectorPageAgent`,
  * and `InspectorInputAgent` (`DOM.getDocument`, `DOM.getOuterHTML`, `DOM.getBoxModel`,
+ * `DOM.performSearch`, `DOM.getSearchResults`, `DOM.scrollIntoViewIfNeeded`,
  * `DOM.focus`, `Input.dispatchKeyEvent`, `Input.insertText`) while leaving webpage
- * DOM styling untouched and enforcing `WebPreferences::javascript_enabled = false` and
- * `Emulation.setScriptExecutionDisabled(true)` on every session instance.
+ * DOM styling untouched and enforcing zero JavaScript execution on every session.
  */
 class CdpDomPgpController(
     private val onNodesDetected: (
@@ -45,6 +45,27 @@ class CdpDomPgpController(
         val normalizedRight: Float,
         val normalizedBottom: Float,
         val isSearchLike: Boolean = false,
+    )
+
+    data class NormalizedMatchBox(
+        val left: Float,
+        val top: Float,
+        val right: Float,
+        val bottom: Float,
+    )
+
+    data class TextSearchOutcome(
+        val query: String,
+        val matchCount: Int,
+        val activeIndex: Int,
+        val activeBounds: NormalizedMatchBox? = null,
+    )
+
+    private data class ActiveSearchSession(
+        val query: String,
+        val searchId: String,
+        val matchCount: Int,
+        val activeZeroIndex: Int,
     )
 
     internal data class ClassifiedNodeEntry(
@@ -75,6 +96,34 @@ class CdpDomPgpController(
 
     internal companion object {
         private const val TAG = "CdpDomPgp"
+        private val SCRIPT_STYLE_REGEX =
+            Regex("""<(script|style|noscript)\b[^>]*>[\s\S]*?</\1>""", RegexOption.IGNORE_CASE)
+        private val HTML_TAG_REGEX = Regex("""<[^>]+>""")
+
+        /**
+         * Pure-Kotlin visible text match counter used when no live native `CefpackSession`
+         * is attached (e.g., cached snapshot tabs or Robolectric JVM Compose tests).
+         */
+        internal fun countPlainTextMatchesInHtml(html: String, query: String): Int {
+            val needle = query.trim()
+            if (html.isBlank() || needle.isEmpty()) return 0
+            val visibleText = html
+                .replace(SCRIPT_STYLE_REGEX, " ")
+                .replace(HTML_TAG_REGEX, " ")
+                .replace("&nbsp;", " ", ignoreCase = true)
+                .replace("&amp;", "&", ignoreCase = true)
+                .replace("&lt;", "<", ignoreCase = true)
+                .replace("&gt;", ">", ignoreCase = true)
+            var count = 0
+            var searchFrom = 0
+            while (searchFrom <= visibleText.length - needle.length) {
+                val found = visibleText.indexOf(needle, startIndex = searchFrom, ignoreCase = true)
+                if (found < 0) break
+                count++
+                searchFrom = found + needle.length.coerceAtLeast(1)
+            }
+            return count
+        }
 
         /**
          * Parses the JSON array returned by `OvNative.nativeClassifyCdpDom`, excluding
@@ -122,6 +171,7 @@ class CdpDomPgpController(
     private val lastUrlByTab = ConcurrentHashMap<String, String>()
     private val lastClassifiedByTab = ConcurrentHashMap<String, List<ClassifiedNodeEntry>>()
     private val scanGenerationByTab = ConcurrentHashMap<String, AtomicInteger>()
+    private val activeSearchByTab = ConcurrentHashMap<String, ActiveSearchSession>()
 
     fun nodesForTab(tabId: String): List<DetectedPgpNode> =
         _activeNodes.value[tabId].orEmpty()
@@ -169,6 +219,253 @@ class CdpDomPgpController(
     }
 
     /**
+     * Executes a 100% zero-JavaScript in-page text search using Chromium C++
+     * `InspectorDOMAgent` (`DOM.performSearch`, `DOM.getSearchResults`,
+     * `DOM.scrollIntoViewIfNeeded`, and `DOM.getContentQuads`), falling back to
+     * [fallbackDomHtml] when no live native [CefpackSession] is attached.
+     */
+    fun performTextSearch(
+        tabId: String,
+        browser: CefpackSession?,
+        query: String,
+        stepDelta: Int = 0,
+        fallbackDomHtml: String = "",
+        onResult: (TextSearchOutcome) -> Unit,
+    ) {
+        runOnMain {
+            val trimmed = query.trim()
+            if (trimmed.isEmpty()) {
+                clearTextSearch(tabId, browser)
+                onResult(TextSearchOutcome(query = "", matchCount = 0, activeIndex = 0))
+                return@runOnMain
+            }
+
+            val previous = activeSearchByTab[tabId]
+            if (browser == null) {
+                val total = countPlainTextMatchesInHtml(fallbackDomHtml, trimmed)
+                if (total <= 0) {
+                    activeSearchByTab.remove(tabId)
+                    onResult(TextSearchOutcome(query = query, matchCount = 0, activeIndex = 0))
+                    return@runOnMain
+                }
+                val zeroIdx = computeNextZeroIndex(previous, trimmed, total, stepDelta)
+                activeSearchByTab[tabId] = ActiveSearchSession(
+                    query = trimmed,
+                    searchId = "",
+                    matchCount = total,
+                    activeZeroIndex = zeroIdx,
+                )
+                onResult(
+                    TextSearchOutcome(
+                        query = query,
+                        matchCount = total,
+                        activeIndex = zeroIdx + 1,
+                    ),
+                )
+                return@runOnMain
+            }
+
+            if (previous != null && previous.searchId.isNotEmpty()) {
+                val discardParams = JSONObject().put("searchId", previous.searchId).toString()
+                browser.executeDevToolsMethod("DOM.discardSearchResults", discardParams, null)
+            }
+
+            val docParams = JSONObject().put("depth", -1).put("pierce", true).toString()
+            browser.executeDevToolsMethod("DOM.getDocument", docParams) { _, _ ->
+                val searchParams = JSONObject()
+                    .put("query", trimmed)
+                    .put("includeUserAgentShadowDOM", true)
+                    .toString()
+                browser.executeDevToolsMethod("DOM.performSearch", searchParams) { ok, searchJson ->
+                    if (!ok || searchJson.isNullOrBlank()) {
+                        val fallbackCount = countPlainTextMatchesInHtml(fallbackDomHtml, trimmed)
+                        val zeroIdx = if (fallbackCount > 0) {
+                            computeNextZeroIndex(previous, trimmed, fallbackCount, stepDelta)
+                        } else {
+                            0
+                        }
+                        if (fallbackCount > 0) {
+                            activeSearchByTab[tabId] = ActiveSearchSession(
+                                query = trimmed,
+                                searchId = "",
+                                matchCount = fallbackCount,
+                                activeZeroIndex = zeroIdx,
+                            )
+                        } else {
+                            activeSearchByTab.remove(tabId)
+                        }
+                        runOnMain {
+                            onResult(
+                                TextSearchOutcome(
+                                    query = query,
+                                    matchCount = fallbackCount,
+                                    activeIndex = if (fallbackCount > 0) zeroIdx + 1 else 0,
+                                ),
+                            )
+                        }
+                        return@executeDevToolsMethod
+                    }
+
+                    val parsed = runCatching { JSONObject(searchJson) }.getOrNull()
+                    val searchId = parsed?.optString("searchId", "").orEmpty()
+                    val resultCount = parsed?.optInt("resultCount", 0)?.coerceAtLeast(0) ?: 0
+                    if (searchId.isEmpty() || resultCount <= 0) {
+                        if (searchId.isNotEmpty()) {
+                            val discard = JSONObject().put("searchId", searchId).toString()
+                            browser.executeDevToolsMethod("DOM.discardSearchResults", discard, null)
+                        }
+                        activeSearchByTab.remove(tabId)
+                        runOnMain {
+                            onResult(TextSearchOutcome(query = query, matchCount = 0, activeIndex = 0))
+                        }
+                        return@executeDevToolsMethod
+                    }
+
+                    val zeroIdx = computeNextZeroIndex(previous, trimmed, resultCount, stepDelta)
+                    activeSearchByTab[tabId] = ActiveSearchSession(
+                        query = trimmed,
+                        searchId = searchId,
+                        matchCount = resultCount,
+                        activeZeroIndex = zeroIdx,
+                    )
+                    val resultsParams = JSONObject()
+                        .put("searchId", searchId)
+                        .put("fromIndex", zeroIdx)
+                        .put("toIndex", zeroIdx + 1)
+                        .toString()
+                    browser.executeDevToolsMethod("DOM.getSearchResults", resultsParams) { rOk, rJson ->
+                        val nodeId = if (rOk && !rJson.isNullOrBlank()) {
+                            runCatching {
+                                JSONObject(rJson).optJSONArray("nodeIds")?.optInt(0, 0) ?: 0
+                            }.getOrDefault(0)
+                        } else {
+                            0
+                        }
+                        if (nodeId <= 0) {
+                            runOnMain {
+                                onResult(
+                                    TextSearchOutcome(
+                                        query = query,
+                                        matchCount = resultCount,
+                                        activeIndex = zeroIdx + 1,
+                                    ),
+                                )
+                            }
+                            return@executeDevToolsMethod
+                        }
+
+                        val scrollParams = JSONObject().put("nodeId", nodeId).toString()
+                        browser.executeDevToolsMethod("DOM.scrollIntoViewIfNeeded", scrollParams) { _, _ ->
+                            resolveSearchMatchBounds(browser, nodeId) { matchBox ->
+                                runOnMain {
+                                    onResult(
+                                        TextSearchOutcome(
+                                            query = query,
+                                            matchCount = resultCount,
+                                            activeIndex = zeroIdx + 1,
+                                            activeBounds = matchBox,
+                                        ),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fun clearTextSearch(tabId: String, browser: CefpackSession? = attachedBrowsers[tabId]) {
+        val removed = activeSearchByTab.remove(tabId)
+        if (removed != null && removed.searchId.isNotEmpty() && browser != null) {
+            runOnMain {
+                val discard = JSONObject().put("searchId", removed.searchId).toString()
+                browser.executeDevToolsMethod("DOM.discardSearchResults", discard, null)
+            }
+        }
+    }
+
+    private fun computeNextZeroIndex(
+        previous: ActiveSearchSession?,
+        trimmedQuery: String,
+        totalCount: Int,
+        stepDelta: Int,
+    ): Int {
+        if (totalCount <= 1) return 0
+        if (previous == null || !previous.query.equals(trimmedQuery, ignoreCase = true)) {
+            return 0
+        }
+        val base = previous.activeZeroIndex.coerceIn(0, totalCount - 1)
+        if (stepDelta == 0) return base
+        val raw = (base + stepDelta) % totalCount
+        return if (raw < 0) raw + totalCount else raw
+    }
+
+    private fun resolveSearchMatchBounds(
+        browser: CefpackSession,
+        nodeId: Int,
+        onBounds: (NormalizedMatchBox?) -> Unit,
+    ) {
+        fetchViewportMetrics(browser) { metrics ->
+            if (metrics == null) {
+                onBounds(null)
+                return@fetchViewportMetrics
+            }
+            val nodeParams = JSONObject().put("nodeId", nodeId).toString()
+            browser.executeDevToolsMethod("DOM.getContentQuads", nodeParams) { qOk, qJson ->
+                val quadBox = if (qOk && !qJson.isNullOrBlank()) {
+                    runCatching {
+                        val quads = JSONObject(qJson).optJSONArray("quads")
+                        val firstQuad = quads?.optJSONArray(0)
+                        parseQuadToMatchBox(firstQuad, metrics)
+                    }.getOrNull()
+                } else {
+                    null
+                }
+                if (quadBox != null) {
+                    onBounds(quadBox)
+                    return@executeDevToolsMethod
+                }
+                browser.executeDevToolsMethod("DOM.getBoxModel", nodeParams) { bOk, bJson ->
+                    val box = if (bOk && !bJson.isNullOrBlank()) {
+                        runCatching {
+                            val model = JSONObject(bJson).optJSONObject("model")
+                            val quad = model?.optJSONArray("border") ?: model?.optJSONArray("content")
+                            parseQuadToMatchBox(quad, metrics)
+                        }.getOrNull()
+                    } else {
+                        null
+                    }
+                    onBounds(box)
+                }
+            }
+        }
+    }
+
+    private fun parseQuadToMatchBox(quad: JSONArray?, metrics: ViewportMetrics): NormalizedMatchBox? {
+        if (quad == null || quad.length() < 8) return null
+        var minX = Double.POSITIVE_INFINITY
+        var maxX = Double.NEGATIVE_INFINITY
+        var minY = Double.POSITIVE_INFINITY
+        var maxY = Double.NEGATIVE_INFINITY
+        for (i in 0 until 8 step 2) {
+            val x = quad.optDouble(i)
+            val y = quad.optDouble(i + 1)
+            if (x < minX) minX = x
+            if (x > maxX) maxX = x
+            if (y < minY) minY = y
+            if (y > maxY) maxY = y
+        }
+        if (!minX.isFinite() || !maxX.isFinite() || maxX <= minX || maxY <= minY) return null
+        val left = ((minX - metrics.pageX) / metrics.width).toFloat().coerceIn(0f, 1f)
+        val top = ((minY - metrics.pageY) / metrics.height).toFloat().coerceIn(0f, 1f)
+        val right = ((maxX - metrics.pageX) / metrics.width).toFloat().coerceIn(0f, 1f)
+        val bottom = ((maxY - metrics.pageY) / metrics.height).toFloat().coerceIn(0f, 1f)
+        if (right <= left || bottom <= top) return null
+        return NormalizedMatchBox(left = left, top = top, right = right, bottom = bottom)
+    }
+
+    /**
      * Writes [newValue] into a live HTML `<textarea>` or `<input>` without JavaScript,
      * then re-queries `DOM.getDocument({"depth":-1,"pierce":true})` to verify that the
      * Blink UA shadow-root editor actually holds [newValue] before reporting success.
@@ -210,6 +507,7 @@ class CdpDomPgpController(
     }
 
     fun detachTab(tabId: String) {
+        clearTextSearch(tabId)
         attachedBrowsers.remove(tabId)
         lastUrlByTab.remove(tabId)
         lastClassifiedByTab.remove(tabId)
@@ -220,6 +518,7 @@ class CdpDomPgpController(
     }
 
     fun clearAll() {
+        activeSearchByTab.clear()
         attachedBrowsers.clear()
         lastUrlByTab.clear()
         lastClassifiedByTab.clear()
@@ -245,6 +544,13 @@ class CdpDomPgpController(
         browser.executeDevToolsMethod(
             "Emulation.setScriptExecutionDisabled",
             "{\"value\":true}",
+            null,
+        )
+        // Override Blink's default #FFFFFF canvas backdrop with Trap obsidian (#0D0F12)
+        // so unloaded, connecting, or resizing PiP viewports never flash pure white.
+        browser.executeDevToolsMethod(
+            "Emulation.setDefaultBackgroundColorOverride",
+            """{"color":{"r":13,"g":15,"b":18,"a":255}}""",
             null,
         )
     }

@@ -4,16 +4,20 @@ import android.app.Activity
 import android.app.PictureInPictureParams
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.Rect
 import android.os.Build
 import android.util.Rational
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import dev.onionvault.ui.BrowserScreen
 import dev.onionvault.ui.BrowserUiState
@@ -35,6 +39,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 import org.w3c.dom.Element
 
@@ -292,7 +297,7 @@ class PipControllerTest {
     }
 
     @Test
-    fun zero_flicker_chrome_stripping_hides_dock_banners_and_overlays_immediately() {
+    fun zero_flicker_chrome_stripping_renders_non_white_fallback_and_never_shows_top_banners() {
         assertTrue(
             PipController.resolveChromeHidden(
                 isInPictureInPictureMode = false,
@@ -312,6 +317,7 @@ class PipControllerTest {
             ),
         )
 
+        val fallbackBitmap = Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888).asImageBitmap()
         var chromeHidden by mutableStateOf(false)
         compose.setContent {
             TrapTheme {
@@ -320,7 +326,9 @@ class PipControllerTest {
                         url = "https://tor.taxi/",
                         isLoading = true,
                         status = "Connected",
+                        blocked = true,
                         isPipChromeHidden = chromeHidden,
+                        pipFallbackBitmap = fallbackBitmap,
                         pgp = PgpOverlayState(
                             fields = listOf(
                                 PgpFieldState(
@@ -338,18 +346,31 @@ class PipControllerTest {
             }
         }
 
-        // Before PiP transition: floating MetaTools pods, steel rails, status banner, and PGP overlay exist.
+        // Before PiP transition: edge-to-edge top == 0.dp, floating pods & PGP overlay exist,
+        // ZERO top status/notification banners exist, and pip_fallback_frame is hidden.
         compose.onAllNodesWithTag("bottom_control_dock").assertCountEquals(0)
         compose.onNodeWithTag("metatools_browser_shell").assertExists()
         compose.onNodeWithTag("perimeter_steel_rails").assertExists()
+        compose.onNodeWithTag("webpage_viewport_host").assertExists()
+        assertEquals(
+            0.dp,
+            compose.onNodeWithTag("webpage_viewport_host").getUnclippedBoundsInRoot().top,
+        )
+        assertEquals(
+            0.dp,
+            compose.onNodeWithTag("perimeter_steel_rails").getUnclippedBoundsInRoot().top,
+        )
         compose.onNodeWithTag("tor_orb_pod").assertExists()
         compose.onNodeWithTag("crt_address_pod").assertExists()
         compose.onNodeWithTag("pgp_rocker_pod").assertExists()
         compose.onNodeWithTag("side_remote_pod").assertExists()
-        compose.onNodeWithTag("status_notice_banner").assertExists()
+        compose.onAllNodesWithTag("status_notice_banner").assertCountEquals(0)
+        compose.onAllNodesWithTag("screen_recording_warning_banner").assertCountEquals(0)
+        compose.onAllNodesWithTag("pip_fallback_frame").assertCountEquals(0)
         compose.onNodeWithTag("pgp_field_overlay").assertExists()
 
-        // First frame of transition (`isTransitioningToPip == true`): all floating pods & rails stripped.
+        // First frame of transition (`isTransitioningToPip == true`): all floating pods & rails stripped,
+        // while cached dark `pip_fallback_frame` renders behind the live SurfaceView so PiP is never white.
         chromeHidden = true
         compose.waitForIdle()
         compose.onAllNodesWithTag("perimeter_steel_rails").assertCountEquals(0)
@@ -359,8 +380,9 @@ class PipControllerTest {
         compose.onAllNodesWithTag("side_remote_pod").assertCountEquals(0)
         compose.onAllNodesWithTag("status_notice_banner").assertCountEquals(0)
         compose.onAllNodesWithTag("pgp_field_overlay").assertCountEquals(0)
+        compose.onNodeWithTag("pip_fallback_frame").assertExists()
 
-        // Exiting PiP restores surrounding floating pods & rails cleanly.
+        // Exiting PiP restores surrounding floating pods & rails cleanly and hides fallback frame.
         chromeHidden = false
         compose.waitForIdle()
         compose.onNodeWithTag("perimeter_steel_rails").assertExists()
@@ -368,7 +390,8 @@ class PipControllerTest {
         compose.onNodeWithTag("crt_address_pod").assertExists()
         compose.onNodeWithTag("pgp_rocker_pod").assertExists()
         compose.onNodeWithTag("side_remote_pod").assertExists()
-        compose.onNodeWithTag("status_notice_banner").assertExists()
+        compose.onAllNodesWithTag("status_notice_banner").assertCountEquals(0)
+        compose.onAllNodesWithTag("pip_fallback_frame").assertCountEquals(0)
         compose.onNodeWithTag("pgp_field_overlay").assertExists()
     }
 
@@ -400,16 +423,18 @@ class PipControllerTest {
     }
 
     @Test
-    fun media_and_webrtc_overlay_actions_prioritize_mic_mute_and_track_play_pause_state() {
+    fun pip_overlay_actions_always_provide_back_reload_or_stop_and_text_search_in_all_modes() {
         val controller = PipController(FakePipEnvironment(), context)
 
-        // Active HTML5 video playback -> [Pause, Seek +10s, Switch Tab].
+        // Active HTML5 video playback -> [Back, Reload, Text Search] in MEDIA_WEBRTC mode.
         val playingModel = controller.resolveOverlayModel(
             PipController.PipSnapshot(
                 activeUrl = "https://media.tor.taxi/watch",
                 activeTitle = "Tor Relay Lecture",
                 isPlayingAudio = true,
                 hasActiveVideo = true,
+                canGoBack = true,
+                isLoading = false,
                 tabCount = 2,
             ),
         )
@@ -417,58 +442,22 @@ class PipControllerTest {
         assertEquals("Tor Relay Lecture", playingModel.title)
         assertEquals("tor.taxi", playingModel.subtitle)
         assertEquals(3, playingModel.actions.size)
-        assertEquals(PipActionReceiver.Command.PLAY_PAUSE, playingModel.actions[0].command)
-        assertEquals("Pause", playingModel.actions[0].title)
-        assertEquals(PipActionReceiver.Command.SEEK_FORWARD, playingModel.actions[1].command)
-        assertEquals(PipActionReceiver.Command.SWITCH_TAB, playingModel.actions[2].command)
+        assertEquals(PipActionReceiver.Command.HISTORY_BACK, playingModel.actions[0].command)
+        assertEquals("Back", playingModel.actions[0].title)
+        assertTrue(playingModel.actions[0].enabled)
+        assertEquals(PipActionReceiver.Command.RELOAD_OR_STOP, playingModel.actions[1].command)
+        assertEquals("Reload", playingModel.actions[1].title)
+        assertTrue(playingModel.actions[1].enabled)
+        assertEquals(PipActionReceiver.Command.TEXT_SEARCH, playingModel.actions[2].command)
+        assertEquals("Text Search", playingModel.actions[2].title)
         assertTrue(playingModel.actions[2].enabled)
         assertEquals(PipActionReceiver.Command.CLOSE_PIP, playingModel.closeAction.command)
 
-        // Paused in session -> icon/title swap to Play while remaining in Media mode.
-        val pausedModel = controller.resolveOverlayModel(
-            PipController.PipSnapshot(
-                activeUrl = "https://media.tor.taxi/watch",
-                activeTitle = "Tor Relay Lecture",
-                isMediaPausedByUser = true,
-                tabCount = 1,
-            ),
-        )
-        assertEquals(PipController.OverlayMode.MEDIA_WEBRTC, pausedModel.mode)
-        assertEquals("Play", pausedModel.actions[0].title)
-        assertFalse(pausedModel.actions[2].enabled)
-
-        // WebRTC mic active -> Slot 1 prioritizes Mute / Unmute Mic over Play/Pause.
-        val webrtcUnmuted = controller.resolveOverlayModel(
-            PipController.PipSnapshot(
-                activeUrl = "https://calls.tor.taxi/room",
-                hasWebRtcAudio = true,
-                isAudioMuted = false,
-            ),
-        )
-        assertEquals(PipActionReceiver.Command.TOGGLE_MUTE, webrtcUnmuted.actions[0].command)
-        assertEquals("Mute Mic", webrtcUnmuted.actions[0].title)
-
-        val webrtcMuted = controller.resolveOverlayModel(
-            PipController.PipSnapshot(
-                activeUrl = "https://calls.tor.taxi/room",
-                hasWebRtcAudio = true,
-                isAudioMuted = true,
-            ),
-        )
-        assertEquals(PipActionReceiver.Command.TOGGLE_MUTE, webrtcMuted.actions[0].command)
-        assertEquals("Unmute Mic", webrtcMuted.actions[0].title)
-    }
-
-    @Test
-    fun document_monitor_overlay_adapts_scroll_reload_stop_and_tab_or_back_actions() {
-        val controller = PipController(FakePipEnvironment(), context)
-
-        // Single tab, top of document, idle, cannot go back.
+        // Document mode (cannot go back, idle) -> [Back (disabled), Reload, Text Search].
         val docTop = controller.resolveOverlayModel(
             PipController.PipSnapshot(
                 activeUrl = "https://ci.tor.taxi/pipelines",
                 activeTitle = "CI Build #412",
-                atDocumentBottom = false,
                 isLoading = false,
                 canGoBack = false,
                 tabCount = 1,
@@ -477,29 +466,70 @@ class PipControllerTest {
         assertEquals(PipController.OverlayMode.DOCUMENT_MONITOR, docTop.mode)
         assertEquals("CI Build #412", docTop.title)
         assertEquals("tor.taxi", docTop.subtitle)
-        assertEquals("Scroll Down", docTop.actions[0].title)
+        assertEquals(PipActionReceiver.Command.HISTORY_BACK, docTop.actions[0].command)
+        assertEquals("Back", docTop.actions[0].title)
+        assertFalse(docTop.actions[0].enabled)
         assertEquals("Reload", docTop.actions[1].title)
-        assertEquals(PipActionReceiver.Command.HISTORY_BACK, docTop.actions[2].command)
-        assertFalse(docTop.actions[2].enabled)
+        assertEquals("Text Search", docTop.actions[2].title)
 
-        val remoteActionsDisabledBack = controller.buildRemoteActions(context, docTop.actions)
-        assertEquals(3, remoteActionsDisabledBack.size)
-        assertFalse(remoteActionsDisabledBack[2].isEnabled)
+        val remoteActions = controller.buildRemoteActions(context, docTop.actions)
+        assertEquals(3, remoteActions.size)
+        assertFalse(remoteActions[0].isEnabled)
+        assertTrue(remoteActions[1].isEnabled)
+        assertTrue(remoteActions[2].isEnabled)
 
-        // Document at bottom + loading + multi-tab -> [Scroll Up, Stop, Switch Tab (enabled)].
-        val docBottomLoadingMulti = controller.resolveOverlayModel(
+        // Verify Text Search RemoteAction uses an Activity PendingIntent targeting MainActivity
+        // with EXTRA_OPEN_TEXT_SEARCH = true so tapping it expands PiP and opens FindInPageHardwarePod!
+        val shadowTextSearchPending = Shadows.shadowOf(remoteActions[2].actionIntent)
+        assertTrue(shadowTextSearchPending.isActivityIntent)
+        val savedIntent = shadowTextSearchPending.savedIntent
+        assertEquals(PipActionReceiver.Command.TEXT_SEARCH.action, savedIntent.action)
+        assertTrue(savedIntent.getBooleanExtra(PipController.EXTRA_OPEN_TEXT_SEARCH, false))
+
+        // Loading state swaps slot 2 from "Reload" to "Stop" while keeping Back and Text Search.
+        val docLoading = controller.resolveOverlayModel(
             PipController.PipSnapshot(
                 activeUrl = "https://ci.tor.taxi/pipelines",
-                atDocumentBottom = true,
                 isLoading = true,
                 canGoBack = true,
                 tabCount = 3,
             ),
         )
-        assertEquals("Scroll Up", docBottomLoadingMulti.actions[0].title)
-        assertEquals("Stop", docBottomLoadingMulti.actions[1].title)
-        assertEquals(PipActionReceiver.Command.SWITCH_TAB, docBottomLoadingMulti.actions[2].command)
-        assertTrue(docBottomLoadingMulti.actions[2].enabled)
+        assertEquals("Back", docLoading.actions[0].title)
+        assertTrue(docLoading.actions[0].enabled)
+        assertEquals("Stop", docLoading.actions[1].title)
+        assertEquals("Text Search", docLoading.actions[2].title)
+    }
+
+    @Test
+    fun pip_scaling_zoom_and_window_translucency_keep_pip_scaled_and_slightly_translucent() {
+        // 1. Subtle window translucency (`0.88f`) in PiP, opaque (`1.0f`) fullscreen.
+        assertEquals(0.88f, PipController.PIP_WINDOW_ALPHA, 0.001f)
+        assertEquals(0.88f, PipController.resolveWindowAlpha(true), 0.001f)
+        assertEquals(1.0f, PipController.resolveWindowAlpha(false), 0.001f)
+
+        // 2. Proportional PiP viewport scaling (`pipWidth / fullWidth` clamped to [0.25f, 1.0f]).
+        assertEquals(1.0f, PipController.computePipScaleFactor(0, 1080), 0.001f)
+        assertEquals(1.0f, PipController.computePipScaleFactor(1080, 1080), 0.001f)
+        assertEquals(0.5f, PipController.computePipScaleFactor(540, 1080), 0.001f)
+        assertEquals(1f / 3f, PipController.computePipScaleFactor(360, 1080), 0.001f)
+        assertEquals(0.25f, PipController.computePipScaleFactor(120, 1080), 0.001f)
+
+        // 3. TabSessionManager zoom computation scales page proportionally in PiP and restores cleanly.
+        assertEquals(0.0, TabSessionManager.computeCefZoomLevel(100, 1.0f), 0.001)
+        assertEquals(0.5, TabSessionManager.computeEffectiveZoomRatio(100, 0.5f), 0.001)
+        assertTrue(TabSessionManager.computeCefZoomLevel(100, 0.5f) < -3.5)
+        assertEquals(0.625, TabSessionManager.computeEffectiveZoomRatio(125, 0.5f), 0.001)
+
+        val sessionManager = TabSessionManager(
+            context = context,
+            cdpController = CdpDomPgpController(),
+            backStackManager = OnionBackStackManager(),
+        )
+        sessionManager.createTab("https://tor.taxi/", select = true)
+        sessionManager.setPipScaleFactor(0.45f)
+        sessionManager.setPipScaleFactor(1.0f)
+        assertEquals(100, sessionManager.activeTab()?.zoomPercent)
     }
 
     @Test

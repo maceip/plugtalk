@@ -16,9 +16,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -54,9 +54,10 @@ import kotlinx.coroutines.withContext
  * Primary Compose Browser Shell for Trap.
  *
  * Renders the 100% full-bleed edge-to-edge browser viewport and street-zine [StartPage]
- * (`0dp` top/bottom container bars) beneath [MetaToolsBrowserShell]'s detached sculptural
- * hardware pods (`PerimeterSteelRails`, `TorKnurledOrbPod`, `RecessedCrtAddressPod`,
- * `OpenPgpRockerPod`, `PhotoSoapSideRemote`, and `HardwareModalPods`).
+ * (`0dp` top/bottom container bars, drawing all the way up behind the Android status bar)
+ * beneath [MetaToolsBrowserShell]'s detached sculptural hardware pods (`PerimeterSteelRails`,
+ * `TorKnurledOrbPod`, `RecessedCrtAddressPod`, `OpenPgpRockerPod`, `PhotoSoapSideRemote`,
+ * `FindInPageHardwarePod`, and `HardwareModalPods`), with zero top snackbars or notifications.
  */
 @Composable
 fun BrowserScreen(
@@ -110,6 +111,10 @@ fun BrowserScreen(
     onClearSession: () -> Unit = {},
     onZoomIn: () -> Unit = {},
     onZoomOut: () -> Unit = {},
+    onOpenFindInPage: () -> Unit = {},
+    onFindInPageQueryChange: (String) -> Unit = {},
+    onFindInPageStep: (Int) -> Unit = {},
+    onCloseFindInPage: () -> Unit = {},
     onDismissStatus: () -> Unit = {},
     onContextMenuOpenNewTab: (String) -> Unit = {},
     onContextMenuOpenCurrentTab: (String) -> Unit = {},
@@ -179,6 +184,10 @@ fun BrowserScreen(
             onClearSession = onClearSession,
             onZoomIn = onZoomIn,
             onZoomOut = onZoomOut,
+            onOpenFindInPage = onOpenFindInPage,
+            onFindInPageQueryChange = onFindInPageQueryChange,
+            onFindInPageStep = onFindInPageStep,
+            onCloseFindInPage = onCloseFindInPage,
             onDismissStatus = onDismissStatus,
             onContextMenuOpenNewTab = onContextMenuOpenNewTab,
             onContextMenuOpenCurrentTab = onContextMenuOpenCurrentTab,
@@ -254,7 +263,11 @@ private fun BrowserScreenContent(
     onClearSession: () -> Unit,
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit,
-    onDismissStatus: () -> Unit,
+    onOpenFindInPage: () -> Unit,
+    onFindInPageQueryChange: (String) -> Unit,
+    onFindInPageStep: (Int) -> Unit,
+    onCloseFindInPage: () -> Unit,
+    @Suppress("UNUSED_PARAMETER") onDismissStatus: () -> Unit,
     onContextMenuOpenNewTab: (String) -> Unit,
     onContextMenuOpenCurrentTab: (String) -> Unit,
     onCopyText: (String) -> Unit,
@@ -283,9 +296,7 @@ private fun BrowserScreenContent(
     val scope = rememberCoroutineScope()
     val chromeHiddenForPip = state.isInPipMode || state.isPipChromeHidden
 
-    PredictiveBackHandler(
-        enabled = (state.canGoBack || !state.isStartPage) && !shellOverlayOpen && !chromeHiddenForPip,
-    ) { backFlow ->
+    PredictiveBackHandler(enabled = state.canGoBack && !shellOverlayOpen && !chromeHiddenForPip) { backFlow ->
         try {
             backFlow.collect { event ->
                 progress = event.progress
@@ -297,11 +308,7 @@ private fun BrowserScreenContent(
                     )
                 }
             }
-            if (state.canGoBack) {
-                onBack()
-            } else {
-                onHome()
-            }
+            onBack()
         } finally {
             withContext(NonCancellable) {
                 scale.animateTo(1f, animationSpec = tween(180))
@@ -340,6 +347,10 @@ private fun BrowserScreenContent(
             onHome = onHome,
             onZoomIn = onZoomIn,
             onZoomOut = onZoomOut,
+            onOpenFindInPage = onOpenFindInPage,
+            onFindInPageQueryChange = onFindInPageQueryChange,
+            onFindInPageStep = onFindInPageStep,
+            onCloseFindInPage = onCloseFindInPage,
             onAllowClearnet = onAllowClearnet,
             onBlockClearnet = onBlockClearnet,
             onRevokeClearnetRule = onRevokeClearnetRule,
@@ -385,7 +396,7 @@ private fun BrowserScreenContent(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(colors.background),
+                        .background(Color(0xFF0D0F12)),
                 ) {
                     if (progress > 0f && state.backPreview != null && !chromeHiddenForPip) {
                         BackPreviewLayer(state = state, progress = progress)
@@ -400,19 +411,37 @@ private fun BrowserScreenContent(
                                 translationX = shift.value
                             },
                     ) {
-                        val webpageViewportModifier = if (!chromeHiddenForPip && !state.isStartPage) {
-                            Modifier
+                        // Draw edge-to-edge all the way up onto the top Android status bar (y = 0)
+                        Box(
+                            modifier = Modifier
                                 .fillMaxSize()
-                                .statusBarsPadding()
-                        } else {
-                            Modifier.fillMaxSize()
-                        }
+                                .testTag("webpage_viewport_host"),
+                        ) {
+                            // Cached dark fallback frame behind live SurfaceView so PiP transitions
+                            // or connecting states never flash a blank white frame.
+                            if (chromeHiddenForPip && state.pipFallbackBitmap != null) {
+                                Image(
+                                    bitmap = state.pipFallbackBitmap,
+                                    contentDescription = state.title.ifEmpty { state.url },
+                                    contentScale = ContentScale.Fit,
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .testTag("pip_fallback_frame"),
+                                )
+                            }
 
-                        Box(modifier = webpageViewportModifier) {
                             surface()
 
                             if (state.viewingSnapshot && state.backPreview != null && progress == 0f) {
                                 BackPreviewLayer(state = state, progress = 1f)
+                            }
+
+                            if (!chromeHiddenForPip &&
+                                state.findInPage.visible &&
+                                state.findInPage.activeBounds != null &&
+                                progress == 0f
+                            ) {
+                                FindInPageMatchHighlight(bounds = state.findInPage.activeBounds)
                             }
 
                             if (!chromeHiddenForPip &&
@@ -442,41 +471,16 @@ private fun BrowserScreenContent(
                         }
                     }
 
-                    if (!chromeHiddenForPip) {
-                        Column(
+                    // Bottom-docked snapshot chip ONLY when viewing a predictive-back cached frame.
+                    // Never render snackbars or notifications at the top of the app!
+                    if (!chromeHiddenForPip && state.viewingSnapshot) {
+                        Box(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .align(Alignment.TopCenter)
-                                .statusBarsPadding()
-                                .padding(top = 6.dp),
+                                .align(Alignment.BottomCenter)
+                                .navigationBarsPadding()
+                                .padding(horizontal = 16.dp, vertical = 100.dp),
                         ) {
-                            if (state.isScreenRecordingActive) {
-                                ScreenRecordingWarningBanner()
-                            }
-
-                            if (state.viewingSnapshot) {
-                                SnapshotReloadBanner(onReloadLive = onReloadLive)
-                            }
-
-                            val bannerMessage = if (state.clearnetPrompt != null) {
-                                null
-                            } else {
-                                state.pgp.error?.takeIf { it.isNotBlank() }
-                                    ?: state.status.takeIf { it.isNotBlank() }
-                                    ?: if (state.blocked) {
-                                        "Clearnet request refused by Hidden Service Only policy."
-                                    } else {
-                                        null
-                                    }
-                            }
-
-                            if (bannerMessage != null) {
-                                StatusNoticeBanner(
-                                    message = bannerMessage,
-                                    isAlert = state.blocked || !state.pgp.error.isNullOrBlank(),
-                                    onDismiss = onDismissStatus,
-                                )
-                            }
+                            SnapshotReloadChip(onReloadLive = onReloadLive)
                         }
                     }
                 }
@@ -486,114 +490,55 @@ private fun BrowserScreenContent(
 }
 
 @Composable
-private fun ScreenRecordingWarningBanner() {
+private fun FindInPageMatchHighlight(bounds: NormalizedBounds) {
     val colors = TrapTheme.colors
-    val shape = RoundedCornerShape(10.dp)
-    Row(
+    BoxWithConstraints(
         modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 6.dp)
-            .clip(shape)
-            .background(colors.dangerContainer)
-            .border(1.dp, colors.danger, shape)
-            .padding(horizontal = 12.dp, vertical = 8.dp)
-            .testTag("screen_recording_warning_banner"),
-        verticalAlignment = Alignment.CenterVertically,
+            .fillMaxSize()
+            .testTag("find_in_page_highlight"),
     ) {
-        TrapIcon(
-            glyph = TrapGlyph.Warning,
-            tint = colors.danger,
-            size = 16.dp,
-            forceVector = true,
-        )
-        Spacer(Modifier.width(8.dp))
-        Text(
-            text = "Screen recording active · PGP & credential popups paused",
-            color = colors.textPrimary,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Medium,
-            modifier = Modifier.weight(1f),
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
+        val left = maxWidth * bounds.left.coerceIn(0f, 1f)
+        val top = maxHeight * bounds.top.coerceIn(0f, 1f)
+        val width = (maxWidth * bounds.width).coerceAtLeast(16.dp)
+        val height = (maxHeight * bounds.height).coerceAtLeast(16.dp)
+        val shape = RoundedCornerShape(4.dp)
+        Box(
+            modifier = Modifier
+                .offset(x = left, y = top)
+                .width(width)
+                .height(height)
+                .clip(shape)
+                .background(colors.amber.copy(alpha = 0.28f))
+                .border(2.dp, colors.amber, shape),
         )
     }
 }
 
 @Composable
-private fun SnapshotReloadBanner(onReloadLive: () -> Unit) {
+private fun SnapshotReloadChip(onReloadLive: () -> Unit) {
     val colors = TrapTheme.colors
-    val shape = RoundedCornerShape(10.dp)
+    val shape = RoundedCornerShape(999.dp)
     Row(
         modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 6.dp)
             .clip(shape)
-            .background(colors.surface)
+            .background(colors.surface.copy(alpha = 0.94f))
             .border(1.dp, colors.teal, shape)
-            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .padding(horizontal = 12.dp, vertical = 6.dp)
             .testTag("snapshot_reload_banner"),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text(
             text = "Cached snapshot",
             color = colors.textPrimary,
-            fontSize = 12.5.sp,
+            fontSize = 12.sp,
             fontWeight = FontWeight.Medium,
-            modifier = Modifier.weight(1f),
         )
         OvSecondaryButton(
             text = "Reload Live over Tor",
             glyph = TrapGlyph.Reload,
             onClick = onReloadLive,
             modifier = Modifier.testTag("reload_live_button"),
-        )
-    }
-}
-
-@Composable
-private fun StatusNoticeBanner(
-    message: String,
-    isAlert: Boolean,
-    onDismiss: () -> Unit,
-) {
-    val colors = TrapTheme.colors
-    val shape = RoundedCornerShape(10.dp)
-    val borderColor = if (isAlert) colors.danger else colors.teal
-    val bgColor = if (isAlert) colors.dangerContainer else colors.surface
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 6.dp)
-            .clip(shape)
-            .background(bgColor)
-            .border(1.dp, borderColor, shape)
-            .padding(horizontal = 12.dp, vertical = 8.dp)
-            .testTag("status_notice_banner"),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        TrapIcon(
-            glyph = if (isAlert) TrapGlyph.Warning else TrapGlyph.Shield,
-            tint = borderColor,
-            size = 16.dp,
-            forceVector = true,
-        )
-        Spacer(Modifier.width(8.dp))
-        Text(
-            text = message,
-            color = colors.textPrimary,
-            fontSize = 12.sp,
-            modifier = Modifier.weight(1f),
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Spacer(Modifier.width(6.dp))
-        OvIconButton(
-            glyph = TrapGlyph.Close,
-            contentDescription = "Dismiss notice",
-            onClick = onDismiss,
-            tint = colors.textMuted,
-            size = 26.dp,
         )
     }
 }

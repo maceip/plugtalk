@@ -10,10 +10,12 @@ import android.content.Intent
 import android.content.res.Configuration
 import android.app.KeyguardManager
 import android.content.pm.ApplicationInfo
+import android.graphics.Bitmap
 import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.view.SurfaceView
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -32,6 +34,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -53,6 +57,7 @@ import dev.onionvault.ui.ClearnetPromptState
 import dev.onionvault.ui.ContextMenuUiState
 import dev.onionvault.ui.DecryptPassphraseRequestState
 import dev.onionvault.ui.EncryptRequestState
+import dev.onionvault.ui.FindInPageState
 import dev.onionvault.ui.KeyInfo
 import dev.onionvault.ui.NormalizedBounds
 import dev.onionvault.ui.OvCrashScreen
@@ -117,6 +122,7 @@ class MainActivity : FragmentActivity() {
     private var stateSyncJob: Job? = null
 
     private var viewportSourceRect: Rect? = null
+    private var fullViewportWidthPx: Int = 0
     private var hostSurfaceFrame: FrameLayout? = null
     private var isTransitioningToPipState: Boolean = false
     private var pipReceiverRegistered: Boolean = false
@@ -207,6 +213,7 @@ class MainActivity : FragmentActivity() {
         CrossDeviceHandoffController.syncActivityHandoffEnabled(this, prefs.handoffEnabled)
 
         val initiallyInPip = isInPictureInPictureMode
+        applyPipWindowTranslucency(initiallyInPip)
         uiState = BrowserUiState(
             hiddenServiceOnly = prefs.hiddenServiceOnly,
             requireBiometric = prefs.requireBiometric,
@@ -240,6 +247,7 @@ class MainActivity : FragmentActivity() {
             val initialUrl = incomingHandoff?.url ?: resolveInitialUrl(savedInstanceState, intent)
             startEngineAndSessions(initialUrl)
         }
+        consumeTextSearchIntent(intent)
         syncPipParams()
 
         setContent {
@@ -331,6 +339,7 @@ class MainActivity : FragmentActivity() {
                 onNewTab = { createNewTab() },
                 onNewPrivateTab = { createNewTab(isPrivate = true) },
                 onSelectTab = { selectTab(it) },
+                onSwitchAdjacentTab = { step -> switchAdjacentTab(step) },
                 onCloseTab = { closeTab(it) },
                 onHome = { goHome() },
                 onGenerateKey = { userId, passphrase -> generateKey(userId, passphrase) },
@@ -351,6 +360,10 @@ class MainActivity : FragmentActivity() {
                 onClearSession = { clearEphemeralSession() },
                 onZoomIn = { stepZoom(ZOOM_STEP_PERCENT) },
                 onZoomOut = { stepZoom(-ZOOM_STEP_PERCENT) },
+                onOpenFindInPage = { openFindInPage() },
+                onFindInPageQueryChange = { query -> updateFindInPageQuery(query) },
+                onFindInPageStep = { step -> stepFindInPage(step) },
+                onCloseFindInPage = { closeFindInPage() },
                 onDismissStatus = { clearStatusAndPgpError() },
                 onContextMenuOpenNewTab = { targetUrl ->
                     dismissContextMenu()
@@ -428,7 +441,21 @@ class MainActivity : FragmentActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (!isInPictureInPictureMode && controllersReady) {
+            tabSessionManager.setPipScaleFactor(1.0f)
+            applyPipWindowTranslucency(false)
+        }
         syncPipParams()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        if (isInPictureInPictureMode || isTransitioningToPipState) {
+            capturePipFallbackBitmap()
+            if (controllersReady) {
+                tabSessionManager.ensureActiveTabRenderingForPip()
+            }
+        }
     }
 
     override fun onStop() {
@@ -440,6 +467,7 @@ class MainActivity : FragmentActivity() {
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
+        capturePipFallbackBitmap()
         if (::pipController.isInitialized) {
             pipController.handleUserLeaveHint(this, currentPipSnapshot())
         }
@@ -451,9 +479,11 @@ class MainActivity : FragmentActivity() {
             val transitioning = pipController.isTransitioningToPipApi35(pipState)
             isTransitioningToPipState = transitioning
             if (transitioning) {
+                capturePipFallbackBitmap()
                 dismissTransientOverlaysForPip()
                 if (controllersReady) {
                     tabSessionManager.setTouchSuppressed(false)
+                    tabSessionManager.ensureActiveTabRenderingForPip()
                 }
             }
             val hideChrome = PipController.resolveChromeHidden(
@@ -474,11 +504,16 @@ class MainActivity : FragmentActivity() {
         if (!isInPictureInPictureMode) {
             isTransitioningToPipState = false
         }
+        applyPipWindowTranslucency(isInPictureInPictureMode)
         if (isInPictureInPictureMode) {
+            capturePipFallbackBitmap()
             dismissTransientOverlaysForPip()
             if (controllersReady) {
                 tabSessionManager.setTouchSuppressed(false)
+                tabSessionManager.ensureActiveTabRenderingForPip()
             }
+        } else if (controllersReady) {
+            tabSessionManager.setPipScaleFactor(1.0f)
         }
         val hideChrome = PipController.resolveChromeHidden(
             isInPictureInPictureMode = isInPictureInPictureMode,
@@ -487,13 +522,18 @@ class MainActivity : FragmentActivity() {
         uiState = uiState.copy(
             isInPipMode = isInPictureInPictureMode,
             isPipChromeHidden = hideChrome,
+            pipFallbackBitmap = if (isInPictureInPictureMode) uiState.pipFallbackBitmap else null,
         )
+        hostSurfaceFrame?.let { updateViewportSourceRect(it) }
         syncPipParams()
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (consumeTextSearchIntent(intent)) {
+            return
+        }
         val handoff = CrossDeviceHandoffController.extractIncomingHandoff(intent)
         if (handoff != null && crashReport == null && controllersReady) {
             pendingHandoffScrollY = handoff.scrollY
@@ -562,6 +602,7 @@ class MainActivity : FragmentActivity() {
         AndroidView(
             factory = { ctx ->
                 FrameLayout(ctx).apply {
+                    setBackgroundColor(TabSessionManager.SURFACE_DARK_BG_COLOR)
                     layoutParams = ViewGroup.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT,
@@ -571,6 +612,7 @@ class MainActivity : FragmentActivity() {
             },
             update = { hostFrame ->
                 hostSurfaceFrame = hostFrame
+                hostFrame.setBackgroundColor(TabSessionManager.SURFACE_DARK_BG_COLOR)
                 val targetSurface = if (controllersReady) {
                     tabSessionManager.surfaceContainerFor(activeTabId)
                 } else {
@@ -604,6 +646,7 @@ class MainActivity : FragmentActivity() {
                     hasEmbeddedMedia = activeTab?.hasActiveVideo == true || activeTab?.isPlayingAudio == true,
                     isFullscreenVideo = activeTab?.isFullscreenVideo == true,
                 )
+                applySurfaceAlpha(hostFrame, PipController.resolveWindowAlpha(uiState.isInPipMode))
                 updateViewportSourceRect(hostFrame)
             },
             modifier = Modifier.fillMaxSize(),
@@ -978,6 +1021,7 @@ class MainActivity : FragmentActivity() {
         if (trimmed.isEmpty()) return
 
         activeSnapshotView = null
+        resetFindInPage()
         clearStatusAndPgpError()
 
         val effectiveTabId = targetTabId ?: tabSessionManager.activeTabId.value
@@ -1175,6 +1219,7 @@ class MainActivity : FragmentActivity() {
     ) {
         if (!controllersReady) return
         activeSnapshotView = null
+        resetFindInPage()
         clearStatusAndPgpError()
         val hasInitialTarget = !isBlankOrStartUrl(initialUrl)
         val tabId = tabSessionManager.createTab(
@@ -1195,14 +1240,26 @@ class MainActivity : FragmentActivity() {
     private fun selectTab(tabId: String) {
         if (!controllersReady) return
         activeSnapshotView = null
+        resetFindInPage()
         tabSessionManager.selectTab(tabId)
         refreshTorStatusNow()
         syncPipParams()
     }
 
+    private fun switchAdjacentTab(step: Int) {
+        if (!controllersReady || step == 0) return
+        val currentTabs = tabSessionManager.tabs.value
+        if (currentTabs.size <= 1) return
+        val currentIndex = currentTabs.indexOfFirst { it.id == tabSessionManager.activeTabId.value }
+            .coerceAtLeast(0)
+        val nextIndex = Math.floorMod(currentIndex + step, currentTabs.size)
+        selectTab(currentTabs[nextIndex].id)
+    }
+
     private fun closeTab(tabId: String) {
         if (!controllersReady) return
         activeSnapshotView = null
+        resetFindInPage()
         tabSessionManager.closeTab(tabId)
         refreshTorStatusNow()
         syncPipParams()
@@ -1210,6 +1267,97 @@ class MainActivity : FragmentActivity() {
 
     private fun goHome() {
         navigate("about:blank")
+    }
+
+    private fun openFindInPage() {
+        uiState = uiState.copy(
+            findInPage = uiState.findInPage.copy(visible = true),
+        )
+        val existingQuery = uiState.findInPage.query
+        if (existingQuery.isNotBlank()) {
+            runFindInPage(existingQuery, stepDelta = 0)
+        }
+    }
+
+    private fun updateFindInPageQuery(query: String) {
+        uiState = uiState.copy(
+            findInPage = uiState.findInPage.copy(
+                visible = true,
+                query = query,
+            ),
+        )
+        runFindInPage(query, stepDelta = 0)
+    }
+
+    private fun stepFindInPage(stepDelta: Int) {
+        val currentQuery = uiState.findInPage.query
+        if (currentQuery.isBlank()) return
+        runFindInPage(currentQuery, stepDelta = stepDelta)
+    }
+
+    private fun closeFindInPage() {
+        resetFindInPage()
+    }
+
+    private fun resetFindInPage() {
+        if (controllersReady) {
+            tabSessionManager.clearFindInPage()
+        }
+        if (uiState.findInPage.visible ||
+            uiState.findInPage.query.isNotEmpty() ||
+            uiState.findInPage.matchCount != 0
+        ) {
+            uiState = uiState.copy(findInPage = FindInPageState())
+        }
+    }
+
+    private fun runFindInPage(query: String, stepDelta: Int) {
+        if (query.isBlank() || !controllersReady) {
+            if (controllersReady) {
+                tabSessionManager.clearFindInPage()
+            }
+            uiState = uiState.copy(
+                findInPage = uiState.findInPage.copy(
+                    query = query,
+                    matchCount = 0,
+                    activeIndex = 0,
+                    activeBounds = null,
+                ),
+            )
+            return
+        }
+        tabSessionManager.findInPage(query = query, stepDelta = stepDelta) { outcome ->
+            if (!uiState.findInPage.visible || uiState.findInPage.query != query) {
+                return@findInPage
+            }
+            uiState = uiState.copy(
+                findInPage = uiState.findInPage.copy(
+                    matchCount = outcome.matchCount,
+                    activeIndex = outcome.activeIndex,
+                    activeBounds = outcome.activeBounds?.let { box ->
+                        NormalizedBounds(
+                            left = box.left,
+                            top = box.top,
+                            right = box.right,
+                            bottom = box.bottom,
+                        )
+                    },
+                ),
+            )
+        }
+    }
+
+    private fun consumeTextSearchIntent(intent: Intent?): Boolean {
+        if (intent == null) return false
+        val triggered = intent.action == PipActionReceiver.ACTION_PIP_TEXT_SEARCH ||
+            intent.getBooleanExtra(PipController.EXTRA_OPEN_TEXT_SEARCH, false)
+        if (!triggered) return false
+        intent.removeExtra(PipController.EXTRA_OPEN_TEXT_SEARCH)
+        if (intent.action == PipActionReceiver.ACTION_PIP_TEXT_SEARCH) {
+            intent.action = null
+        }
+        openFindInPage()
+        return true
     }
 
     private fun stepZoom(deltaPercent: Int) {
@@ -1339,7 +1487,19 @@ class MainActivity : FragmentActivity() {
 
     private fun updateViewportSourceRect(view: View) {
         if (isInPictureInPictureMode || isTransitioningToPipState) {
+            if (controllersReady && view.width > 0) {
+                val referenceWidth = fullViewportWidthPx.takeIf { it > 0 }
+                    ?: resources.displayMetrics.widthPixels
+                val scale = PipController.computePipScaleFactor(view.width, referenceWidth)
+                tabSessionManager.setPipScaleFactor(scale)
+            }
             return
+        }
+        if (view.width > 0) {
+            fullViewportWidthPx = view.width
+        }
+        if (controllersReady) {
+            tabSessionManager.setPipScaleFactor(1.0f)
         }
         val computed = PipController.computeViewportWindowRect(view) ?: return
         if (computed != viewportSourceRect) {
@@ -1348,10 +1508,70 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    private fun capturePipFallbackBitmap() {
+        if (!controllersReady) return
+        val activeTab = tabSessionManager.activeTab() ?: return
+        if (activeTab.isPrivate || isBlankOrStartUrl(activeTab.url)) {
+            if (uiState.pipFallbackBitmap != null) {
+                uiState = uiState.copy(pipFallbackBitmap = null)
+            }
+            return
+        }
+        backStackManager.latest(activeTab.id)?.imageBitmap?.let { cached ->
+            if (uiState.pipFallbackBitmap == null) {
+                uiState = uiState.copy(pipFallbackBitmap = cached)
+            }
+        }
+        val browser = tabSessionManager.activeBrowser() ?: return
+        runCatching {
+            browser.captureBitmap { captured ->
+                val safeCopy = captured?.let { bmp ->
+                    runCatching {
+                        if (bmp.isRecycled) null else bmp.copy(Bitmap.Config.ARGB_8888, false)
+                    }.getOrNull()
+                }
+                val imageBitmap = safeCopy?.let { runCatching { it.asImageBitmap() }.getOrNull() }
+                if (imageBitmap != null && (isInPictureInPictureMode || isTransitioningToPipState)) {
+                    uiState = uiState.copy(pipFallbackBitmap = imageBitmap)
+                }
+            }
+        }
+    }
+
+    private fun applyPipWindowTranslucency(inPip: Boolean) {
+        val alpha = PipController.resolveWindowAlpha(inPip)
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                setTranslucent(inPip)
+            }
+        }
+        runCatching {
+            val attrs = window.attributes
+            if (attrs.alpha != alpha) {
+                attrs.alpha = alpha
+                window.attributes = attrs
+            }
+        }
+        hostSurfaceFrame?.let { applySurfaceAlpha(it, alpha) }
+    }
+
+    private fun applySurfaceAlpha(root: View, alpha: Float) {
+        root.alpha = alpha
+        if (root is ViewGroup) {
+            for (index in 0 until root.childCount) {
+                val child = root.getChildAt(index)
+                if (child is SurfaceView || child is ViewGroup) {
+                    applySurfaceAlpha(child, alpha)
+                }
+            }
+        }
+    }
+
     private fun dismissTransientOverlaysForPip() {
         if (uiState.contextMenu != null ||
             uiState.selectionPgp != null ||
             uiState.clearnetPrompt != null ||
+            uiState.findInPage.visible ||
             uiState.pgp.encryptRequest != null ||
             uiState.pgp.decryptPassphraseRequest != null ||
             uiState.pgp.plaintext != null
@@ -1360,6 +1580,7 @@ class MainActivity : FragmentActivity() {
                 contextMenu = null,
                 selectionPgp = null,
                 clearnetPrompt = null,
+                findInPage = uiState.findInPage.copy(visible = false),
                 pgp = uiState.pgp.copy(
                     encryptRequest = null,
                     decryptPassphraseRequest = null,
@@ -1457,6 +1678,11 @@ class MainActivity : FragmentActivity() {
                 syncPipParams()
             }
 
+            PipActionReceiver.Command.TEXT_SEARCH -> {
+                openFindInPage()
+                syncPipParams()
+            }
+
             PipActionReceiver.Command.CLOSE_PIP -> {
                 if (controllersReady) {
                     tabSessionManager.pauseAndStopActiveMediaForPipClose()
@@ -1473,6 +1699,7 @@ class MainActivity : FragmentActivity() {
         if (!controllersReady) return
         activeSnapshotView = null
         deferredNavigationUntilSocks = null
+        resetFindInPage()
         val clearedGroups = tabSessionManager.resetAllSessionsAndIdentity("about:blank")
         val activeId = tabSessionManager.activeTabId.value
         if (activeId != null && prefs.defaultZoomPercent != 100) {
@@ -1612,8 +1839,20 @@ class MainActivity : FragmentActivity() {
     private fun applySystemBarsAppearance(mode: TrapThemeMode) {
         val lightBars = mode == TrapThemeMode.Light
         runCatching {
+            window.decorView.setBackgroundColor(TabSessionManager.SURFACE_DARK_BG_COLOR)
             window.statusBarColor = android.graphics.Color.TRANSPARENT
             window.navigationBarColor = android.graphics.Color.TRANSPARENT
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val attrs = window.attributes
+                attrs.layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                window.attributes = attrs
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val attrs = window.attributes
+                attrs.layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                window.attributes = attrs
+            }
             if (Build.VERSION.SDK_INT >= 29) {
                 window.isNavigationBarContrastEnforced = false
                 window.isStatusBarContrastEnforced = false

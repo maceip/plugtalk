@@ -45,6 +45,8 @@ import androidx.compose.ui.unit.dp
 import kotlin.math.abs
 import kotlinx.coroutines.launch
 
+private const val DOUBLE_TAP_WINDOW_MS = 260L
+
 /**
  * `80.dp x 92.dp` (`1.5x` Scaled) Tilted (`-8deg`) Right-Bezel Hardware Tool Pod —
  * Translucent Ruby-Orange Polycarbonate OpenPGP Rocker Switch (`pgp_rocker_pod`).
@@ -56,7 +58,8 @@ import kotlinx.coroutines.launch
  * - **Contextual LED Glow**: Bright internal emerald/amber LED illuminates behind the translucent
  *   block whenever [hasPgpContent] is `true` (page DOM, selection, or clipboard contains
  *   `-----BEGIN PGP...` or an editable PGP field)!
- * - **Tap** invokes [onOpenPgpTools] (Keyring / PGP Tools Pod).
+ * - **1 Click** invokes [onNewTab] (New Tab).
+ * - **2 Clicks** (double-tap within `260ms`) invokes [onOpenPgpTools] (PGP Menu / Keyring).
  * - **Dragging the aluminum latch upward** (`dy <= -18.dp`) triggers [onQuickVerifyOrDecrypt] +
  *   mechanical spring-return!
  */
@@ -66,6 +69,7 @@ fun OpenPgpRockerPod(
     onOpenPgpTools: () -> Unit,
     onQuickVerifyOrDecrypt: () -> Unit,
     modifier: Modifier = Modifier,
+    onNewTab: () -> Unit = {},
     hasArmoredCiphertextOrKey: Boolean = false,
 ) {
     val haptics = LocalHapticFeedback.current
@@ -95,9 +99,9 @@ fun OpenPgpRockerPod(
     val cornerRadius = 16.dp
     val podShape = RoundedCornerShape(cornerRadius)
     val a11yDescription = if (hasPgpContent) {
-        "OpenPGP active on page. Tap for keyring, slide latch up to decrypt or verify"
+        "New tab on single tap, OpenPGP menu on double tap, slide latch up to decrypt or verify"
     } else {
-        "OpenPGP Keyring and tools"
+        "New tab on single tap, OpenPGP menu and keyring on double tap"
     }
 
     Box(
@@ -112,11 +116,11 @@ fun OpenPgpRockerPod(
                 role = Role.Button
                 contentDescription = a11yDescription
                 onClick {
-                    onOpenPgpTools()
+                    onNewTab()
                     true
                 }
             }
-            .pointerInput(onOpenPgpTools, onQuickVerifyOrDecrypt) {
+            .pointerInput(onNewTab, onOpenPgpTools, onQuickVerifyOrDecrypt) {
                 val tapSlopPx = viewConfiguration.touchSlop * 1.5f
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
@@ -162,8 +166,55 @@ fun OpenPgpRockerPod(
                     }
 
                     if (!latchFired && abs(totalDx) <= tapSlopPx && abs(totalDy) <= tapSlopPx) {
-                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        onOpenPgpTools()
+                        val secondDown = withTimeoutOrNull(DOUBLE_TAP_WINDOW_MS) {
+                            awaitFirstDown(requireUnconsumed = false)
+                        }
+                        if (secondDown == null) {
+                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onNewTab()
+                        } else {
+                            secondDown.consume()
+                            var secondDx = 0f
+                            var secondDy = 0f
+                            var secondLatchFired = false
+                            while (true) {
+                                val event2 = awaitPointerEvent()
+                                val change2 = event2.changes.firstOrNull { it.id == secondDown.id }
+                                    ?: event2.changes.firstOrNull()
+                                    ?: break
+                                if (!change2.pressed) {
+                                    change2.consume()
+                                    break
+                                }
+                                val delta2 = change2.positionChange()
+                                secondDx += delta2.x
+                                secondDy += delta2.y
+                                change2.consume()
+
+                                val clamped2 = secondDy.coerceIn(-maxUpwardTravelPx, 0f)
+                                scope.launch {
+                                    latchOffsetPx.snapTo(clamped2)
+                                }
+                                if (!secondLatchFired && secondDy <= -triggerThresholdPx) {
+                                    secondLatchFired = true
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onQuickVerifyOrDecrypt()
+                                }
+                            }
+                            scope.launch {
+                                latchOffsetPx.animateTo(
+                                    targetValue = 0f,
+                                    animationSpec = spring(
+                                        dampingRatio = Spring.DampingRatioMediumBouncy,
+                                        stiffness = Spring.StiffnessHigh,
+                                    ),
+                                )
+                            }
+                            if (!secondLatchFired && abs(secondDx) <= tapSlopPx && abs(secondDy) <= tapSlopPx) {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onOpenPgpTools()
+                            }
+                        }
                     }
                 }
             }

@@ -25,6 +25,7 @@ class PipActionReceiver(
         SWITCH_TAB(ACTION_PIP_SWITCH_TAB, 4106),
         HISTORY_BACK(ACTION_PIP_HISTORY_BACK, 4107),
         CLOSE_PIP(ACTION_PIP_CLOSE, 4108),
+        TEXT_SEARCH(ACTION_PIP_TEXT_SEARCH, 4109),
     }
 
     override fun onReceive(context: Context?, intent: Intent?) {
@@ -42,6 +43,7 @@ class PipActionReceiver(
         const val ACTION_PIP_SWITCH_TAB = "dev.onionvault.pip.ACTION_SWITCH_TAB"
         const val ACTION_PIP_HISTORY_BACK = "dev.onionvault.pip.ACTION_HISTORY_BACK"
         const val ACTION_PIP_CLOSE = "dev.onionvault.pip.ACTION_CLOSE"
+        const val ACTION_PIP_TEXT_SEARCH = "dev.onionvault.pip.ACTION_TEXT_SEARCH"
 
         fun intentFilter(): IntentFilter = IntentFilter().apply {
             Command.entries.forEach { addAction(it.action) }

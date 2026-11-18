@@ -13,10 +13,11 @@
         to `PredictiveBackHandler` so live visual page snapshots render smoothly.
       * `android:launchMode="singleTask"` keeps Trap in a single browser task.
       * `android:configChanges` preserves active `CefpackSession` surfaces and
-        Tor circuits across rotation, split-screen resize, and theme switches.
+        Tor circuits across rotation, split-screen resize, PiP, and theme switches.
       * `android:windowSoftInputMode="adjustResize"` works with Compose edge-to-edge
-        `WindowInsets` (`statusBars`, `navigationBars`, `ime`) so bottom chrome
-        and sheets never collide with system bars or the soft keyboard.
+        `WindowInsets` (`statusBars`, `navigationBars`, `ime`) so bottom pods
+        and sheets never collide with system bars or the soft keyboard while
+        drawing edge-to-edge behind the top Android status bar.
       * `android:memtagMode="off"` keeps Zygote, `app_zygote`, `:privileged_process*`,
         and `:sandboxed_process*` in ARM64 TBI (`MEMTAG_OFF`) so ARMv9 `FEAT_MTE`
         devices with locked MTE never trigger Chromium 156 `PartitionAlloc` /

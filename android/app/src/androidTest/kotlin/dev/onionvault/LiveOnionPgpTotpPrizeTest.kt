@@ -17,11 +17,11 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.doubleClick
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
@@ -30,7 +30,6 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performScrollTo
-import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
@@ -250,18 +249,14 @@ class LiveOnionPgpTotpPrizeTest {
                 composeRule.onNodeWithTag("pgp_field_overlay").assertIsDisplayed()
                 composeRule.onAllNodesWithText("Insert My PubKey")[0].performClick()
 
-                composeRule.waitUntil(timeoutMillis = 20_000L) {
-                    composeRule.onAllNodesWithText("Inserted public key and verified DOM field")
-                        .fetchSemanticsNodes()
-                        .isNotEmpty()
-                }
                 val pubKeyFieldText = awaitControlValueContains(
                     activity = activity,
                     browser = browser,
                     elementId = "pubkey",
                     expectedSubstring = "-----BEGIN PGP PUBLIC KEY BLOCK-----",
-                    timeoutMs = 10_000L,
+                    timeoutMs = 20_000L,
                 )
+                composeRule.onNodeWithTag("status_notice_banner").assertDoesNotExist()
                 assertTrue(
                     "Expected ASCII-armored PGP public key in #pubkey, got len=${pubKeyFieldText.length}",
                     pubKeyFieldText.contains("-----BEGIN PGP PUBLIC KEY BLOCK-----") &&
@@ -970,7 +965,6 @@ class LiveOnionPgpTotpPrizeTest {
 
     private fun openKeyringSheetReliably(timeoutMs: Long) {
         val deadline = SystemClock.uptimeMillis() + timeoutMs
-        var attempt = 0
         while (SystemClock.uptimeMillis() < deadline) {
             val isOpen = runCatching {
                 composeRule.onAllNodesWithTag("keyring_sheet")
@@ -980,15 +974,11 @@ class LiveOnionPgpTotpPrizeTest {
             if (isOpen) return
 
             composeRule.waitForIdle()
-            if (attempt % 2 == 0) {
-                runCatching { composeRule.onNodeWithTag("pgp_rocker_pod").performClick() }
-            } else {
-                runCatching {
-                    composeRule.onNodeWithTag("pgp_rocker_pod")
-                        .performSemanticsAction(SemanticsActions.OnClick)
+            runCatching {
+                composeRule.onNodeWithTag("pgp_rocker_pod").performTouchInput {
+                    doubleClick()
                 }
             }
-            attempt += 1
 
             val stepWait = minOf(deadline, SystemClock.uptimeMillis() + 1_500L)
             while (SystemClock.uptimeMillis() < stepWait) {
@@ -1001,7 +991,7 @@ class LiveOnionPgpTotpPrizeTest {
                 SystemClock.sleep(100L)
             }
         }
-        fail("Timed out opening KeyringHardwarePod ('keyring_sheet') from 'pgp_rocker_pod'")
+        fail("Timed out opening KeyringHardwarePod ('keyring_sheet') via double-tap on 'pgp_rocker_pod'")
     }
 
     private fun capturePrizeScreenshotToDeviceTmp(

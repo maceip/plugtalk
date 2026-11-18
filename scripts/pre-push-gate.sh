@@ -80,21 +80,33 @@ if home:
             prepend_if_dir(sb)
             break
 
-# Discover JAVA_HOME (JDK 21 or 25).
+# Discover JAVA_HOME >= 25 (`cefpack-android.aar` uses class file version 69.0 / JDK 25, matching CI).
+def java_major(jh: str) -> int:
+    jbin = os.path.join(jh, "bin", "java")
+    if not (jh and os.path.isfile(jbin)):
+        return 0
+    try:
+        out = subprocess.check_output([jbin, "-version"], text=True, stderr=subprocess.STDOUT)
+        m = re.search(r'version\s+"(\d+)', out)
+        return int(m.group(1)) if m else 0
+    except Exception:
+        return 0
+
+
 java_home = os.environ.get("JAVA_HOME", "")
-if not (java_home and os.path.isfile(os.path.join(java_home, "bin", "java"))):
+if java_major(java_home) < 25:
     java_candidates = [
         "/opt/homebrew/opt/openjdk@25/libexec/openjdk.jdk/Contents/Home",
-        "/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home",
         "/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home",
         "/opt/trap-toolchain/jdk25",
         f"{home}/.trap-toolchain/jdk25" if home else "",
+        "/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home",
     ]
     for jc in java_candidates:
-        if jc and os.path.isfile(os.path.join(jc, "bin", "java")):
+        if java_major(jc) >= 25:
             java_home = jc
             break
-    if not java_home and os.path.isfile("/usr/libexec/java_home"):
+    if java_major(java_home) < 25 and os.path.isfile("/usr/libexec/java_home"):
         try:
             jh = subprocess.check_output(["/usr/libexec/java_home"], text=True, stderr=subprocess.DEVNULL).strip()
             if jh and os.path.isfile(os.path.join(jh, "bin", "java")):
