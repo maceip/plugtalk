@@ -3180,6 +3180,9 @@ class MainActivity : FragmentActivity() {
         if (controllersReady) tabSessionManager.activeBrowser() else null
 
     @VisibleForTesting
+    internal fun currentUiStateForTest(): BrowserUiState = uiState
+
+    @VisibleForTesting
     internal fun activeTabIdForTest(): String? =
         if (controllersReady) tabSessionManager.activeTabId.value else null
 
