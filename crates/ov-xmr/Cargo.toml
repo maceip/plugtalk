@@ -16,11 +16,13 @@ getrandom = { workspace = true }
 hex = { workspace = true }
 log = { workspace = true }
 monero-address = { workspace = true }
+monero-base58 = { workspace = true }
 monero-daemon-rpc = { workspace = true }
 monero-oxide = { workspace = true }
 monero-wallet = { workspace = true }
 ov-pgp = { workspace = true }
 ov-tor = { workspace = true }
+qrcode = { workspace = true }
 rand_core = { workspace = true }
 rusqlite = { workspace = true }
 rustls = { workspace = true }

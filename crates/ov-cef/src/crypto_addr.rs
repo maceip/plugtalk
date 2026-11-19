@@ -2,7 +2,7 @@
 //!
 //! Validates:
 //! - Bitcoin mainnet Base58Check (`1...` P2PKH `0x00`, `3...` P2SH `0x05`) via double-SHA-256,
-//! - Bitcoin mainnet SegWit/Taproot Bech32 & Bech32m (`bc1q...` BIP-173, `bc1p...` BIP-350),
+//! - Bitcoin SegWit/Taproot Bech32 & Bech32m (`bc1...`, `tb1...`, `bcrt1...` BIP-173 / BIP-350),
 //! - Monero mainnet addresses (`4...` primary/integrated, `8...` subaddress) & `monero:` URIs.
 
 use monero_address::{MoneroAddress, Network};
@@ -13,20 +13,33 @@ const BECH32_CHARSET: &[u8; 32] = b"qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 const BECH32_CONST: u32 = 1;
 const BECH32M_CONST: u32 = 0x2bc8_30a3;
 
-/// Validate a Bitcoin mainnet address (`bc1q...`, `bc1p...`, `1...`, or `3...`)
+/// Validate a Bitcoin address (`bc1...`, `tb1...`, `bcrt1...`, `1...`, or `3...`)
 /// and return its normalized string if checksum-valid.
-pub fn validate_btc_mainnet_address(candidate: &str) -> Option<String> {
+pub fn validate_btc_address(candidate: &str) -> Option<String> {
     let trimmed = candidate.trim();
     if trimmed.len() < 14 || trimmed.len() > 90 || !trimmed.is_ascii() {
         return None;
     }
-    if trimmed.len() >= 4 && trimmed[..3].eq_ignore_ascii_case("bc1") {
+    let lower_head: String = trimmed
+        .chars()
+        .take(5)
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    if lower_head.starts_with("bcrt1")
+        || lower_head.starts_with("bc1")
+        || lower_head.starts_with("tb1")
+    {
         validate_btc_bech32(trimmed)
     } else if trimmed.starts_with('1') || trimmed.starts_with('3') {
         validate_btc_base58check(trimmed)
     } else {
         None
     }
+}
+
+/// Backwards-compatible alias for [`validate_btc_address`].
+pub fn validate_btc_mainnet_address(candidate: &str) -> Option<String> {
+    validate_btc_address(candidate)
 }
 
 /// Parse a `bitcoin:<address>?amount=...` URI, returning `(validated_address, optional_amount)`.
@@ -40,9 +53,32 @@ pub fn parse_bitcoin_uri(raw: &str) -> Option<(String, Option<String>)> {
         Some((a, q)) => (a.trim(), Some(q)),
         None => (after.trim(), None),
     };
-    let valid_addr = validate_btc_mainnet_address(addr_part)?;
+    let valid_addr = validate_btc_address(addr_part)?;
     let amount = query_opt.and_then(|q| extract_uri_numeric_param(q, &["amount"]));
     Some((valid_addr, amount))
+}
+
+/// Extract a standalone checksum-valid Monero mainnet address (`4...` primary/integrated or
+/// `8...` subaddress) from `text`.
+pub fn extract_monero_address(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if (trimmed.len() == 95 || trimmed.len() == 106)
+        && (trimmed.starts_with('4') || trimmed.starts_with('8'))
+    {
+        if let Ok(addr) = MoneroAddress::from_str(Network::Mainnet, trimmed) {
+            return Some(addr.to_string());
+        }
+    }
+    for token in trimmed.split(|c: char| !c.is_ascii_alphanumeric()) {
+        if (token.len() == 95 || token.len() == 106)
+            && (token.starts_with('4') || token.starts_with('8'))
+        {
+            if let Ok(addr) = MoneroAddress::from_str(Network::Mainnet, token) {
+                return Some(addr.to_string());
+            }
+        }
+    }
+    None
 }
 
 /// Validate a `monero:<address>?...` URI, returning `(normalized_uri, optional_tx_amount)`.
@@ -163,7 +199,14 @@ fn validate_btc_bech32(addr: &str) -> Option<String> {
         return None;
     }
     let lower = addr.to_ascii_lowercase();
-    let data_part = lower.strip_prefix("bc1")?;
+    let (hrp, data_part) = if let Some(rest) = lower.strip_prefix("bcrt1") {
+        ("bcrt", rest)
+    } else if let Some(rest) = lower.strip_prefix("bc1") {
+        ("bc", rest)
+    } else {
+        let rest = lower.strip_prefix("tb1")?;
+        ("tb", rest)
+    };
     if data_part.len() < 6 {
         return None;
     }
@@ -174,9 +217,7 @@ fn validate_btc_bech32(addr: &str) -> Option<String> {
         values.push(v);
     }
 
-    // `hrp_expand("bc")` = [b'b' >> 5, b'c' >> 5, 0, b'b' & 31, b'c' & 31] = [3, 3, 0, 2, 3]
-    let mut poly_input = Vec::with_capacity(5 + values.len());
-    poly_input.extend_from_slice(&[3, 3, 0, 2, 3]);
+    let mut poly_input = bech32_hrp_expand(hrp);
     poly_input.extend_from_slice(&values);
     let polymod = bech32_polymod(&poly_input);
 
@@ -205,6 +246,18 @@ fn validate_btc_bech32(addr: &str) -> Option<String> {
     }
 
     Some(lower)
+}
+
+fn bech32_hrp_expand(hrp: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(hrp.len() * 2 + 1);
+    for b in hrp.bytes() {
+        out.push(b >> 5);
+    }
+    out.push(0);
+    for b in hrp.bytes() {
+        out.push(b & 0x1f);
+    }
+    out
 }
 
 fn bech32_polymod(values: &[u8]) -> u32 {
@@ -298,5 +351,39 @@ mod tests {
         );
         // Tampered Base58Check checksum must fail
         assert!(validate_btc_mainnet_address("3AQ2gsD1FG5vhFiGGzTZd7N57WwDJj4SSj").is_none());
+
+        // Real BIP-173 / BIP-350 `tb1...` testnet and `bitcoind -regtest` `bcrt1q...` / `bcrt1p...` vectors
+        assert_eq!(
+            validate_btc_address("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx").as_deref(),
+            Some("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx")
+        );
+        assert_eq!(
+            validate_btc_address("tb1pqqqqp399et2xygdj5xreqhjjvcmzhxw4aywxecjdzew6hylgvsesf3hn0c")
+                .as_deref(),
+            Some("tb1pqqqqp399et2xygdj5xreqhjjvcmzhxw4aywxecjdzew6hylgvsesf3hn0c")
+        );
+        // Construct a real BIP-173 `bcrt1q` 20-byte witness program (`[0x75, 0x1e, ...]`) and verify checksum:
+        let bcrt_addr = "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080";
+        assert_eq!(validate_btc_address(bcrt_addr).as_deref(), Some(bcrt_addr));
+        // Tampered `bcrt1q` checksum must fail
+        assert!(validate_btc_address("bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt081").is_none());
+        assert_eq!(
+            parse_bitcoin_uri(&format!("bitcoin:{bcrt_addr}?amount=0.01")),
+            Some((bcrt_addr.to_string(), Some("0.01".to_string())))
+        );
+    }
+
+    #[test]
+    fn extracts_standalone_monero_4_and_8_addresses() {
+        let sub8 = "82ffYh7xRhFBvBHEHGV8TNRBoYucBFNoyYnwrJJjnMGpHKPWosZeB4BDr7pBG4DCux1WKepdAV6rRTimi1LqWMacF88hvQm";
+        let std4 = "44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A";
+        assert_eq!(
+            extract_monero_address(&format!("  Send XMR to {sub8}.  ")).as_deref(),
+            Some(sub8)
+        );
+        assert_eq!(extract_monero_address(std4).as_deref(), Some(std4));
+        // Tampered Monero checksum must be rejected
+        let tampered = "82ffYh7xRhFBvBHEHGV8TNRBoYucBFNoyYnwrJJjnMGpHKPWosZeB4BDr7pBG4DCux1WKepdAV6rRTimi1LqWMacF88hvQn";
+        assert!(extract_monero_address(tampered).is_none());
     }
 }

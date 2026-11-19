@@ -15,7 +15,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{
     crypto_addr::{
-        clean_positive_decimal, parse_bitcoin_uri, validate_btc_mainnet_address,
+        clean_positive_decimal, extract_monero_address, parse_bitcoin_uri, validate_btc_address,
         validate_monero_uri_str,
     },
     dom_model::{
@@ -253,12 +253,49 @@ where
             fingerprint_hint: fp.unwrap_or_default(),
         };
     }
+    if let Some((canonical_uri, uri_amt)) = extract_monero_uri_candidate(text) {
+        let (fp, label) = hint_resolver("monero_address", &canonical_uri);
+        return ClassifiedText {
+            kind: "monero_address".to_string(),
+            action_label: label.unwrap_or_else(|| "Send XMR".to_string()),
+            armored: canonical_uri,
+            fingerprint_hint: fp.or(uri_amt).unwrap_or_default(),
+        };
+    }
+    if let Some(addr) = extract_monero_address(text) {
+        let (fp, label) = hint_resolver("monero_address", &addr);
+        return ClassifiedText {
+            kind: "monero_address".to_string(),
+            action_label: label.unwrap_or_else(|| "Send XMR".to_string()),
+            armored: addr,
+            fingerprint_hint: fp.unwrap_or_default(),
+        };
+    }
     ClassifiedText {
         kind: "plain".to_string(),
         action_label: String::new(),
         armored: String::new(),
         fingerprint_hint: String::new(),
     }
+}
+
+fn extract_monero_uri_candidate(text: &str) -> Option<(String, Option<String>)> {
+    if let Some(hit) = validate_monero_uri_str(text) {
+        return Some(hit);
+    }
+    for tok in text.split_whitespace() {
+        let cleaned = tok.trim_matches(|c: char| {
+            matches!(
+                c,
+                '"' | '\'' | '<' | '>' | '(' | ')' | '[' | ']' | ',' | ';'
+            )
+        });
+        let cleaned = cleaned.trim_end_matches('.');
+        if let Some(hit) = validate_monero_uri_str(cleaned) {
+            return Some(hit);
+        }
+    }
+    None
 }
 
 /// Parse `DOM.getDocument` JSON in any of the three standard forms:
@@ -463,6 +500,10 @@ fn walk_cdp<F>(
     }
 
     let tag = node.tag_lower();
+    if tag == "head" {
+        collect_head_xmr402_meta(node, 0, hint_resolver, out);
+        return;
+    }
     if !tag.is_empty() && (is_ignored_subtree(&tag) || is_hidden_element(node)) {
         return;
     }
@@ -557,12 +598,71 @@ fn walk_cdp<F>(
     }
 }
 
+fn collect_head_xmr402_meta<F>(
+    node: &CdpNode,
+    depth: usize,
+    hint_resolver: &F,
+    out: &mut Vec<CdpClassifiedNode>,
+) where
+    F: Fn(&str, &str) -> (Option<String>, Option<String>),
+{
+    if depth > MAX_CDP_DEPTH {
+        return;
+    }
+    if node.is_element() && node.node_id > 0 && node.tag_lower() == "meta" {
+        if let Some((kind, default_label, payload_text, default_hint, _)) =
+            classify_xmr402_meta(node)
+        {
+            let (fp_hint, label_override) = hint_resolver(kind, &payload_text);
+            out.push(CdpClassifiedNode {
+                node_id: node.node_id,
+                backend_node_id: node.backend_node_id,
+                tag: "meta".to_string(),
+                kind: kind.to_string(),
+                action_label: label_override.unwrap_or_else(|| default_label.to_string()),
+                text: payload_text,
+                fingerprint_hint: fp_hint.or(default_hint).unwrap_or_default(),
+                is_search_like: false,
+            });
+        }
+    }
+    for child in &node.children {
+        collect_head_xmr402_meta(child, depth + 1, hint_resolver, out);
+    }
+}
+
+fn classify_xmr402_meta(
+    node: &CdpNode,
+) -> Option<(&'static str, &'static str, String, Option<String>, bool)> {
+    let is_challenge_meta = node
+        .attr("name")
+        .is_some_and(|n| n.trim().eq_ignore_ascii_case("xmr402-challenge"));
+    if !is_challenge_meta {
+        return None;
+    }
+    let content = node.attr("content").unwrap_or("").trim();
+    if content.is_empty() {
+        return None;
+    }
+    Some((
+        "xmr402_challenge",
+        "Pay XMR402",
+        content.to_string(),
+        None,
+        false,
+    ))
+}
+
 fn classify_cdp_element(
     node: &CdpNode,
     tag: &str,
     walk_ctx: &WalkContext,
     doc_ctx: &DocSwapContext,
 ) -> Option<(&'static str, &'static str, String, Option<String>, bool)> {
+    if tag == "meta" {
+        return classify_xmr402_meta(node);
+    }
+
     let disabled = node.has_attr("disabled");
     let readonly = node.has_attr("readonly");
 
@@ -640,7 +740,7 @@ fn classify_cdp_element(
             if !walk_ctx.inside_refund_or_source
                 && !has_refund_or_source_marker(node, label_for_text)
             {
-                if let Some(btc_addr) = validate_btc_mainnet_address(&live_value) {
+                if let Some(btc_addr) = validate_btc_address(&live_value) {
                     return Some((
                         "btc_deposit_address",
                         "Copy BTC Deposit",
@@ -701,7 +801,7 @@ fn classify_cdp_element(
             return Some(("monero_uri", "Pay XMR", xmr_uri, uri_amt, true));
         }
         if !walk_ctx.inside_refund_or_source && !has_refund_or_source_marker(node, "") {
-            if let Some(btc_addr) = validate_btc_mainnet_address(trimmed) {
+            if let Some(btc_addr) = validate_btc_address(trimmed) {
                 return Some((
                     "btc_deposit_address",
                     "Copy BTC Deposit",
@@ -1713,5 +1813,78 @@ mod tests {
         assert_eq!(hs_nodes[2].kind, "monero_uri");
         assert_eq!(hs_nodes[2].action_label, "Pay XMR");
         assert_eq!(hs_nodes[2].fingerprint_hint, "0.75");
+    }
+
+    #[test]
+    fn classifies_head_xmr402_meta_regtest_bcrt1_deposit_and_selected_monero_addresses() {
+        let xmr_sub = "82ffYh7xRhFBvBHEHGV8TNRBoYucBFNoyYnwrJJjnMGpHKPWosZeB4BDr7pBG4DCux1WKepdAV6rRTimi1LqWMacF88hvQm";
+        let bcrt_addr = "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080";
+        let challenge_content = format!(
+            r#"{{"address":"{xmr_sub}","amountAtomic":"250000000000","message":"xmr402-citadel-nonce","timestamp":1700000000}}"#
+        );
+
+        let doc = serde_json::json!({
+            "root": {
+                "nodeId": 1, "nodeType": 9, "nodeName": "#document",
+                "children": [{
+                    "nodeId": 2, "nodeType": 1, "nodeName": "HTML", "localName": "html",
+                    "children": [
+                        {
+                            "nodeId": 3, "nodeType": 1, "nodeName": "HEAD", "localName": "head",
+                            "children": [
+                                {
+                                    "nodeId": 4, "nodeType": 1, "nodeName": "TITLE", "localName": "title",
+                                    "children": [{ "nodeId": 5, "nodeType": 3, "nodeName": "#text", "nodeValue": "-----BEGIN PGP MESSAGE-----\n\nhQEMA==\n-----END PGP MESSAGE-----" }]
+                                },
+                                {
+                                    "nodeId": 6, "backendNodeId": 106, "nodeType": 1, "nodeName": "META", "localName": "meta",
+                                    "attributes": ["name", "xmr402-challenge", "content", challenge_content]
+                                }
+                            ]
+                        },
+                        {
+                            "nodeId": 10, "nodeType": 1, "nodeName": "BODY", "localName": "body",
+                            "children": [
+                                {
+                                    "nodeId": 11, "nodeType": 1, "nodeName": "SPAN", "localName": "span",
+                                    "attributes": ["id", "amount_a"],
+                                    "children": [{ "nodeId": 12, "nodeType": 3, "nodeName": "#text", "nodeValue": "0.01" }]
+                                },
+                                {
+                                    "nodeId": 13, "backendNodeId": 113, "nodeType": 1, "nodeName": "INPUT", "localName": "input",
+                                    "attributes": ["type", "text", "id", "deposit_address", "readonly", "readonly", "value", bcrt_addr]
+                                }
+                            ]
+                        }
+                    ]
+                }]
+            }
+        });
+
+        let nodes = classify_cdp_dom_json(&doc.to_string()).unwrap();
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(nodes[0].node_id, 6);
+        assert_eq!(nodes[0].kind, "xmr402_challenge");
+        assert_eq!(nodes[0].action_label, "Pay XMR402");
+        assert_eq!(nodes[0].text, challenge_content);
+
+        assert_eq!(nodes[1].node_id, 13);
+        assert_eq!(nodes[1].kind, "btc_deposit_address");
+        assert_eq!(nodes[1].action_label, "Copy BTC Deposit");
+        assert_eq!(nodes[1].text, bcrt_addr);
+        assert_eq!(nodes[1].fingerprint_hint, "0.01");
+
+        // Selection classification for standalone 8... subaddress and `monero:` URI:
+        let addr_cls = classify_text(&format!("Send XMR: {xmr_sub}"));
+        assert_eq!(addr_cls.kind, "monero_address");
+        assert_eq!(addr_cls.action_label, "Send XMR");
+        assert_eq!(addr_cls.armored, xmr_sub);
+        assert_eq!(addr_cls.fingerprint_hint, "");
+
+        let uri_cls = classify_text(&format!("monero:{xmr_sub}?tx_amount=0.25"));
+        assert_eq!(uri_cls.kind, "monero_address");
+        assert_eq!(uri_cls.action_label, "Send XMR");
+        assert_eq!(uri_cls.armored, format!("monero:{xmr_sub}?tx_amount=0.25"));
+        assert_eq!(uri_cls.fingerprint_hint, "0.25");
     }
 }

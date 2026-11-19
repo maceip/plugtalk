@@ -5,7 +5,7 @@
 //! Keystore on device, `0600` software key in desktop/JVM tests) before writing
 //! `xmr_wallet_meta.wrapped_spend_key`.
 
-use std::{path::Path, sync::Mutex};
+use std::{collections::HashMap, path::Path, sync::Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
 use ov_pgp::{zeroize_slice, MasterKeyProvider};
@@ -77,6 +77,15 @@ pub struct StoredTransaction {
     pub height: u64,
     pub timestamp: u64,
     pub subaddress_minor: u32,
+}
+
+/// Stored wrapped outgoing transaction proof secret row from `xmr_tx_secrets`.
+#[derive(Clone, Debug)]
+pub struct StoredTxSecret {
+    pub txid: String,
+    pub recipient_address: String,
+    pub wrapped_secret_blob: Vec<u8>,
+    pub tx_extra: Vec<u8>,
 }
 
 /// Stored BTC -> XMR swap tracking row from `btc_xmr_swaps`.
@@ -181,6 +190,13 @@ impl XmrStore {
                 subaddress_minor INTEGER NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS xmr_tx_secrets (
+                txid                TEXT PRIMARY KEY,
+                recipient_address   TEXT NOT NULL,
+                wrapped_secret_blob BLOB NOT NULL,
+                tx_extra            BLOB NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS btc_xmr_swaps (
                 swap_id             TEXT PRIMARY KEY,
                 provider            TEXT NOT NULL,
@@ -248,9 +264,21 @@ impl XmrStore {
     }
 
     /// Persist custom `sync_endpoint` and `sync_mode`.
+    /// When `sync_endpoint` changes to a different URL than before on an existing wallet,
+    /// clears cached `xmr_outputs`, `xmr_transactions`, and `xmr_tx_secrets` from the previous
+    /// endpoint and resets `restore_height = 0, synced_height = 0, daemon_height = 0, birthday_pending = true`
+    /// so chain switches (e.g. mainnet `.onion` <-> custom/regtest `.onion`) rescan cleanly without contamination.
     pub fn set_endpoint_and_mode(&self, endpoint: &str, mode: &str) -> Result<()> {
         let mut conn = self.lock();
         let tx = conn.transaction()?;
+        let existing_ep: Option<String> = tx
+            .query_row(
+                "SELECT sync_endpoint FROM xmr_wallet_meta WHERE id = 1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+
         tx.execute(
             "INSERT INTO xmr_settings (key, value) VALUES (?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -261,10 +289,28 @@ impl XmrStore {
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             params![SETTING_SYNC_MODE, mode],
         )?;
-        tx.execute(
-            "UPDATE xmr_wallet_meta SET sync_endpoint = ?1, sync_mode = ?2 WHERE id = 1",
-            params![endpoint, mode],
-        )?;
+
+        let endpoint_changed = existing_ep.as_deref().is_some_and(|old| {
+            old.trim().trim_end_matches('/') != endpoint.trim().trim_end_matches('/')
+        });
+        if endpoint_changed {
+            tx.execute("DELETE FROM xmr_outputs", [])?;
+            tx.execute("DELETE FROM xmr_transactions", [])?;
+            tx.execute("DELETE FROM xmr_tx_secrets", [])?;
+            tx.execute(
+                "UPDATE xmr_wallet_meta
+                 SET sync_endpoint = ?1, sync_mode = ?2,
+                     restore_height = 0, birthday_pending = 1,
+                     synced_height = 0, daemon_height = 0, last_sync_epoch_secs = 0
+                 WHERE id = 1",
+                params![endpoint, mode],
+            )?;
+        } else {
+            tx.execute(
+                "UPDATE xmr_wallet_meta SET sync_endpoint = ?1, sync_mode = ?2 WHERE id = 1",
+                params![endpoint, mode],
+            )?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -288,6 +334,7 @@ impl XmrStore {
         let mut conn = self.lock();
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM btc_xmr_swaps", [])?;
+        tx.execute("DELETE FROM xmr_tx_secrets", [])?;
         tx.execute("DELETE FROM xmr_transactions", [])?;
         tx.execute("DELETE FROM xmr_outputs", [])?;
         tx.execute("DELETE FROM xmr_subaddresses", [])?;
@@ -330,12 +377,14 @@ impl XmrStore {
         tx.execute("DELETE FROM xmr_subaddresses", [])?;
         tx.execute("DELETE FROM xmr_outputs", [])?;
         tx.execute("DELETE FROM xmr_transactions", [])?;
+        tx.execute("DELETE FROM xmr_tx_secrets", [])?;
         tx.execute("DELETE FROM btc_xmr_swaps", [])?;
         tx.commit()?;
         Ok(deleted > 0)
     }
 
-    /// Re-wrap `wrapped_spend_key` under `new_master` when Keystore policy rotates.
+    /// Re-wrap `wrapped_spend_key` and all `xmr_tx_secrets.wrapped_secret_blob` rows
+    /// under `new_master` when Keystore policy rotates.
     pub fn rewrap_spend_key(
         &self,
         old_master: &dyn MasterKeyProvider,
@@ -361,6 +410,25 @@ impl XmrStore {
             "UPDATE xmr_wallet_meta SET wrapped_spend_key = ?1 WHERE id = 1",
             params![new_blob],
         )?;
+
+        let secret_rows: Vec<(String, Vec<u8>)> = {
+            let mut stmt = tx.prepare("SELECT txid, wrapped_secret_blob FROM xmr_tx_secrets")?;
+            let mapped = stmt.query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
+            })?;
+            mapped.collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        for (txid, old_sec_blob) in secret_rows {
+            let mut sec_plain = old_master.unwrap(&old_sec_blob)?;
+            let sec_rewrapped = new_master.wrap(&sec_plain);
+            zeroize_slice(&mut sec_plain);
+            let new_sec_blob = sec_rewrapped?;
+            tx.execute(
+                "UPDATE xmr_tx_secrets SET wrapped_secret_blob = ?1 WHERE txid = ?2",
+                params![new_sec_blob, txid],
+            )?;
+        }
+
         tx.commit()?;
         Ok(true)
     }
@@ -472,6 +540,36 @@ impl XmrStore {
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(Into::into)
+    }
+
+    /// Find an existing `(0, minor)` subaddress matching `label` case-insensitively.
+    pub fn find_subaddress_by_label_ci(&self, label: &str) -> Result<Option<StoredSubaddress>> {
+        let conn = self.lock();
+        conn.query_row(
+            "SELECT minor_index, label, address FROM xmr_subaddresses
+             WHERE lower(label) = lower(?1)
+             ORDER BY minor_index ASC LIMIT 1",
+            params![label],
+            |r| {
+                Ok(StoredSubaddress {
+                    minor_index: sql_to_u32(r.get(0)?),
+                    label: r.get(1)?,
+                    address: r.get(2)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    /// Mark an existing `minor_index` as the active subaddress in `xmr_wallet_meta`.
+    pub fn set_active_subaddress(&self, minor_index: u32) -> Result<()> {
+        let conn = self.lock();
+        conn.execute(
+            "UPDATE xmr_wallet_meta SET active_subaddress_index = ?1 WHERE id = 1",
+            params![i64::from(minor_index)],
+        )?;
+        Ok(())
     }
 
     /// Upsert a scanned or LWS-imported [`StoredOutput`].
@@ -652,6 +750,63 @@ impl XmrStore {
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(Into::into)
+    }
+
+    /// Persist wrapped outgoing proof material (`ovk` + spent input `(key, commitment)` pairs + `tx.extra`).
+    pub fn upsert_tx_secret(
+        &self,
+        txid: &str,
+        recipient_address: &str,
+        wrapped_secret_blob: &[u8],
+        tx_extra: &[u8],
+    ) -> Result<()> {
+        let clean_txid = txid.trim().to_ascii_lowercase();
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO xmr_tx_secrets (txid, recipient_address, wrapped_secret_blob, tx_extra)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(txid) DO UPDATE SET
+                 recipient_address = excluded.recipient_address,
+                 wrapped_secret_blob = excluded.wrapped_secret_blob,
+                 tx_extra = excluded.tx_extra",
+            params![clean_txid, recipient_address, wrapped_secret_blob, tx_extra],
+        )?;
+        Ok(())
+    }
+
+    /// Load wrapped outgoing proof secret row by `txid` (`64-hex`).
+    pub fn get_tx_secret(&self, txid: &str) -> Result<Option<StoredTxSecret>> {
+        let clean_txid = txid.trim().to_ascii_lowercase();
+        let conn = self.lock();
+        conn.query_row(
+            "SELECT txid, recipient_address, wrapped_secret_blob, tx_extra
+             FROM xmr_tx_secrets
+             WHERE lower(txid) = ?1",
+            params![clean_txid],
+            |r| {
+                Ok(StoredTxSecret {
+                    txid: r.get(0)?,
+                    recipient_address: r.get(1)?,
+                    wrapped_secret_blob: r.get(2)?,
+                    tx_extra: r.get(3)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    /// Read `(txid -> recipient_address)` map from `xmr_tx_secrets` without touching `MasterKeyProvider`.
+    pub fn list_tx_secret_recipients(&self) -> Result<HashMap<String, String>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare("SELECT txid, recipient_address FROM xmr_tx_secrets")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let mut map = HashMap::new();
+        for item in rows {
+            let (txid, rcpt) = item?;
+            map.insert(txid, rcpt);
+        }
+        Ok(map)
     }
 
     /// Insert a newly tracked BTC -> XMR swap.

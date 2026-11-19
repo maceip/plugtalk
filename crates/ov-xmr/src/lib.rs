@@ -2,12 +2,15 @@
 //! Tor-routed zero-JavaScript BTC -> XMR swap aggregator for Trap.
 
 pub mod mnemonic;
+pub mod qr;
 pub mod store;
 pub mod swap;
 pub mod sync;
 pub mod transport;
+pub mod tx_proof;
 pub mod uri;
 pub mod wallet;
+pub mod xmr402;
 
 use std::{
     net::SocketAddr,
@@ -28,9 +31,10 @@ use url::Url;
 use zeroize::Zeroizing;
 
 pub use mnemonic::{decode_mnemonic, encode_mnemonic, english_words, generate_spend_key};
+pub use qr::{encode_qr_matrix, encode_qr_matrix_json, QrMatrixResult, MAX_QR_PAYLOAD_BYTES};
 pub use store::{
-    StoredOutput, StoredSubaddress, StoredSwap, StoredTransaction, StoredWalletMeta, XmrStore,
-    DEFAULT_MONEROD_ONION_POOL, SYNC_MODE_LWS, SYNC_MODE_MONEROD_ONION,
+    StoredOutput, StoredSubaddress, StoredSwap, StoredTransaction, StoredTxSecret,
+    StoredWalletMeta, XmrStore, DEFAULT_MONEROD_ONION_POOL, SYNC_MODE_LWS, SYNC_MODE_MONEROD_ONION,
 };
 pub use swap::{
     fetch_btc_xmr_quotes, fetch_btc_xmr_quotes_from_base, normalize_btc_amount_decimal,
@@ -38,12 +42,21 @@ pub use swap::{
 };
 pub use sync::{is_output_unlocked, LWS_FORBIDDEN_ERROR_MSG, UNLOCK_CONFIRMATIONS};
 pub use transport::{HttpResponse, MoneroRpcTransport, TorSocksTransport};
+pub use tx_proof::{
+    decode_tx_secret_material, encode_tx_secret_material, format_xmr402_authorization_header,
+    generate_tx_proof_v2, reconstruct_tx_secret_keys, reconstruct_tx_secret_keys_from_extra,
+    verify_tx_proof_v2, OUTPROOF_V2_HEADER,
+};
 pub use uri::{
     format_atomic_xmr, format_monero_uri, parse_amount_decimal_or_atomic, parse_mainnet_address,
     parse_monero_uri, parse_xmr_to_atomic, MoneroUri, PICONERO_PER_XMR,
 };
 pub use wallet::{
     compute_key_image, derive_subaddress, derive_wallet_from_spend, reconstruct_view_pair,
+};
+pub use xmr402::{
+    parse_xmr402_challenge, parse_xmr402_challenge_json, Xmr402ChallengeResult, Xmr402PayResult,
+    XmrTxProofResult,
 };
 
 static SWAP_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -75,6 +88,10 @@ pub struct XmrTxItem {
     pub timestamp: u64,
     pub subaddress_index: u32,
     pub unlocked: bool,
+    #[serde(default)]
+    pub has_proof: bool,
+    #[serde(default)]
+    pub recipient_address: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -393,6 +410,7 @@ impl XmrService {
         let subs = self.store.list_subaddresses()?;
         let outputs = self.store.list_outputs()?;
         let txs = self.store.list_recent_transactions(50)?;
+        let tx_secret_recipients = self.store.list_tx_secret_recipients()?;
         let swaps = self.store.list_swaps()?;
         let now_secs = sync::now_epoch_secs();
         let effective_tip = meta.daemon_height.max(meta.synced_height);
@@ -446,6 +464,9 @@ impl XmrService {
             .map(|t| {
                 let unlocked = t.height > 0
                     && effective_tip >= t.height.saturating_add(UNLOCK_CONFIRMATIONS - 1);
+                let rcpt_opt = tx_secret_recipients.get(&t.txid.to_ascii_lowercase());
+                let has_proof = rcpt_opt.is_some();
+                let recipient_address = rcpt_opt.cloned().unwrap_or_default();
                 XmrTxItem {
                     txid: t.txid,
                     direction: t.direction,
@@ -457,6 +478,8 @@ impl XmrService {
                     timestamp: t.timestamp,
                     subaddress_index: t.subaddress_minor,
                     unlocked,
+                    has_proof,
+                    recipient_address,
                 }
             })
             .collect();
@@ -532,6 +555,7 @@ impl XmrService {
             };
 
             let (restore_height, birthday_pending, synced_height, daemon_height) = match tip_opt {
+                Some(tip) if tip <= 10_000 => (1.min(tip), false, 0, tip),
                 Some(tip) => (tip, false, tip, tip),
                 None => (0, true, 0, 0),
             };
@@ -665,22 +689,62 @@ impl XmrService {
     }
 
     /// Mint a fresh `(0, minor)` `8...` subaddress (`nativeXmrNewSubaddressJson`).
+    /// When `label` starts with `"site:"` (e.g. `"site:wizardswgtu2...onion"`), reuses any
+    /// existing subaddress with that label idempotently (setting it active) so per-origin
+    /// subaddress isolation stays deterministic across page visits.
     pub fn new_subaddress(&self, label: &str) -> XmrNewSubaddressResult {
         let run = || -> Result<XmrNewSubaddressResult> {
             let meta = self
                 .store
                 .wallet_meta()?
                 .ok_or_else(|| anyhow!("No Monero wallet created yet"))?;
+            let trimmed_label = label.trim();
+            if trimmed_label.len() > 5 && trimmed_label[..5].eq_ignore_ascii_case("site:") {
+                let site_suffix = trimmed_label[5..].trim();
+                if !site_suffix.is_empty() {
+                    let canonical_site_label = format!("site:{}", site_suffix.to_ascii_lowercase());
+                    if let Some(existing) = self
+                        .store
+                        .find_subaddress_by_label_ci(&canonical_site_label)?
+                    {
+                        self.store.set_active_subaddress(existing.minor_index)?;
+                        return Ok(XmrNewSubaddressResult {
+                            ok: true,
+                            index: existing.minor_index,
+                            label: existing.label,
+                            address: existing.address,
+                            error: String::new(),
+                        });
+                    }
+                    let vp = reconstruct_view_pair(&meta.primary_address, &meta.view_key_bytes)?;
+                    let next_minor = self
+                        .store
+                        .max_subaddress_minor()?
+                        .checked_add(1)
+                        .ok_or_else(|| anyhow!("subaddress index overflow"))?;
+                    let addr = derive_subaddress(&vp, next_minor)?.to_string();
+                    self.store
+                        .insert_subaddress(next_minor, &canonical_site_label, &addr, true)?;
+                    return Ok(XmrNewSubaddressResult {
+                        ok: true,
+                        index: next_minor,
+                        label: canonical_site_label,
+                        address: addr,
+                        error: String::new(),
+                    });
+                }
+            }
+
             let vp = reconstruct_view_pair(&meta.primary_address, &meta.view_key_bytes)?;
             let next_minor = self
                 .store
                 .max_subaddress_minor()?
                 .checked_add(1)
                 .ok_or_else(|| anyhow!("subaddress index overflow"))?;
-            let clean_label = if label.trim().is_empty() {
+            let clean_label = if trimmed_label.is_empty() {
                 format!("Subaddress #{next_minor}")
             } else {
-                label.trim().to_string()
+                trimmed_label.to_string()
             };
             let addr = derive_subaddress(&vp, next_minor)?.to_string();
             self.store
@@ -997,6 +1061,86 @@ impl XmrService {
                 format!("unknown swap action op {other:?}"),
             ),
         }
+    }
+
+    /// Parse and validate an `XMR402` challenge (`nativeXmrParse402ChallengeJson`).
+    pub fn parse_xmr402_challenge(
+        &self,
+        www_authenticate: &str,
+        fallback_meta_json: &str,
+        page_url: &str,
+        hidden_service_only: bool,
+    ) -> Xmr402ChallengeResult {
+        parse_xmr402_challenge(
+            www_authenticate,
+            fallback_meta_json,
+            page_url,
+            hidden_service_only,
+        )
+    }
+
+    /// Pay an `XMR402` challenge over Tor and return canonical `OutProofV2` + `Authorization` header (`nativeXmrPay402Json`).
+    pub async fn pay_xmr402(
+        &self,
+        socks_addr: Option<SocketAddr>,
+        tor_ready: bool,
+        hidden_service_only: bool,
+        challenge_json: &str,
+    ) -> Xmr402PayResult {
+        let transport = TorSocksTransport::new(
+            socks_addr,
+            tor_ready,
+            hidden_service_only,
+            Some("ov-xmr-rpc".to_string()),
+        );
+        let master = self.master();
+        match sync::pay_xmr402_tx(
+            &self.store,
+            master.as_ref(),
+            &transport,
+            hidden_service_only,
+            challenge_json,
+        )
+        .await
+        {
+            Ok(outcome) => Xmr402PayResult {
+                ok: true,
+                txid: outcome.txid,
+                proof: outcome.proof,
+                authorization_header: outcome.authorization_header,
+                amount_atomic: outcome.amount_atomic.to_string(),
+                amount_xmr: format_atomic_xmr(outcome.amount_atomic),
+                fee_atomic: outcome.fee_atomic.to_string(),
+                fee_xmr: format_atomic_xmr(outcome.fee_atomic),
+                error: String::new(),
+            },
+            Err(err) => Xmr402PayResult::err(err.to_string()),
+        }
+    }
+
+    /// Generate a canonical Monero `OutProofV2` for a stored outgoing transaction (`nativeXmrProveTxJson`).
+    pub fn prove_tx(
+        &self,
+        txid: &str,
+        recipient_address_or_empty: &str,
+        message: &str,
+    ) -> XmrTxProofResult {
+        let master = self.master();
+        match sync::prove_stored_tx(
+            &self.store,
+            master.as_ref(),
+            txid,
+            recipient_address_or_empty,
+            message,
+        ) {
+            Ok(res) => res,
+            Err(err) => XmrTxProofResult::err(txid, err.to_string()),
+        }
+    }
+
+    /// Encode a payload string into a square ISO/IEC 18004 QR matrix (`nativeXmrQrMatrixJson`).
+    pub fn qr_matrix(&self, payload: &str) -> QrMatrixResult {
+        encode_qr_matrix(payload)
     }
 }
 
@@ -1513,6 +1657,217 @@ mod tests {
         // Only the 0.75 XMR output is unspent; the 0.25 XMR output matched `spend_key_images`!
         assert_eq!(synced.balance_xmr, "0.75");
         assert_eq!(synced.unlocked_balance_xmr, "0.75");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn prove_stored_tx_after_master_key_rotation_chain_switch_reset_and_site_subaddress_idempotence(
+    ) {
+        let tmp = std::env::temp_dir().join(format!("ov-xmr-402-e2e-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let master1: Arc<dyn MasterKeyProvider> = Arc::new(SoftwareMasterKey::generate().unwrap());
+        let svc = XmrService::open(&tmp.join("xmr").join("wallet.db"), master1.clone()).unwrap();
+
+        let created = svc.create_wallet("XMR402 Vault", None, false, true).await;
+        assert!(created.ok);
+
+        // 1. Verify `"site:<host>"` subaddress idempotence:
+        let site1 = svc
+            .new_subaddress("site:wizardswgtu2ovor7r2esg3cxdpt7tv4nrugi32lldv53zmtonbz6sid.onion");
+        let site2 = svc
+            .new_subaddress("SITE:wizardswgtu2ovor7r2esg3cxdpt7tv4nrugi32lldv53zmtonbz6sid.onion");
+        assert!(site1.ok && site2.ok);
+        assert_eq!(site1.index, 2);
+        assert_eq!(site1.index, site2.index);
+        assert_eq!(site1.address, site2.address);
+        assert_eq!(svc.status_snapshot().active_subaddress_index, 2);
+
+        let other_site = svc
+            .new_subaddress("site:2gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wid.onion");
+        assert_eq!(other_site.index, 3);
+        assert_ne!(other_site.address, site1.address);
+
+        // Re-selecting `site1` makes minor_index 2 active again without minting #4:
+        let site1_again = svc
+            .new_subaddress("site:wizardswgtu2ovor7r2esg3cxdpt7tv4nrugi32lldv53zmtonbz6sid.onion");
+        assert_eq!(site1_again.index, 2);
+        assert_eq!(svc.status_snapshot().active_subaddress_index, 2);
+
+        // 2. Construct a real Ring-16 ClsagBulletproofPlus outgoing tx, persist `xmr_tx_secrets` +
+        // `xmr_transactions`, rotate `MasterKeyProvider`, and verify `prove_tx` + `status_snapshot`!
+        let spend_bytes = decode_mnemonic(&created.mnemonic).unwrap();
+        let derived = derive_wallet_from_spend(&spend_bytes).unwrap();
+        let spend_scalar = mnemonic::validate_canonical_spend_scalar(&spend_bytes).unwrap();
+
+        let merchant_spend = Scalar::random(&mut OsRng);
+        let merchant_d: curve25519_dalek::Scalar = merchant_spend.into();
+        let merchant_vp = monero_wallet::ViewPair::new(
+            Point::from(&merchant_d * ED25519_BASEPOINT_TABLE),
+            Zeroizing::new(Scalar::hash(merchant_d.to_bytes())),
+        )
+        .unwrap();
+        let merchant_sub =
+            merchant_vp.subaddress(Network::Mainnet, SubaddressIndex::new(0, 1).unwrap());
+
+        let in0 = synthetic_owd(spend_scalar, 1_000_000_000_000, 16);
+        let input_pair_bytes = vec![(
+            in0.key().compress().to_bytes(),
+            in0.commitment().commit().compress().to_bytes(),
+        )];
+        let mut ovk = Zeroizing::new([0u8; 32]);
+        rand_core::RngCore::fill_bytes(&mut OsRng, &mut *ovk);
+        let pay_amt = 250_000_000_000u64;
+        let fee_rate = FeeRate::new(20_000, 10_000).unwrap();
+        let signable = SignableTransaction::new(
+            RctType::ClsagBulletproofPlus,
+            ovk.clone(),
+            vec![in0],
+            vec![(merchant_sub, pay_amt)],
+            Change::new(derived.view_pair, None),
+            vec![],
+            fee_rate,
+        )
+        .unwrap();
+        let fee = signable.necessary_fee();
+        let signed_tx = signable
+            .sign(&mut OsRng, &Zeroizing::new(spend_scalar))
+            .unwrap();
+        let txid_hex = hex::encode(signed_tx.hash());
+
+        let secret_plain = encode_tx_secret_material(&ovk, &input_pair_bytes);
+        let wrapped_secret = master1.wrap(&secret_plain).unwrap();
+        svc.store()
+            .upsert_tx_secret(
+                &txid_hex,
+                &merchant_sub.to_string(),
+                &wrapped_secret,
+                &signed_tx.prefix().extra,
+            )
+            .unwrap();
+        svc.store()
+            .upsert_transaction(
+                &StoredTransaction {
+                    txid: txid_hex.clone(),
+                    direction: "out".to_string(),
+                    amount_atomic: pay_amt,
+                    fee_atomic: fee,
+                    height: 0,
+                    timestamp: 1_700_000_100,
+                    subaddress_minor: 0,
+                },
+                false,
+            )
+            .unwrap();
+
+        let snap_with_tx = svc.status_snapshot();
+        assert_eq!(snap_with_tx.recent_txs.len(), 1);
+        assert!(snap_with_tx.recent_txs[0].has_proof);
+        assert_eq!(
+            snap_with_tx.recent_txs[0].recipient_address,
+            merchant_sub.to_string()
+        );
+
+        // Rotate `MasterKeyProvider` and confirm `xmr_tx_secrets` re-wrapped cleanly:
+        let master2: Arc<dyn MasterKeyProvider> = Arc::new(SoftwareMasterKey::generate().unwrap());
+        assert!(svc.rotate_master_key(master2).unwrap());
+
+        let challenge_msg = "xmr402-citadel-1700000100-cafebabe";
+        let proven = svc.prove_tx(&txid_hex, "", challenge_msg);
+        assert!(proven.ok, "prove_tx failed: {}", proven.error);
+        assert_eq!(proven.txid, txid_hex);
+        assert_eq!(proven.recipient_address, merchant_sub.to_string());
+        assert!(proven.proof.starts_with(OUTPROOF_V2_HEADER));
+        assert_eq!(
+            proven.authorization_header,
+            format!("XMR402 txid=\"{txid_hex}\", proof=\"{}\"", proven.proof)
+        );
+        let verified_atomic =
+            verify_tx_proof_v2(&signed_tx, merchant_sub, challenge_msg, &proven.proof).unwrap();
+        assert_eq!(verified_atomic, pay_amt);
+
+        // 3. Switching `sync_endpoint` to a different `.onion` URL clears stale outputs/txs/secrets
+        // and resets `synced_height = 0, daemon_height = 0, birthday_pending = true`:
+        svc.store()
+            .update_sync_progress(3_809_600, false, 3_809_610, 3_809_610, 1_700_000_200)
+            .unwrap();
+        let custom_ep =
+            "http://2gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wid.onion:18081";
+        let switched = svc.set_daemon_endpoint(custom_ep, "monerod_onion", true);
+        assert!(switched.ok);
+        assert_eq!(switched.sync_endpoint, custom_ep);
+        assert!(switched.birthday_pending);
+        assert_eq!(switched.synced_height, 0);
+        assert_eq!(switched.daemon_height, 0);
+        assert!(switched.recent_txs.is_empty());
+        // Subaddresses remain intact across chain switches!
+        assert_eq!(switched.subaddresses.len(), 3);
+
+        // Re-applying the SAME endpoint does NOT reset progress:
+        svc.store()
+            .update_sync_progress(1, false, 95, 95, 1_700_000_300)
+            .unwrap();
+        let same_ep = svc.set_daemon_endpoint(custom_ep, "monerod_onion", true);
+        assert!(same_ep.ok);
+        assert!(!same_ep.birthday_pending);
+        assert_eq!(same_ep.synced_height, 95);
+        assert_eq!(same_ep.restore_height, 1);
+
+        // 4. Small-chain (`tip <= 10_000`) `create_wallet` snaps `restore_height = 1, synced_height = 0`
+        // and `pay_xmr402` fails closed when Tor is offline or `daemonUrl` is clearnet:
+        let small_chain_socks = spawn_mock_socks5_http_server(|_host, path, _body| match path.as_str() {
+            "/json_rpc" => (
+                200,
+                "application/json".to_string(),
+                br#"[{"jsonrpc":"2.0","id":0,"result":"1111111111111111111111111111111111111111111111111111111111111111"},{"jsonrpc":"2.0","id":1,"result":"2222222222222222222222222222222222222222222222222222222222222222"}]"#.to_vec(),
+            ),
+            "/get_height" => (
+                200,
+                "application/json".to_string(),
+                br#"{"height":86,"status":"OK"}"#.to_vec(),
+            ),
+            _ => (404, "text/plain".to_string(), b"not found".to_vec()),
+        })
+        .await;
+        let small_created = svc
+            .create_wallet("Regtest Small Chain", Some(small_chain_socks), true, true)
+            .await;
+        assert!(small_created.ok);
+        assert_eq!(small_created.restore_height, 1);
+        assert_eq!(svc.status_snapshot().synced_height, 0);
+        assert_eq!(svc.status_snapshot().daemon_height, 85);
+
+        let clearnet_pay = svc
+            .pay_xmr402(
+                Some(small_chain_socks),
+                true,
+                true,
+                &serde_json::json!({
+                    "address": merchant_sub.to_string(),
+                    "amountAtomic": "250000000000",
+                    "message": "nonce",
+                    "daemonUrl": "http://clearnet.example.com:18081",
+                })
+                .to_string(),
+            )
+            .await;
+        assert!(!clearnet_pay.ok);
+        assert!(clearnet_pay.error.contains(".onion"));
+
+        let offline_pay = svc
+            .pay_xmr402(
+                None,
+                false,
+                true,
+                &serde_json::json!({
+                    "address": merchant_sub.to_string(),
+                    "amountAtomic": "250000000000",
+                    "message": "nonce",
+                })
+                .to_string(),
+            )
+            .await;
+        assert!(!offline_pay.ok);
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

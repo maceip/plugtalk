@@ -4,6 +4,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
+use monero_address::MoneroAddress;
 use monero_daemon_rpc::{prelude::*, MoneroDaemon};
 use monero_wallet::{
     address::SubaddressIndex,
@@ -13,7 +14,7 @@ use monero_wallet::{
     transaction::{Input, Pruned, Timelock, Transaction},
     OutputWithDecoys, Scanner, ViewPair, WalletOutput,
 };
-use ov_pgp::MasterKeyProvider;
+use ov_pgp::{zeroize_slice, MasterKeyProvider};
 use rand_core::{OsRng, RngCore as _};
 use serde::Deserialize;
 use zeroize::Zeroizing;
@@ -25,11 +26,17 @@ use crate::{
         SYNC_MODE_LWS, SYNC_MODE_MONEROD_ONION,
     },
     transport::{MoneroRpcTransport, TorSocksTransport},
+    tx_proof::{
+        decode_tx_secret_material, encode_tx_secret_material, format_xmr402_authorization_header,
+        generate_tx_proof_v2, reconstruct_tx_secret_keys, reconstruct_tx_secret_keys_from_extra,
+        verify_tx_proof_v2,
+    },
     uri::{parse_amount_decimal_or_atomic, parse_mainnet_address, parse_monero_uri},
     wallet::{
         compute_key_image, derive_subaddress, reconstruct_lws_wallet_output, reconstruct_view_pair,
         LwsUnspentCandidate,
     },
+    xmr402::{parse_payment_challenge_json, XmrTxProofResult},
 };
 
 /// Exact required truthful message when a public `monero-lws` server returns `403 Forbidden`.
@@ -53,6 +60,17 @@ pub struct BroadcastOutcome {
     pub txid: String,
     pub fee_atomic: u64,
     pub amount_atomic: u64,
+    pub raw_tx_bytes: usize,
+}
+
+/// Outcome of paying an `XMR402` challenge and generating its `OutProofV2`.
+#[derive(Clone, Debug)]
+pub struct PayXmr402Outcome {
+    pub txid: String,
+    pub proof: String,
+    pub authorization_header: String,
+    pub amount_atomic: u64,
+    pub fee_atomic: u64,
     pub raw_tx_bytes: usize,
 }
 
@@ -171,8 +189,12 @@ async fn sync_via_monerod_onion(
     let mut birthday_pending = meta.birthday_pending;
 
     if birthday_pending {
-        restore_height = tip;
-        synced_height = tip.saturating_sub(1);
+        restore_height = if tip <= 10_000 {
+            1.min(tip)
+        } else {
+            tip.saturating_sub(5)
+        };
+        synced_height = restore_height.saturating_sub(1);
         birthday_pending = false;
         store.update_sync_progress(restore_height, false, synced_height, tip, now_secs)?;
     }
@@ -582,12 +604,6 @@ pub async fn send_xmr(
     amount_decimal_or_atomic: &str,
     sweep_all: bool,
 ) -> Result<BroadcastOutcome> {
-    let meta = store
-        .wallet_meta()?
-        .ok_or_else(|| anyhow!("No Monero wallet created yet"))?;
-    let view_pair = reconstruct_view_pair(&meta.primary_address, &meta.view_key_bytes)?;
-    let spend_scalar = unwrap_spend_scalar_strict(master, &meta.wrapped_spend_key)?;
-
     let trimmed_dest = destination_or_uri.trim();
     let (dest_addr, uri_amount_opt) =
         if trimmed_dest.len() >= 8 && trimmed_dest[..7].eq_ignore_ascii_case("monero:") {
@@ -617,8 +633,186 @@ pub async fn send_xmr(
         bail!("Send amount is required unless Sweep All is enabled");
     };
 
+    let (outcome, _) = build_sign_and_publish_tx(
+        store,
+        master,
+        transport,
+        dest_addr,
+        target_amount,
+        sweep_all,
+        None,
+        None,
+    )
+    .await?;
+    Ok(outcome)
+}
+
+/// Pay an `XMR402` challenge over Tor, syncing against `daemonUrl` if needed, signing a Ring-16
+/// `ClsagBulletproofPlus` transaction, computing canonical `OutProofV2`, broadcasting, and
+/// persisting `xmr_tx_secrets`.
+pub async fn pay_xmr402_tx(
+    store: &XmrStore,
+    master: &dyn MasterKeyProvider,
+    transport: &TorSocksTransport,
+    hidden_service_only: bool,
+    challenge_json: &str,
+) -> Result<PayXmr402Outcome> {
+    let payment = parse_payment_challenge_json(challenge_json, hidden_service_only)?;
+    let meta0 = store
+        .wallet_meta()?
+        .ok_or_else(|| anyhow!("No Monero wallet created yet"))?;
+
+    if !payment.daemon_url.is_empty() {
+        let endpoint_changed = meta0.sync_endpoint.trim().trim_end_matches('/')
+            != payment.daemon_url.trim().trim_end_matches('/');
+        if endpoint_changed {
+            store.set_endpoint_and_mode(&payment.daemon_url, SYNC_MODE_MONEROD_ONION)?;
+            sync_wallet_until_caught_up(store, master, transport, 8).await?;
+        } else if meta0.birthday_pending
+            || meta0.synced_height == 0
+            || unlocked_balance_snapshot(store, &meta0)? <= payment.amount_atomic
+        {
+            let _ = sync_wallet_until_caught_up(store, master, transport, 8).await;
+        }
+    } else if meta0.birthday_pending
+        || unlocked_balance_snapshot(store, &meta0)? <= payment.amount_atomic
+    {
+        let _ = sync_wallet_until_caught_up(store, master, transport, 4).await;
+    }
+
+    let explicit_daemon = (!payment.daemon_url.is_empty()).then_some(payment.daemon_url.as_str());
+    let (outcome, proof_opt) = build_sign_and_publish_tx(
+        store,
+        master,
+        transport,
+        payment.recipient,
+        payment.amount_atomic,
+        false,
+        Some(&payment.message),
+        explicit_daemon,
+    )
+    .await?;
+    let proof = proof_opt.ok_or_else(|| anyhow!("missing generated OutProofV2"))?;
+    let authorization_header = format_xmr402_authorization_header(&outcome.txid, &proof);
+
+    Ok(PayXmr402Outcome {
+        txid: outcome.txid,
+        proof,
+        authorization_header,
+        amount_atomic: outcome.amount_atomic,
+        fee_atomic: outcome.fee_atomic,
+        raw_tx_bytes: outcome.raw_tx_bytes,
+    })
+}
+
+/// Generate a canonical `OutProofV2` + `Authorization: XMR402 ...` header for a previously sent
+/// outgoing transaction stored in `xmr_tx_secrets`.
+pub fn prove_stored_tx(
+    store: &XmrStore,
+    master: &dyn MasterKeyProvider,
+    txid: &str,
+    recipient_address_or_empty: &str,
+    message: &str,
+) -> Result<XmrTxProofResult> {
+    let clean_txid = txid.trim().to_ascii_lowercase();
+    let txid_bytes = decode_hex32(&clean_txid)
+        .map_err(|_| anyhow!("txid must be a 64-character hexadecimal transaction hash"))?;
+    let secret_row = store
+        .get_tx_secret(&clean_txid)?
+        .ok_or_else(|| anyhow!("No outgoing proof secret stored for transaction {clean_txid}"))?;
+
+    let rcpt_str = if !recipient_address_or_empty.trim().is_empty() {
+        recipient_address_or_empty.trim()
+    } else {
+        secret_row.recipient_address.as_str()
+    };
+    let recipient = parse_mainnet_address(rcpt_str)?;
+
+    let mut plain = master.unwrap(&secret_row.wrapped_secret_blob)?;
+    let decoded = decode_tx_secret_material(&plain);
+    zeroize_slice(&mut plain);
+    let (ovk, input_pairs) = decoded?;
+
+    let (tx_key, additional_keys) =
+        reconstruct_tx_secret_keys_from_extra(&ovk, input_pairs, &secret_row.tx_extra)?;
+    let proof = generate_tx_proof_v2(
+        txid_bytes,
+        &tx_key,
+        &additional_keys,
+        recipient,
+        message,
+        &mut OsRng,
+    );
+    let authorization_header = format_xmr402_authorization_header(&clean_txid, &proof);
+
+    Ok(XmrTxProofResult {
+        ok: true,
+        txid: clean_txid,
+        recipient_address: recipient.to_string(),
+        message: message.to_string(),
+        proof,
+        authorization_header,
+        error: String::new(),
+    })
+}
+
+async fn sync_wallet_until_caught_up(
+    store: &XmrStore,
+    master: &dyn MasterKeyProvider,
+    transport: &TorSocksTransport,
+    max_passes: usize,
+) -> Result<()> {
+    for _ in 0..max_passes.max(1) {
+        sync_wallet(store, master, transport).await?;
+        let Some(meta) = store.wallet_meta()? else {
+            break;
+        };
+        if !meta.birthday_pending && meta.synced_height >= meta.daemon_height {
+            break;
+        }
+    }
+    Ok(())
+}
+
+fn unlocked_balance_snapshot(store: &XmrStore, meta: &StoredWalletMeta) -> Result<u64> {
+    let tip = meta.daemon_height.max(meta.synced_height);
+    let now_secs = now_epoch_secs();
+    let mut unlocked = 0u64;
+    for row in store.list_outputs()? {
+        if row.spent_in_txid.is_some() || row.output_blob.is_empty() {
+            continue;
+        }
+        let Ok(wo) = WalletOutput::read(&mut row.output_blob.as_slice()) else {
+            continue;
+        };
+        if is_output_unlocked(row.height, tip, wo.additional_timelock(), now_secs) {
+            unlocked = unlocked.saturating_add(row.amount_atomic);
+        }
+    }
+    Ok(unlocked)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn build_sign_and_publish_tx(
+    store: &XmrStore,
+    master: &dyn MasterKeyProvider,
+    transport: &TorSocksTransport,
+    dest_addr: MoneroAddress,
+    target_amount: u64,
+    sweep_all: bool,
+    proof_message_opt: Option<&str>,
+    explicit_daemon_url: Option<&str>,
+) -> Result<(BroadcastOutcome, Option<String>)> {
+    let meta = store
+        .wallet_meta()?
+        .ok_or_else(|| anyhow!("No Monero wallet created yet"))?;
+    let view_pair = reconstruct_view_pair(&meta.primary_address, &meta.view_key_bytes)?;
+    let spend_scalar = unwrap_spend_scalar_strict(master, &meta.wrapped_spend_key)?;
+
     // Connect to `.onion` `monerod` for Ring-16 decoy sampling, fee estimation, and broadcast.
-    let daemon_ep = if meta.sync_mode == SYNC_MODE_MONEROD_ONION {
+    let daemon_ep = if let Some(explicit) = explicit_daemon_url {
+        explicit
+    } else if meta.sync_mode == SYNC_MODE_MONEROD_ONION {
         meta.sync_endpoint.as_str()
     } else {
         ""
@@ -693,8 +887,18 @@ pub async fn send_xmr(
         inputs_with_decoys.push(owd);
     }
 
+    let input_points: Vec<_> = inputs_with_decoys
+        .iter()
+        .map(|inp| (inp.key(), inp.commitment().commit()))
+        .collect();
+    let input_pair_bytes: Vec<([u8; 32], [u8; 32])> = input_points
+        .iter()
+        .map(|(k, c)| (k.compress().to_bytes(), c.compress().to_bytes()))
+        .collect();
+
     let mut ovk = Zeroizing::new([0u8; 32]);
     OsRng.fill_bytes(&mut *ovk);
+    let ovk_for_secret = ovk.clone();
 
     let (signable, final_amount, final_fee) = if sweep_all {
         let probe = SignableTransaction::new(
@@ -744,10 +948,35 @@ pub async fn send_xmr(
         .sign(&mut OsRng, &Zeroizing::new(spend_scalar))
         .map_err(|e| anyhow!("RingCT CLSAG+Bulletproof+ signing failed: {e}"))?;
 
+    let generated_proof = if let Some(msg) = proof_message_opt {
+        let (tx_key, add_keys) =
+            reconstruct_tx_secret_keys(&ovk_for_secret, input_points, &signed_tx)?;
+        let proof = generate_tx_proof_v2(
+            signed_tx.hash(),
+            &tx_key,
+            &add_keys,
+            dest_addr,
+            msg,
+            &mut OsRng,
+        );
+        let verified_amt = verify_tx_proof_v2(&signed_tx, dest_addr, msg, &proof)?;
+        if verified_amt < final_amount {
+            bail!(
+                "OutProofV2 self-verification mismatch: verified {verified_amt} < expected {final_amount}"
+            );
+        }
+        Some(proof)
+    } else {
+        None
+    };
+
     let raw_bytes = signed_tx.serialize();
     let txid = hex::encode(signed_tx.hash());
 
-    if meta.sync_mode == SYNC_MODE_LWS && !meta.sync_endpoint.trim().is_empty() {
+    if explicit_daemon_url.is_none()
+        && meta.sync_mode == SYNC_MODE_LWS
+        && !meta.sync_endpoint.trim().is_empty()
+    {
         let base = meta.sync_endpoint.trim().trim_end_matches('/');
         let view_hex = Zeroizing::new(hex::encode(&meta.view_key_bytes));
         let body = serde_json::json!({
@@ -773,6 +1002,15 @@ pub async fn send_xmr(
             .map_err(|e| anyhow!("monerod rejected transaction: {e}"))?;
     }
 
+    let secret_plain = encode_tx_secret_material(&ovk_for_secret, &input_pair_bytes);
+    let wrapped_secret = master.wrap(&secret_plain)?;
+    store.upsert_tx_secret(
+        &txid,
+        &dest_addr.to_string(),
+        &wrapped_secret,
+        &signed_tx.prefix().extra,
+    )?;
+
     for inp in &signed_tx.prefix().inputs {
         if let Input::ToKey { key_image, .. } = inp {
             let _ = store.mark_spent_by_key_image(&key_image.to_bytes(), &txid);
@@ -791,12 +1029,15 @@ pub async fn send_xmr(
         false,
     )?;
 
-    Ok(BroadcastOutcome {
-        txid,
-        fee_atomic: final_fee,
-        amount_atomic: final_amount,
-        raw_tx_bytes: raw_bytes.len(),
-    })
+    Ok((
+        BroadcastOutcome {
+            txid,
+            fee_atomic: final_fee,
+            amount_atomic: final_amount,
+            raw_tx_bytes: raw_bytes.len(),
+        },
+        generated_proof,
+    ))
 }
 
 fn check_lws_status(status: u16, route: &str) -> Result<()> {

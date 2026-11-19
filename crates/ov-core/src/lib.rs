@@ -408,7 +408,10 @@ pub fn classify_cdp_dom_json(cdp_dom_json: &str) -> String {
 /// 9. Classify arbitrary selected/clipboard text (`nativeClassifyText`).
 pub fn classify_text_json(text: &str) -> String {
     let active = engine();
-    let classified = ov_cef::classify_text_with_hints(text, |_kind, armored| {
+    let classified = ov_cef::classify_text_with_hints(text, |kind, armored| {
+        if !matches!(kind, "pgp_message" | "pgp_public_key") || armored.trim().is_empty() {
+            return (None, None);
+        }
         let hint = active
             .as_ref()
             .and_then(|s| s.keyring.fingerprint_hint_of_armored(armored))
@@ -949,6 +952,49 @@ pub fn xmr_swaps_action_json(action_json: &str) -> String {
     })
 }
 
+/// Parse and validate an `HTTP 402` (`XMR402`) challenge (`nativeXmrParse402ChallengeJson`).
+pub fn xmr_parse_402_challenge_json(
+    www_authenticate_header: &str,
+    fallback_meta_json: &str,
+    page_url: &str,
+) -> String {
+    let hso = engine().map(|s| s.hidden_service_only()).unwrap_or(true);
+    ov_xmr::parse_xmr402_challenge_json(www_authenticate_header, fallback_meta_json, page_url, hso)
+}
+
+/// Pay an `XMR402` challenge over Tor and return canonical `OutProofV2` + `Authorization` header (`nativeXmrPay402Json`).
+pub fn xmr_pay_402_json(challenge_json: &str) -> String {
+    let res = match engine() {
+        None => ov_xmr::Xmr402PayResult::err("Engine is not initialized"),
+        Some(state) => {
+            let socks = Some(state.tor.socks_endpoint());
+            let ready = state.tor.is_ready();
+            let hso = state.hidden_service_only();
+            let cj = challenge_json.to_string();
+            block_on_runtime(async move { state.xmr.pay_xmr402(socks, ready, hso, &cj).await })
+        }
+    };
+    serde_json::to_string(&res).unwrap_or_else(|_| {
+        r#"{"ok":false,"txid":"","proof":"","authorizationHeader":"","amountAtomic":"0","amountXmr":"0","feeAtomic":"0","feeXmr":"0","error":"serialization error"}"#.to_string()
+    })
+}
+
+/// Generate a canonical Monero `OutProofV2` for a stored outgoing transaction (`nativeXmrProveTxJson`).
+pub fn xmr_prove_tx_json(txid: &str, recipient_address: &str, message: &str) -> String {
+    let res = match engine() {
+        None => ov_xmr::XmrTxProofResult::err(txid, "Engine is not initialized"),
+        Some(state) => state.xmr.prove_tx(txid, recipient_address, message),
+    };
+    serde_json::to_string(&res).unwrap_or_else(|_| {
+        r#"{"ok":false,"txid":"","recipientAddress":"","message":"","proof":"","authorizationHeader":"","error":"serialization error"}"#.to_string()
+    })
+}
+
+/// Encode a payload string into an ISO/IEC 18004 QR code matrix (`nativeXmrQrMatrixJson`).
+pub fn xmr_qr_matrix_json(payload: &str) -> String {
+    ov_xmr::encode_qr_matrix_json(payload)
+}
+
 /// Stateless OpenPGP packet fingerprint/KeyID extractor used when `classify_cdp_dom_json`
 /// or `classify_text_json` is invoked before `nativeInit` or for foreign keys.
 fn standalone_fingerprint_hint(armored: &str) -> Option<String> {
@@ -1340,6 +1386,54 @@ pub mod jni_api {
         into_jstring(env, &json)
     }
 
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeXmrParse402ChallengeJson(
+        mut env: JNIEnv,
+        _this: JObject,
+        www_authenticate_header: jstring,
+        fallback_meta_json: jstring,
+        page_url: jstring,
+    ) -> jstring {
+        let hdr = read_jstring(&mut env, www_authenticate_header);
+        let meta = read_jstring(&mut env, fallback_meta_json);
+        let url = read_jstring(&mut env, page_url);
+        let json = xmr_parse_402_challenge_json(&hdr, &meta, &url);
+        into_jstring(env, &json)
+    }
+
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeXmrPay402Json(
+        mut env: JNIEnv,
+        _this: JObject,
+        challenge_json: jstring,
+    ) -> jstring {
+        let cj = read_jstring(&mut env, challenge_json);
+        let json = xmr_pay_402_json(&cj);
+        into_jstring(env, &json)
+    }
+
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeXmrProveTxJson(
+        mut env: JNIEnv,
+        _this: JObject,
+        txid: jstring,
+        recipient_address: jstring,
+        message: jstring,
+    ) -> jstring {
+        let tx = read_jstring(&mut env, txid);
+        let rcpt = read_jstring(&mut env, recipient_address);
+        let msg = read_jstring(&mut env, message);
+        let json = xmr_prove_tx_json(&tx, &rcpt, &msg);
+        into_jstring(env, &json)
+    }
+
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeXmrQrMatrixJson(
+        mut env: JNIEnv,
+        _this: JObject,
+        payload: jstring,
+    ) -> jstring {
+        let p = read_jstring(&mut env, payload);
+        let json = xmr_qr_matrix_json(&p);
+        into_jstring(env, &json)
+    }
+
     pub extern "system" fn Java_dev_onionvault_OvNative_nativeXmrRestoreWalletJson(
         mut env: JNIEnv,
         _this: JObject,
@@ -1641,12 +1735,54 @@ mod tests {
         assert_eq!(sub2["index"], 2);
         assert!(sub2["address"].as_str().unwrap().starts_with('8'));
 
+        // Per-site subaddress idempotence (`"site:<host>"` returns identical subaddress on repeat):
+        let site_sub_a: serde_json::Value = serde_json::from_str(&xmr_new_subaddress_json(
+            "site:wizardswgtu2ovor7r2esg3cxdpt7tv4nrugi32lldv53zmtonbz6sid.onion",
+        ))
+        .unwrap();
+        let site_sub_b: serde_json::Value = serde_json::from_str(&xmr_new_subaddress_json(
+            "SITE:wizardswgtu2ovor7r2esg3cxdpt7tv4nrugi32lldv53zmtonbz6sid.onion",
+        ))
+        .unwrap();
+        assert_eq!(site_sub_a["ok"], true);
+        assert_eq!(site_sub_a["index"], 3);
+        assert_eq!(site_sub_a["index"], site_sub_b["index"]);
+        assert_eq!(site_sub_a["address"], site_sub_b["address"]);
+
+        // QR matrix, XMR402 challenge parser, and Monero URI selection classification contracts:
+        let site_addr = site_sub_a["address"].as_str().unwrap();
+        let qr: serde_json::Value =
+            serde_json::from_str(&xmr_qr_matrix_json(&format!("monero:{site_addr}"))).unwrap();
+        assert_eq!(qr["ok"], true);
+        assert!(qr["size"].as_u64().unwrap() >= 21);
+
+        let challenge_hdr = format!(
+            r#"XMR402 address="{site_addr}", amount="250000000000", message="citadel-402", timestamp="1700000000""#
+        );
+        let parsed_402: serde_json::Value = serde_json::from_str(&xmr_parse_402_challenge_json(
+            &challenge_hdr,
+            "",
+            SAMPLE_ONION,
+        ))
+        .unwrap();
+        assert_eq!(parsed_402["ok"], true);
+        assert_eq!(parsed_402["amountXmr"], "0.25");
+        assert_eq!(parsed_402["message"], "citadel-402");
+
+        let xmr_text_cls: serde_json::Value = serde_json::from_str(&classify_text_json(&format!(
+            "monero:{site_addr}?tx_amount=0.25"
+        )))
+        .unwrap();
+        assert_eq!(xmr_text_cls["kind"], "monero_address");
+        assert_eq!(xmr_text_cls["actionLabel"], "Send XMR");
+        assert_eq!(xmr_text_cls["fingerprintHint"], "0.25");
+
         let swap_create: serde_json::Value = serde_json::from_str(&xmr_swaps_action_json(
             r#"{"op":"create","provider":"WizardSwap","btcAmount":"0.01","quotedXmr":"1.1825666","launchUrl":"http://wizardswgtu2ovor7r2esg3cxdpt7tv4nrugi32lldv53zmtonbz6sid.onion/?from=BTC&to=XMR&amount=0.01"}"#,
         ))
         .unwrap();
         assert_eq!(swap_create["ok"], true);
-        assert_eq!(swap_create["swap"]["subaddressIndex"], 3);
+        assert_eq!(swap_create["swap"]["subaddressIndex"], 4);
         assert_eq!(swap_create["swap"]["status"], "awaiting_form");
         let swap_id = swap_create["swap"]["swapId"].as_str().unwrap().to_string();
 
