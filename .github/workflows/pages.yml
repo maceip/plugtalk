@@ -65,11 +65,14 @@ jobs:
       - name: Verify single-page site assets and manifest
         run: |
           set -euo pipefail
+          test -f site/.nojekyll || {
+            echo "::error::Missing site/.nojekyll marker"
+            exit 1
+          }
           for required in \
             site/index.html \
             site/styles.css \
             site/app.js \
-            site/.nojekyll \
             site/generated/homescreen-sync.json \
             site/generated/assets/homescreen-preview.webp \
             site/generated/assets/state-crt-directory.webp \
@@ -85,8 +88,10 @@ jobs:
           python3 -c '
           import json, pathlib
           data = json.loads(pathlib.Path("site/generated/homescreen-sync.json").read_text())
-          assert len(data["components"]) == 7, f"expected 7 components, got {len(data[\"components\"])}"
-          assert len(data["states"]) == 6, f"expected 6 states, got {len(data[\"states\"])}"
+          comps = len(data["components"])
+          states = len(data["states"])
+          assert comps == 7, f"expected 7 components, got {comps}"
+          assert states == 6, f"expected 6 states, got {states}"
           print("Verified homescreen-sync.json:", data["appVersion"], data["viewport"])
           '
 
