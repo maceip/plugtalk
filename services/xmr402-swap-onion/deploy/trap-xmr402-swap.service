@@ -1,0 +1,35 @@
+[Unit]
+Description=Trap Zero-JS XMR402 OutProofV2 Vault + BTC->XMR Swap Hidden Service Backend
+After=network-online.target trap-monerod-regtest.service trap-bitcoind-regtest.service
+Requires=trap-monerod-regtest.service trap-bitcoind-regtest.service
+
+[Service]
+Type=simple
+User=trap-xmr402
+Group=trap-xmr402
+ExecStart=/usr/local/bin/trap-xmr402-swap
+Restart=always
+RestartSec=2
+Environment=TRAP_BIND_ADDR=127.0.0.1:8081
+Environment=TRAP_MONEROD_ADMIN_URL=http://127.0.0.1:18082
+Environment=TRAP_BITCOIND_RPC_URL=http://127.0.0.1:18443
+Environment=TRAP_BITCOIND_WALLET=faucet
+Environment=TRAP_BITCOIND_USER=trapbtc
+Environment=TRAP_BITCOIND_PASS_FILE=/etc/trap-xmr402-swap/btc_rpc_pass
+Environment=TRAP_ONION_HOSTNAME_FILE=/etc/trap-xmr402-swap/onion_hostname
+Environment=TRAP_STATE_DIR=/var/lib/trap-xmr402-swap
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/var/lib/trap-xmr402-swap
+ReadOnlyPaths=/etc/trap-xmr402-swap
+
+[Install]
+WantedBy=multi-user.target

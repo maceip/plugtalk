@@ -1,0 +1,23 @@
+[Unit]
+Description=Trap Loopback Bitcoin Core Regtest Daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=trap-xmr402
+Group=trap-xmr402
+EnvironmentFile=/etc/trap-xmr402-swap/bitcoind.env
+ExecStart=/usr/local/bin/bitcoind -regtest -datadir=/var/lib/trap-bitcoind-regtest -server=1 -txindex=1 -fallbackfee=0.0001 -listen=1 -bind=127.0.0.1:18444 -dnsseed=0 -discover=0 -natpmp=0 -rpcbind=127.0.0.1 -rpcallowip=127.0.0.1 -rpcport=18443 -rpcuser=trapbtc -rpcpassword=${BTC_RPC_PASS}
+ExecStartPost=/usr/local/bin/trap-bitcoind-faucet-init.sh
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/trap-bitcoind-regtest
+ReadOnlyPaths=/etc/trap-xmr402-swap
+
+[Install]
+WantedBy=multi-user.target

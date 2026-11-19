@@ -1,0 +1,47 @@
+[package]
+name = "trap-xmr402-swap"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+license = "Apache-2.0 OR MIT"
+description = "Zero-JavaScript XMR402 HTTP 402 OutProofV2 Vault + Real Regtest BTC->XMR Swap Desk Tor v3 Hidden Service for Trap"
+publish = false
+
+[workspace]
+
+[dependencies]
+anyhow = "1"
+axum = { version = "0.7", default-features = false, features = ["form", "http1", "json", "tokio"] }
+base64 = "0.22"
+curve25519-dalek = { version = "4", features = ["rand_core", "zeroize"] }
+hex = "0.4"
+hmac = "0.12"
+monero-address = "0.1"
+monero-base58 = "0.1"
+monero-daemon-rpc = "0.2"
+monero-wallet = "0.2"
+rand_core = { version = "0.6", features = ["getrandom"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+subtle = "2"
+tokio = { version = "1", default-features = false, features = [
+    "io-util",
+    "macros",
+    "net",
+    "rt-multi-thread",
+    "signal",
+    "sync",
+    "time",
+] }
+zeroize = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_urlencoded = "0.7"
+tower = { version = "0.5", features = ["util"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

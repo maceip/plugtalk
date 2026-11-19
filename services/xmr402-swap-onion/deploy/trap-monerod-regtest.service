@@ -1,0 +1,20 @@
+[Unit]
+Description=Trap Loopback Monero Regtest Daemon (Admin 18082 + Restricted 18081)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=trap-xmr402
+Group=trap-xmr402
+ExecStart=/usr/local/bin/monerod --regtest --offline --fixed-difficulty 1 --data-dir /var/lib/trap-monerod-regtest --p2p-bind-ip 127.0.0.1 --p2p-bind-port 18080 --rpc-bind-ip 127.0.0.1 --rpc-bind-port 18082 --rpc-restricted-bind-ip 127.0.0.1 --rpc-restricted-bind-port 18081 --no-zmq --no-igd --hide-my-port --non-interactive --max-concurrency 1
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/trap-monerod-regtest
+
+[Install]
+WantedBy=multi-user.target
