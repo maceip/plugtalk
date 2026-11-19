@@ -146,6 +146,13 @@ fun BrowserScreen(
     onOpenTrackedSwapPage: (OvNative.TrackedBtcXmrSwap) -> Unit = {},
     onDismissTrackedSwap: (swapId: String) -> Unit = {},
     onDismissActiveSwapHud: (swapId: String) -> Unit = {},
+    onCopySiteSubaddress: (pageUrl: String) -> Unit = {},
+    onProveXmrTx: (txid: String, recipientAddress: String, message: String) -> Unit = { _, _, _ -> },
+    onOpenXmr402Payment: () -> Unit = {},
+    onDismissXmr402Payment: () -> Unit = {},
+    onPayAndUnlockXmr402: (OvNative.Xmr402Challenge) -> Unit = {},
+    onUseXmr402PageDaemon: (daemonUrl: String) -> Unit = {},
+    onSendXmrFromContextMenu: (addressOrUri: String, amountHint: String) -> Unit = { _, _ -> },
     surface: @Composable () -> Unit = {},
     previewProgress: Float = 0f,
     showKeyManager: Boolean = false,
@@ -156,6 +163,7 @@ fun BrowserScreen(
     showSettings: Boolean = false,
     showMoneroWallet: Boolean = false,
     showBtcXmrSwap: Boolean = false,
+    showXmr402Modal: Boolean = false,
 ) {
     TrapTheme(
         family = state.themeFamily,
@@ -240,6 +248,13 @@ fun BrowserScreen(
             onOpenTrackedSwapPage = onOpenTrackedSwapPage,
             onDismissTrackedSwap = onDismissTrackedSwap,
             onDismissActiveSwapHud = onDismissActiveSwapHud,
+            onCopySiteSubaddress = onCopySiteSubaddress,
+            onProveXmrTx = onProveXmrTx,
+            onOpenXmr402Payment = onOpenXmr402Payment,
+            onDismissXmr402Payment = onDismissXmr402Payment,
+            onPayAndUnlockXmr402 = onPayAndUnlockXmr402,
+            onUseXmr402PageDaemon = onUseXmr402PageDaemon,
+            onSendXmrFromContextMenu = onSendXmrFromContextMenu,
             surface = surface,
             previewProgress = previewProgress,
             showKeyManager = showKeyManager,
@@ -250,6 +265,7 @@ fun BrowserScreen(
             showSettings = showSettings,
             showMoneroWallet = showMoneroWallet,
             showBtcXmrSwap = showBtcXmrSwap,
+            showXmr402Modal = showXmr402Modal,
         )
     }
 }
@@ -340,6 +356,13 @@ private fun BrowserScreenContent(
     onOpenTrackedSwapPage: (OvNative.TrackedBtcXmrSwap) -> Unit,
     onDismissTrackedSwap: (swapId: String) -> Unit,
     onDismissActiveSwapHud: (swapId: String) -> Unit,
+    onCopySiteSubaddress: (pageUrl: String) -> Unit,
+    onProveXmrTx: (txid: String, recipientAddress: String, message: String) -> Unit,
+    onOpenXmr402Payment: () -> Unit,
+    onDismissXmr402Payment: () -> Unit,
+    onPayAndUnlockXmr402: (OvNative.Xmr402Challenge) -> Unit,
+    onUseXmr402PageDaemon: (daemonUrl: String) -> Unit,
+    onSendXmrFromContextMenu: (addressOrUri: String, amountHint: String) -> Unit,
     surface: @Composable () -> Unit,
     previewProgress: Float,
     showKeyManager: Boolean,
@@ -350,6 +373,7 @@ private fun BrowserScreenContent(
     showSettings: Boolean,
     showMoneroWallet: Boolean,
     showBtcXmrSwap: Boolean,
+    showXmr402Modal: Boolean,
 ) {
     val colors = TrapTheme.colors
     val scale = remember { Animatable(1f - previewProgress * 0.12f) }
@@ -401,6 +425,7 @@ private fun BrowserScreenContent(
             showLegalModal = showLegalNotices,
             showMoneroWalletModal = showMoneroWallet,
             showBtcXmrSwapModal = showBtcXmrSwap,
+            showXmr402Modal = showXmr402Modal,
             onNavigate = onNavigate,
             onSwitchAdjacentTab = onSwitchAdjacentTab,
             onSelectTab = onSelectTab,
@@ -477,6 +502,13 @@ private fun BrowserScreenContent(
             onOpenTrackedSwapPage = onOpenTrackedSwapPage,
             onDismissTrackedSwap = onDismissTrackedSwap,
             onDismissActiveSwapHud = onDismissActiveSwapHud,
+            onCopySiteSubaddress = onCopySiteSubaddress,
+            onProveXmrTx = onProveXmrTx,
+            onOpenXmr402Payment = onOpenXmr402Payment,
+            onDismissXmr402Payment = onDismissXmr402Payment,
+            onPayAndUnlockXmr402 = onPayAndUnlockXmr402,
+            onUseXmr402PageDaemon = onUseXmr402PageDaemon,
+            onSendXmrFromContextMenu = onSendXmrFromContextMenu,
             surface = {
                 Box(
                     modifier = Modifier

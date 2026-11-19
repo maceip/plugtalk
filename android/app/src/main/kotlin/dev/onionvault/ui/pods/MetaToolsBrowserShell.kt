@@ -104,6 +104,7 @@ fun MetaToolsBrowserShell(
     showLegalModal: Boolean = false,
     showMoneroWalletModal: Boolean = false,
     showBtcXmrSwapModal: Boolean = false,
+    showXmr402Modal: Boolean = false,
     onNavigate: (String) -> Unit = {},
     onSwitchAdjacentTab: (delta: Int) -> Unit = {},
     onSelectTab: (String) -> Unit = {},
@@ -184,6 +185,13 @@ fun MetaToolsBrowserShell(
     onOpenTrackedSwapPage: (OvNative.TrackedBtcXmrSwap) -> Unit = {},
     onDismissTrackedSwap: (swapId: String) -> Unit = {},
     onDismissActiveSwapHud: (swapId: String) -> Unit = {},
+    onCopySiteSubaddress: (pageUrl: String) -> Unit = {},
+    onProveXmrTx: (txid: String, recipientAddress: String, message: String) -> Unit = { _, _, _ -> },
+    onOpenXmr402Payment: () -> Unit = {},
+    onDismissXmr402Payment: () -> Unit = {},
+    onPayAndUnlockXmr402: (OvNative.Xmr402Challenge) -> Unit = {},
+    onUseXmr402PageDaemon: (daemonUrl: String) -> Unit = {},
+    onSendXmrFromContextMenu: (addressOrUri: String, amountHint: String) -> Unit = { _, _ -> },
     surface: @Composable () -> Unit = {},
 ) {
     val density = LocalDensity.current
@@ -200,10 +208,22 @@ fun MetaToolsBrowserShell(
     var legalOpen by remember(showLegalModal) { mutableStateOf(showLegalModal) }
     var localWalletOpen by remember(showMoneroWalletModal) { mutableStateOf(showMoneroWalletModal) }
     var localSwapOpen by remember(showBtcXmrSwapModal) { mutableStateOf(showBtcXmrSwapModal) }
+    var localXmr402Open by remember(showXmr402Modal) { mutableStateOf(showXmr402Modal) }
     var localDismissedHudIds by remember { mutableStateOf(emptySet<String>()) }
 
+    val active402Challenge = state.xmr.challengeForTab(state.activeTabId)
     val walletModalOpen = localWalletOpen || state.xmr.walletSheetOpen
     val swapModalOpen = localSwapOpen || state.xmr.swapSheetOpen
+    val xmr402ModalOpen = active402Challenge != null &&
+        !walletModalOpen &&
+        !swapModalOpen &&
+        (localXmr402Open || state.xmr.xmr402SheetOpen)
+
+    LaunchedEffect(active402Challenge) {
+        if (active402Challenge == null) {
+            localXmr402Open = false
+        }
+    }
 
     var retracted by remember(podsRetracted) { mutableStateOf(podsRetracted) }
 
@@ -222,6 +242,7 @@ fun MetaToolsBrowserShell(
             legalOpen = false
             localWalletOpen = false
             localSwapOpen = false
+            localXmr402Open = false
         }
     }
 
@@ -292,6 +313,7 @@ fun MetaToolsBrowserShell(
             legalOpen ||
             walletModalOpen ||
             swapModalOpen ||
+            xmr402ModalOpen ||
             state.clearnetPrompt != null ||
             state.pgp.plaintext != null ||
             state.pgp.encryptRequest != null ||
@@ -605,49 +627,90 @@ fun MetaToolsBrowserShell(
                         onOpenMoneroWallet = {
                             restoreRetractedPods()
                             localSwapOpen = false
+                            localXmr402Open = false
                             localWalletOpen = true
                             onOpenMoneroWallet()
                         },
                         onOpenBtcXmrSwap = {
                             restoreRetractedPods()
                             localWalletOpen = false
+                            localXmr402Open = false
                             localSwapOpen = true
                             onOpenBtcXmrSwap()
+                        },
+                        onCreateXmrWallet = onCreateXmrWallet,
+                        onCopySiteSubaddress = onCopySiteSubaddress,
+                        onSyncXmrWallet = onSyncXmrWallet,
+                        onOpenXmr402Payment = {
+                            restoreRetractedPods()
+                            localWalletOpen = false
+                            localSwapOpen = false
+                            localXmr402Open = true
+                            onOpenXmr402Payment()
+                        },
+                        onSendXmrFromSelection = { addrOrUri, amountHint ->
+                            restoreRetractedPods()
+                            localSwapOpen = false
+                            localXmr402Open = false
+                            localWalletOpen = true
+                            onSendXmrFromContextMenu(addrOrUri, amountHint)
                         },
                     )
                 }
 
-                // 3f. Compact Bottom-Docked Active Swap Browser HUD (NEVER on StartPage!)
+                // 3f. Compact Bottom-Docked Active Swap Browser HUD & XMR402 Reopen Chip (NEVER on StartPage!)
                 val activeSwap = state.xmr.activeSwapForTab(state.activeTabId)
                     ?.takeIf { it.swapId !in localDismissedHudIds }
-                if (!state.isStartPage &&
+                val show402Banner = !state.isStartPage &&
+                    !state.isScreenRecordingActive &&
+                    active402Challenge != null &&
+                    !xmr402ModalOpen &&
+                    !walletModalOpen &&
+                    !swapModalOpen
+                val showSwapHud = !state.isStartPage &&
                     !state.isScreenRecordingActive &&
                     activeSwap != null
-                ) {
-                    Box(
+                if (show402Banner || showSwapHud) {
+                    Column(
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
                             .fillMaxWidth()
                             .navigationBarsPadding()
                             .padding(bottom = if (retracted) 18.dp else 354.dp),
-                        contentAlignment = Alignment.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        ActiveSwapBrowserHud(
-                            swap = activeSwap,
-                            syncing = state.xmr.syncing,
-                            onCopyText = onCopyText,
-                            onSyncPayout = onSyncXmrWallet,
-                            onOpenWallet = {
-                                restoreRetractedPods()
-                                localSwapOpen = false
-                                localWalletOpen = true
-                                onOpenMoneroWallet()
-                            },
-                            onDismiss = {
-                                localDismissedHudIds = localDismissedHudIds + activeSwap.swapId
-                                onDismissActiveSwapHud(activeSwap.swapId)
-                            },
-                        )
+                        if (show402Banner) {
+                            Xmr402ReopenBanner(
+                                challenge = active402Challenge,
+                                onReopen = {
+                                    restoreRetractedPods()
+                                    localWalletOpen = false
+                                    localSwapOpen = false
+                                    localXmr402Open = true
+                                    onOpenXmr402Payment()
+                                },
+                            )
+                        }
+                        if (showSwapHud) {
+                            ActiveSwapBrowserHud(
+                                swap = activeSwap,
+                                syncing = state.xmr.syncing,
+                                onCopyText = onCopyText,
+                                onSyncPayout = onSyncXmrWallet,
+                                onOpenWallet = {
+                                    restoreRetractedPods()
+                                    localSwapOpen = false
+                                    localXmr402Open = false
+                                    localWalletOpen = true
+                                    onOpenMoneroWallet()
+                                },
+                                onDismiss = {
+                                    localDismissedHudIds = localDismissedHudIds + activeSwap.swapId
+                                    onDismissActiveSwapHud(activeSwap.swapId)
+                                },
+                            )
+                        }
                     }
                 }
             }
@@ -677,7 +740,8 @@ fun MetaToolsBrowserShell(
                 settingsOpen ||
                 legalOpen ||
                 walletModalOpen ||
-                swapModalOpen
+                swapModalOpen ||
+                xmr402ModalOpen
 
             if (!managementModalOpen) {
                 state.clearnetPrompt?.let { prompt ->
@@ -733,6 +797,7 @@ fun MetaToolsBrowserShell(
                     onHideSeed = onHideXmrSeed,
                     onDismissNewSeedBackup = onDismissNewXmrSeedBackup,
                     onDeleteWallet = onDeleteXmrWallet,
+                    onProveXmrTx = onProveXmrTx,
                     onOpenSwap = {
                         localWalletOpen = false
                         onDismissMoneroWallet()
@@ -773,6 +838,28 @@ fun MetaToolsBrowserShell(
                     onDismiss = {
                         localSwapOpen = false
                         onDismissBtcXmrSwap()
+                    },
+                )
+            }
+
+            if (xmr402ModalOpen && !state.isScreenRecordingActive) {
+                Xmr402PaymentHardwarePod(
+                    challenge = active402Challenge,
+                    xmr = state.xmr,
+                    onPayAndUnlock = onPayAndUnlockXmr402,
+                    onUsePageDaemon = onUseXmr402PageDaemon,
+                    onOpenSwap = {
+                        localXmr402Open = false
+                        onDismissXmr402Payment()
+                        localSwapOpen = true
+                        onOpenBtcXmrSwap()
+                    },
+                    onSyncWallet = onSyncXmrWallet,
+                    onCreateWallet = onCreateXmrWallet,
+                    onCopyText = onCopyText,
+                    onDismiss = {
+                        localXmr402Open = false
+                        onDismissXmr402Payment()
                     },
                 )
             }

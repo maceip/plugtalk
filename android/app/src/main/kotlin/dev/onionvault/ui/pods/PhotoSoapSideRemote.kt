@@ -87,6 +87,7 @@ enum class RemoteMode {
     Menu,
     OnionDirectory,
     TorCircuit,
+    MoneroWallet,
     ContextMenu,
     PgpActions,
 }
@@ -203,6 +204,11 @@ fun PhotoSoapSideRemote(
     onOpenFindInPage: () -> Unit = {},
     onOpenMoneroWallet: () -> Unit = {},
     onOpenBtcXmrSwap: () -> Unit = {},
+    onCreateXmrWallet: (label: String) -> Unit = {},
+    onCopySiteSubaddress: (pageUrl: String) -> Unit = {},
+    onSyncXmrWallet: () -> Unit = {},
+    onOpenXmr402Payment: () -> Unit = {},
+    onSendXmrFromSelection: (addressOrUri: String, amountHint: String) -> Unit = { _, _ -> },
 ) {
     val haptics = LocalHapticFeedback.current
     val grainBrush = rememberPewterGrainBrush()
@@ -300,6 +306,11 @@ fun PhotoSoapSideRemote(
                 onOpenFindInPage = onOpenFindInPage,
                 onOpenMoneroWallet = onOpenMoneroWallet,
                 onOpenBtcXmrSwap = onOpenBtcXmrSwap,
+                onCreateXmrWallet = onCreateXmrWallet,
+                onCopySiteSubaddress = onCopySiteSubaddress,
+                onSyncXmrWallet = onSyncXmrWallet,
+                onOpenXmr402Payment = onOpenXmr402Payment,
+                onSendXmrFromSelection = onSendXmrFromSelection,
             )
         }
     }
@@ -435,11 +446,17 @@ private fun ExpandedRemoteFace(
     onOpenFindInPage: () -> Unit,
     onOpenMoneroWallet: () -> Unit,
     onOpenBtcXmrSwap: () -> Unit,
+    onCreateXmrWallet: (label: String) -> Unit,
+    onCopySiteSubaddress: (pageUrl: String) -> Unit,
+    onSyncXmrWallet: () -> Unit,
+    onOpenXmr402Payment: () -> Unit,
+    onSendXmrFromSelection: (addressOrUri: String, amountHint: String) -> Unit,
 ) {
     val headerLabel = when (mode) {
         RemoteMode.Menu -> "REMOTE"
         RemoteMode.OnionDirectory -> "ONION SITES"
         RemoteMode.TorCircuit -> "TOR CIRCUIT"
+        RemoteMode.MoneroWallet -> "MONERO"
         RemoteMode.ContextMenu -> "LINK / TEXT"
         RemoteMode.PgpActions -> "OPENPGP"
     }
@@ -501,7 +518,7 @@ private fun ExpandedRemoteFace(
                     state = state,
                     onCollapse = onCollapse,
                     onOpenOnionDirectory = { onSelectMode(RemoteMode.OnionDirectory) },
-                    onOpenMoneroWallet = onOpenMoneroWallet,
+                    onOpenMoneroBlade = { onSelectMode(RemoteMode.MoneroWallet) },
                     onOpenBtcXmrSwap = onOpenBtcXmrSwap,
                     onForward = onForward,
                     onReload = onReload,
@@ -533,6 +550,17 @@ private fun ExpandedRemoteFace(
                     onClearClearnetRules = onClearClearnetRules,
                 )
 
+                RemoteMode.MoneroWallet -> RemoteMoneroWalletBody(
+                    state = state,
+                    onCollapse = onCollapse,
+                    onCreateXmrWallet = onCreateXmrWallet,
+                    onCopySiteSubaddress = onCopySiteSubaddress,
+                    onSyncXmrWallet = onSyncXmrWallet,
+                    onOpenXmr402Payment = onOpenXmr402Payment,
+                    onOpenMoneroWallet = onOpenMoneroWallet,
+                    onOpenBtcXmrSwap = onOpenBtcXmrSwap,
+                )
+
                 RemoteMode.ContextMenu -> RemoteContextMenuBody(
                     state = state,
                     onCollapse = onCollapse,
@@ -542,6 +570,7 @@ private fun ExpandedRemoteFace(
                     onDecryptArmoredText = onDecryptArmoredText,
                     onImportArmoredKey = onImportArmoredKey,
                     onEncryptSelectedText = onEncryptSelectedText,
+                    onSendXmrFromSelection = onSendXmrFromSelection,
                 )
 
                 RemoteMode.PgpActions -> RemotePgpActionsBody(
@@ -578,7 +607,7 @@ private fun RemoteMenuBody(
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit,
     onOpenFindInPage: () -> Unit,
-    onOpenMoneroWallet: () -> Unit,
+    onOpenMoneroBlade: () -> Unit,
     onOpenBtcXmrSwap: () -> Unit,
 ) {
     val activeSwapsCount = state.xmr.liveSwapsCount.takeIf { it > 0 }
@@ -605,10 +634,7 @@ private fun RemoteMenuBody(
         } else {
             MetaToolsTokens.LedAmber
         },
-        onClick = {
-            onCollapse()
-            onOpenMoneroWallet()
-        },
+        onClick = onOpenMoneroBlade,
         testTag = "remote_monero_wallet",
     )
     RemoteEngravedRowButton(
@@ -919,6 +945,166 @@ private fun RemoteTorCircuitBody(
 }
 
 @Composable
+private fun RemoteMoneroWalletBody(
+    state: BrowserUiState,
+    onCollapse: () -> Unit,
+    onCreateXmrWallet: (label: String) -> Unit,
+    onCopySiteSubaddress: (pageUrl: String) -> Unit,
+    onSyncXmrWallet: () -> Unit,
+    onOpenXmr402Payment: () -> Unit,
+    onOpenMoneroWallet: () -> Unit,
+    onOpenBtcXmrSwap: () -> Unit,
+) {
+    val xmr = state.xmr
+    val status = xmr.status
+    val active402 = xmr.challengeForTab(state.activeTabId)
+    val rawHost = if (state.isStartPage) {
+        ""
+    } else {
+        state.url.trim()
+            .removePrefix("https://")
+            .removePrefix("http://")
+            .substringBefore('/')
+            .substringBefore(':')
+            .trimEnd('.')
+            .lowercase()
+    }
+    val siteReadout = when {
+        rawHost.isEmpty() -> "global"
+        rawHost.endsWith(".onion") -> truncateOnionPreservingTail(rawHost)
+        else -> rawHost
+    }
+    val syncReadout = when {
+        !status.hasWallet -> "Create Wallet"
+        xmr.syncing -> "Syncing…"
+        status.daemonHeight > 0L -> "${status.syncedHeight}/${status.daemonHeight}"
+        status.birthdayPending -> "Pending Sync"
+        else -> "#${status.syncedHeight}"
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("remote_monero_blade"),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(MetaToolsTokens.CrtBlackGlass)
+                .border(1.dp, MetaToolsTokens.GrooveHighlight, RoundedCornerShape(12.dp))
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            RemoteCrtStatLine(
+                key = "BAL",
+                value = "${if (status.hasWallet) status.unlockedBalanceXmr else "0"} XMR",
+                valueColor = if (status.hasWallet) {
+                    MetaToolsTokens.PhosphorOnionGreen
+                } else {
+                    MetaToolsTokens.PhosphorLoadingAmber
+                },
+            )
+            RemoteCrtStatLine(
+                key = "SYNC",
+                value = syncReadout,
+                valueColor = if (status.hasWallet && !xmr.syncing) {
+                    MetaToolsTokens.PhosphorClearnetGreen
+                } else {
+                    MetaToolsTokens.PhosphorLoadingAmber
+                },
+            )
+            RemoteCrtStatLine(
+                key = "SITE",
+                value = siteReadout,
+                valueColor = if (rawHost.isNotEmpty()) {
+                    MetaToolsTokens.PhosphorClearnetCyan
+                } else {
+                    MetaToolsTokens.StencilInk
+                },
+            )
+        }
+
+        EngravedGrooveDivider()
+
+        if (!status.hasWallet) {
+            RemoteEngravedRowButton(
+                label = if (xmr.creatingOrRestoring) {
+                    "Generating Seed…"
+                } else {
+                    "Create 25-Word Wallet"
+                },
+                glyph = TrapGlyph.Monero,
+                enabled = !xmr.creatingOrRestoring,
+                ledIdleColor = MetaToolsTokens.LedGreen,
+                onClick = { onCreateXmrWallet("Trap Light Wallet") },
+                testTag = "remote_xmr_create_wallet",
+            )
+            RemoteEngravedRowButton(
+                label = "Open Full Wallet / Restore",
+                glyph = TrapGlyph.Wallet,
+                showBottomGroove = false,
+                onClick = {
+                    onCollapse()
+                    onOpenMoneroWallet()
+                },
+                testTag = "remote_open_full_xmr_wallet",
+            )
+        } else {
+            RemoteEngravedRowButton(
+                label = "Copy Site 8…",
+                glyph = TrapGlyph.Copy,
+                trailingToken = if (rawHost.isEmpty()) "ACTIVE" else "SITE",
+                ledIdleColor = MetaToolsTokens.LedGreen,
+                onClick = { onCopySiteSubaddress(state.url) },
+                testTag = "remote_xmr_copy_site_subaddr",
+            )
+            RemoteEngravedRowButton(
+                label = if (xmr.syncing) "Syncing…" else "Sync Tor",
+                glyph = TrapGlyph.Reload,
+                enabled = !xmr.syncing,
+                ledIdleColor = if (xmr.syncing) MetaToolsTokens.LedAmber else null,
+                onClick = onSyncXmrWallet,
+                testTag = "remote_xmr_sync",
+            )
+            if (active402 != null) {
+                RemoteEngravedRowButton(
+                    label = "Pay 402 (${active402.amountXmr} XMR)",
+                    glyph = TrapGlyph.Monero,
+                    ledIdleColor = MetaToolsTokens.LedAmber,
+                    onClick = {
+                        onCollapse()
+                        onOpenXmr402Payment()
+                    },
+                    testTag = "remote_xmr_pay_402",
+                )
+            }
+            RemoteEngravedRowButton(
+                label = "Open Full Wallet & QR",
+                glyph = TrapGlyph.Monero,
+                onClick = {
+                    onCollapse()
+                    onOpenMoneroWallet()
+                },
+                testTag = "remote_open_full_xmr_wallet",
+            )
+            RemoteEngravedRowButton(
+                label = "Swap BTC → XMR",
+                glyph = TrapGlyph.Wallet,
+                trailingToken = xmr.liveSwapsCount.takeIf { it > 0 }?.let { "$it LIVE" },
+                showBottomGroove = false,
+                onClick = {
+                    onCollapse()
+                    onOpenBtcXmrSwap()
+                },
+                testTag = "remote_xmr_open_swap",
+            )
+        }
+    }
+}
+
+@Composable
 private fun RemoteContextMenuBody(
     state: BrowserUiState,
     onCollapse: () -> Unit,
@@ -928,6 +1114,7 @@ private fun RemoteContextMenuBody(
     onDecryptArmoredText: (String) -> Unit,
     onImportArmoredKey: (String) -> Unit,
     onEncryptSelectedText: (String) -> Unit,
+    onSendXmrFromSelection: (addressOrUri: String, amountHint: String) -> Unit,
 ) {
     val menu = state.contextMenu
     val targetUrl = menu?.linkUrl?.takeIf { it.isNotBlank() }
@@ -1014,6 +1201,22 @@ private fun RemoteContextMenuBody(
                             onImportArmoredKey(menu.armoredPayload.ifBlank { selected })
                         },
                         testTag = "remote_ctx_import_key",
+                    )
+                }
+
+                "monero_address" -> {
+                    RemoteEngravedRowButton(
+                        label = "Send XMR",
+                        glyph = TrapGlyph.Monero,
+                        ledIdleColor = MetaToolsTokens.LedGreen,
+                        onClick = {
+                            onCollapse()
+                            onSendXmrFromSelection(
+                                menu.armoredPayload.ifBlank { selected },
+                                menu.fingerprintHint,
+                            )
+                        },
+                        testTag = "context_send_xmr",
                     )
                 }
             }

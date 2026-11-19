@@ -1,6 +1,8 @@
 package dev.onionvault
 
 import androidx.compose.runtime.Immutable
+import java.math.BigDecimal
+import java.math.BigInteger
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import org.json.JSONArray
@@ -39,7 +41,7 @@ object OvNative {
         }
     }
 
-    // --- Exact 35 JNI entry points exported by `src/lib.rs` ---
+    // --- Exact 39 JNI entry points exported by `src/lib.rs` ---
 
     external fun nativeInit(
         dataDir: String,
@@ -113,6 +115,22 @@ object OvNative {
 
     external fun nativeXmrNewSubaddressJson(label: String): String
 
+    external fun nativeXmrParse402ChallengeJson(
+        wwwAuthenticateHeader: String,
+        fallbackMetaJson: String,
+        pageUrl: String,
+    ): String
+
+    external fun nativeXmrPay402Json(challengeJson: String): String
+
+    external fun nativeXmrProveTxJson(
+        txid: String,
+        recipientAddress: String,
+        message: String,
+    ): String
+
+    external fun nativeXmrQrMatrixJson(payload: String): String
+
     external fun nativeXmrRestoreWalletJson(mnemonic: String, restoreHeight: Long): String
 
     external fun nativeXmrSendJson(
@@ -169,6 +187,9 @@ object OvNative {
     ) {
         val isPgp: Boolean
             get() = kind == "pgp_message" || kind == "pgp_public_key"
+
+        val isMoneroAddress: Boolean
+            get() = kind == "monero_address"
     }
 
     data class ClassifiedDomNode(
@@ -493,6 +514,8 @@ object OvNative {
         val timestamp: Long = 0L,
         val subaddressIndex: Int = 0,
         val unlocked: Boolean = false,
+        val hasProof: Boolean = false,
+        val recipientAddress: String = "",
     )
 
     @Immutable
@@ -612,6 +635,63 @@ object OvNative {
         val recipientName: String = "",
     )
 
+    @Immutable
+    data class Xmr402Challenge(
+        val ok: Boolean,
+        val scheme: String = "XMR402",
+        val pageUrl: String = "",
+        val address: String = "",
+        val amountAtomic: String = "0",
+        val amountXmr: String = "0",
+        val message: String = "",
+        val timestamp: Long = 0L,
+        val daemonUrl: String = "",
+        val error: String = "",
+    ) {
+        fun toChallengeJson(): String = JSONObject()
+            .put("scheme", scheme)
+            .put("pageUrl", pageUrl)
+            .put("address", address)
+            .put("amountAtomic", amountAtomic)
+            .put("amountXmr", amountXmr)
+            .put("message", message)
+            .put("timestamp", timestamp)
+            .put("daemonUrl", daemonUrl)
+            .toString()
+    }
+
+    @Immutable
+    data class Xmr402PayResult(
+        val ok: Boolean,
+        val txid: String = "",
+        val proof: String = "",
+        val authorizationHeader: String = "",
+        val amountAtomic: String = "0",
+        val amountXmr: String = "0",
+        val feeAtomic: String = "0",
+        val feeXmr: String = "0",
+        val error: String = "",
+    )
+
+    @Immutable
+    data class XmrTxProofResult(
+        val ok: Boolean,
+        val txid: String = "",
+        val recipientAddress: String = "",
+        val message: String = "",
+        val proof: String = "",
+        val authorizationHeader: String = "",
+        val error: String = "",
+    )
+
+    @Immutable
+    data class QrMatrixResult(
+        val ok: Boolean,
+        val size: Int = 0,
+        val rows: List<String> = emptyList(),
+        val error: String = "",
+    )
+
     fun parseXmrStatus(json: String): XmrStatusSnapshot {
         if (json.isBlank()) return XmrStatusSnapshot()
         return runCatching {
@@ -657,6 +737,8 @@ object OvNative {
                                 timestamp = tx.optLong("timestamp", 0L),
                                 subaddressIndex = tx.optInt("subaddressIndex", 0),
                                 unlocked = tx.optBoolean("unlocked", false),
+                                hasProof = tx.optBoolean("hasProof", false),
+                                recipientAddress = tx.optString("recipientAddress", ""),
                             ),
                         )
                     }
@@ -899,6 +981,187 @@ object OvNative {
             .put("op", "dismiss")
             .put("swapId", swapId.trim())
             .toString()
+
+    fun parseXmr402Challenge(json: String): Xmr402Challenge {
+        if (json.isBlank()) {
+            return Xmr402Challenge(ok = false, error = "Empty XMR402 challenge response")
+        }
+        return runCatching {
+            val obj = JSONObject(json)
+            Xmr402Challenge(
+                ok = obj.optBoolean("ok", false),
+                scheme = obj.optString("scheme", "XMR402").trim().ifEmpty { "XMR402" },
+                pageUrl = obj.optString("pageUrl", "").trim(),
+                address = obj.optString("address", "").trim(),
+                amountAtomic = obj.optString("amountAtomic", "0").trim().ifEmpty { "0" },
+                amountXmr = obj.optString("amountXmr", "0").trim().ifEmpty { "0" },
+                message = obj.optString("message", "").trim(),
+                timestamp = obj.optLong("timestamp", 0L),
+                daemonUrl = obj.optString("daemonUrl", "").trim(),
+                error = obj.optString("error", ""),
+            )
+        }.getOrElse { err ->
+            Xmr402Challenge(
+                ok = false,
+                error = err.message ?: "Malformed XMR402 challenge response",
+            )
+        }
+    }
+
+    fun parseXmr402PayResult(json: String): Xmr402PayResult {
+        if (json.isBlank()) {
+            return Xmr402PayResult(ok = false, error = "Empty XMR402 payment response")
+        }
+        return runCatching {
+            val obj = JSONObject(json)
+            Xmr402PayResult(
+                ok = obj.optBoolean("ok", false),
+                txid = obj.optString("txid", "").trim(),
+                proof = obj.optString("proof", "").trim(),
+                authorizationHeader = obj.optString("authorizationHeader", "").trim(),
+                amountAtomic = obj.optString("amountAtomic", "0").trim().ifEmpty { "0" },
+                amountXmr = obj.optString("amountXmr", "0").trim().ifEmpty { "0" },
+                feeAtomic = obj.optString("feeAtomic", "0").trim().ifEmpty { "0" },
+                feeXmr = obj.optString("feeXmr", "0").trim().ifEmpty { "0" },
+                error = obj.optString("error", ""),
+            )
+        }.getOrElse { err ->
+            Xmr402PayResult(
+                ok = false,
+                error = err.message ?: "Malformed XMR402 payment response",
+            )
+        }
+    }
+
+    fun parseXmrTxProof(json: String): XmrTxProofResult {
+        if (json.isBlank()) {
+            return XmrTxProofResult(ok = false, error = "Empty Monero OutProofV2 response")
+        }
+        return runCatching {
+            val obj = JSONObject(json)
+            XmrTxProofResult(
+                ok = obj.optBoolean("ok", false),
+                txid = obj.optString("txid", "").trim(),
+                recipientAddress = obj.optString("recipientAddress", "").trim(),
+                message = obj.optString("message", ""),
+                proof = obj.optString("proof", "").trim(),
+                authorizationHeader = obj.optString("authorizationHeader", "").trim()
+                    .ifEmpty { obj.optString("authorization", "").trim() },
+                error = obj.optString("error", ""),
+            )
+        }.getOrElse { err ->
+            XmrTxProofResult(
+                ok = false,
+                error = err.message ?: "Malformed Monero OutProofV2 response",
+            )
+        }
+    }
+
+    fun parseQrMatrix(json: String): QrMatrixResult {
+        if (json.isBlank()) {
+            return QrMatrixResult(ok = false, error = "Empty QR matrix response")
+        }
+        return runCatching {
+            val obj = JSONObject(json)
+            val rowsArr = obj.optJSONArray("rows")
+            val rows = if (rowsArr != null) {
+                buildList(rowsArr.length()) {
+                    for (i in 0 until rowsArr.length()) {
+                        val row = rowsArr.optString(i, "").trim()
+                        if (row.isNotEmpty() && row.all { it == '0' || it == '1' }) {
+                            add(row)
+                        }
+                    }
+                }
+            } else {
+                emptyList()
+            }
+            val reportedSize = obj.optInt("size", rows.size).coerceAtLeast(0)
+            val ok = obj.optBoolean("ok", false) &&
+                reportedSize > 0 &&
+                rows.size == reportedSize &&
+                rows.all { it.length == reportedSize }
+            QrMatrixResult(
+                ok = ok,
+                size = if (ok) reportedSize else 0,
+                rows = if (ok) rows else emptyList(),
+                error = obj.optString("error", "").ifBlank {
+                    if (!ok && obj.optBoolean("ok", false)) "Invalid QR matrix dimensions" else ""
+                },
+            )
+        }.getOrElse { err ->
+            QrMatrixResult(
+                ok = false,
+                error = err.message ?: "Malformed QR matrix response",
+            )
+        }
+    }
+
+    /**
+     * Converts an exact picomonero (`10^-12 XMR`) integer string — or exact decimal XMR string
+     * when atomic string is unset (`"0"` / blank) — to [BigInteger] with zero floating-point drift.
+     */
+    fun atomicFromStrings(atomicStr: String, decimalXmrFallback: String = ""): BigInteger {
+        val cleanAtomic = atomicStr.trim()
+        if (cleanAtomic.isNotEmpty() && cleanAtomic != "0") {
+            cleanAtomic.toBigIntegerOrNull()?.takeIf { it >= BigInteger.ZERO }?.let { return it }
+        }
+        val cleanDec = decimalXmrFallback.trim()
+        if (cleanDec.isNotEmpty() && isValidNonNegativeDecimal(cleanDec)) {
+            return runCatching {
+                BigDecimal(cleanDec).movePointRight(12).toBigIntegerExact()
+            }.getOrDefault(BigInteger.ZERO)
+        }
+        return cleanAtomic.toBigIntegerOrNull()?.coerceAtLeast(BigInteger.ZERO) ?: BigInteger.ZERO
+    }
+
+    fun formatAtomicToXmr(atomic: BigInteger): String {
+        if (atomic <= BigInteger.ZERO) return "0"
+        return BigDecimal(atomic)
+            .movePointLeft(12)
+            .stripTrailingZeros()
+            .toPlainString()
+    }
+
+    fun hasSufficientUnlockedAtomic(
+        unlockedAtomic: String,
+        requiredAtomic: String,
+        unlockedXmr: String = "",
+        requiredXmr: String = "",
+    ): Boolean {
+        val required = atomicFromStrings(requiredAtomic, requiredXmr)
+        if (required <= BigInteger.ZERO) return false
+        val unlocked = atomicFromStrings(unlockedAtomic, unlockedXmr)
+        return unlocked >= required
+    }
+
+    fun formatAtomicShortfallXmr(
+        unlockedAtomic: String,
+        requiredAtomic: String,
+        unlockedXmr: String = "",
+        requiredXmr: String = "",
+    ): String {
+        val required = atomicFromStrings(requiredAtomic, requiredXmr)
+        val unlocked = atomicFromStrings(unlockedAtomic, unlockedXmr)
+        val diff = (required - unlocked).coerceAtLeast(BigInteger.ZERO)
+        return formatAtomicToXmr(diff)
+    }
+
+    fun extractStandaloneMoneroAddress(text: String): String? {
+        if (text.isBlank()) return null
+        parseMoneroUri(text)?.let { return it.address }
+        val tokens = text.split(Regex("[\\s,;<>\"'()\\[\\]{}]+"))
+        for (rawToken in tokens) {
+            val cleaned = rawToken.trim('.', ':', '!', '?')
+            if (cleaned.startsWith("monero:", ignoreCase = true)) {
+                parseMoneroUri(cleaned)?.let { return cleaned }
+            }
+            if (isValidMoneroAddress(cleaned)) {
+                return cleaned
+            }
+        }
+        return null
+    }
 
     fun isValidMoneroAddress(candidate: String): Boolean {
         val trimmed = candidate.trim()

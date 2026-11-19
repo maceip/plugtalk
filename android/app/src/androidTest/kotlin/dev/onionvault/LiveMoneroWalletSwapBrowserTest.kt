@@ -154,12 +154,16 @@ class LiveMoneroWalletSwapBrowserTest {
                 SystemClock.sleep(300L)
                 saveLiveScreenshot(instrumentation, activity, SHOT_HOME)
 
-                // 2. Open PhotoSoapSideRemote -> MoneroWalletHardwarePod -> Create real 25-word wallet.
+                // 2. Open PhotoSoapSideRemote -> RemoteMode.MoneroWallet -> MoneroWalletHardwarePod -> Create real 25-word wallet.
                 composeRule.onNodeWithTag("side_remote_collapsed_face").performClick()
                 composeRule.waitUntil(timeoutMillis = 5_000L) {
                     composeRule.onAllNodesWithTag("remote_monero_wallet").fetchSemanticsNodes().isNotEmpty()
                 }
                 composeRule.onNodeWithTag("remote_monero_wallet").performClick()
+                composeRule.waitUntil(timeoutMillis = 5_000L) {
+                    composeRule.onAllNodesWithTag("remote_open_full_xmr_wallet").fetchSemanticsNodes().isNotEmpty()
+                }
+                composeRule.onNodeWithTag("remote_open_full_xmr_wallet").performClick()
                 composeRule.waitUntil(timeoutMillis = 5_000L) {
                     composeRule.onAllNodesWithTag("xmr_wallet_sheet").fetchSemanticsNodes().isNotEmpty()
                 }

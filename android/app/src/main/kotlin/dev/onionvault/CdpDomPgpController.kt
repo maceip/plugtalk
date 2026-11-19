@@ -29,6 +29,16 @@ class CdpDomPgpController(
         domHtml: String,
         nodes: List<DetectedPgpNode>,
     ) -> Unit = { _, _, _, _ -> },
+    private val onHttp402Challenge: (
+        tabId: String,
+        responseUrl: String,
+        wwwAuthenticateHeader: String,
+        fallbackMetaJson: String,
+    ) -> Unit = { _, _, _, _ -> },
+    private val onHttp200Loaded: (
+        tabId: String,
+        responseUrl: String,
+    ) -> Unit = { _, _ -> },
 ) {
 
     data class DetectedPgpNode(
@@ -147,7 +157,8 @@ class CdpDomPgpController(
                         val isSearchLike = obj.optBoolean("isSearchLike", false)
                         val isCryptoOverlayKind = kind == "xmr_address_input" ||
                             kind == "btc_deposit_address" ||
-                            kind == "monero_uri"
+                            kind == "monero_uri" ||
+                            kind == "xmr402_challenge"
                         if (isSearchLike && !includeSearchFields && !isCryptoOverlayKind) continue
                         add(
                             ClassifiedNodeEntry(
@@ -165,6 +176,68 @@ class CdpDomPgpController(
                 }
             }.getOrElse { emptyList() }
         }
+
+        internal fun extractWwwAuthenticateHeader(headers: JSONObject?): String {
+            if (headers == null) return ""
+            var fallbackHeader = ""
+            val keys = headers.keys()
+            while (keys.hasNext()) {
+                val rawKey = keys.next()
+                val lowerKey = rawKey.trim().lowercase()
+                val rawVal = headers.optString(rawKey, "").trim()
+                if (rawVal.isEmpty()) continue
+                if (lowerKey == "www-authenticate") {
+                    val xmrLine = rawVal.lineSequence()
+                        .map { it.trim() }
+                        .firstOrNull {
+                            it.startsWith("XMR402", ignoreCase = true) ||
+                                it.startsWith("x402", ignoreCase = true)
+                        }
+                    return xmrLine ?: rawVal
+                }
+                if (lowerKey == "payment-required" || lowerKey == "x-xmr402-challenge") {
+                    fallbackHeader = rawVal
+                }
+            }
+            return fallbackHeader
+        }
+
+        internal fun extractMetaXmr402ContentFromHtml(html: String): String {
+            if (html.isBlank() || !html.contains("xmr402-challenge", ignoreCase = true)) return ""
+            val metaRegex = Regex("""<meta\b[^>]*>""", RegexOption.IGNORE_CASE)
+            val attrRegex = Regex(
+                """([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)')""",
+            )
+            for (metaMatch in metaRegex.findAll(html)) {
+                var isXmr402Meta = false
+                var contentVal = ""
+                for (attr in attrRegex.findAll(metaMatch.value)) {
+                    val key = attr.groupValues[1].lowercase()
+                    val rawValue = if (attr.groups[2] != null) attr.groupValues[2] else attr.groupValues[3]
+                    if (key == "name" && rawValue.trim().equals("xmr402-challenge", ignoreCase = true)) {
+                        isXmr402Meta = true
+                    } else if (key == "content") {
+                        contentVal = rawValue
+                            .replace("&quot;", "\"")
+                            .replace("&#34;", "\"")
+                            .replace("&#39;", "'")
+                            .replace("&apos;", "'")
+                            .replace("&amp;", "&")
+                            .trim()
+                    }
+                }
+                if (isXmr402Meta && contentVal.isNotEmpty()) {
+                    return contentVal
+                }
+            }
+            return ""
+        }
+
+        private fun samePageIgnoreTrailingSlash(a: String, b: String): Boolean {
+            val cleanA = a.trim().trimEnd('/')
+            val cleanB = b.trim().trimEnd('/')
+            return cleanA.isNotEmpty() && cleanA.equals(cleanB, ignoreCase = true)
+        }
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -176,6 +249,8 @@ class CdpDomPgpController(
     private val lastClassifiedByTab = ConcurrentHashMap<String, List<ClassifiedNodeEntry>>()
     private val scanGenerationByTab = ConcurrentHashMap<String, AtomicInteger>()
     private val activeSearchByTab = ConcurrentHashMap<String, ActiveSearchSession>()
+    private val cachedWwwAuthByTab = ConcurrentHashMap<String, Pair<String, String>>()
+    private val cachedMeta402ByTab = ConcurrentHashMap<String, Pair<String, String>>()
 
     fun nodesForTab(tabId: String): List<DetectedPgpNode> =
         _activeNodes.value[tabId].orEmpty()
@@ -528,8 +603,56 @@ class CdpDomPgpController(
         )
     }
 
+    fun replayWithXmr402Authorization(
+        tabId: String,
+        browser: CefpackSession? = attachedBrowsers[tabId],
+        targetUrl: String,
+        authorizationHeader: String,
+        onDispatched: (Boolean) -> Unit = {},
+    ) {
+        runOnMain {
+            val liveBrowser = browser ?: attachedBrowsers[tabId]
+            val cleanUrl = targetUrl.trim()
+            val cleanAuth = authorizationHeader.trim()
+            if (liveBrowser == null || cleanUrl.isEmpty() || cleanAuth.isEmpty()) {
+                onDispatched(false)
+                return@runOnMain
+            }
+            val headersParams = JSONObject()
+                .put("headers", JSONObject().put("Authorization", cleanAuth))
+                .toString()
+            liveBrowser.executeDevToolsMethod("Network.enable", "{}") { _, _ ->
+                liveBrowser.executeDevToolsMethod("Network.setExtraHTTPHeaders", headersParams) { ok, _ ->
+                    runOnMain {
+                        liveBrowser.loadUrl(cleanUrl)
+                        onDispatched(ok)
+                    }
+                }
+            }
+        }
+    }
+
+    fun clearExtraHttpHeaders(
+        tabId: String,
+        browser: CefpackSession? = attachedBrowsers[tabId],
+    ) {
+        val liveBrowser = browser ?: attachedBrowsers[tabId] ?: return
+        runOnMain {
+            runCatching {
+                liveBrowser.executeDevToolsMethod("Network.setExtraHTTPHeaders", "{\"headers\":{}}", null)
+            }
+        }
+    }
+
+    fun clearTab402State(tabId: String) {
+        cachedWwwAuthByTab.remove(tabId)
+        cachedMeta402ByTab.remove(tabId)
+    }
+
     fun detachTab(tabId: String) {
         clearTextSearch(tabId)
+        clearExtraHttpHeaders(tabId)
+        clearTab402State(tabId)
         attachedBrowsers.remove(tabId)
         lastUrlByTab.remove(tabId)
         lastClassifiedByTab.remove(tabId)
@@ -540,7 +663,12 @@ class CdpDomPgpController(
     }
 
     fun clearAll() {
+        attachedBrowsers.forEach { (tabId, browser) ->
+            clearExtraHttpHeaders(tabId, browser)
+        }
         activeSearchByTab.clear()
+        cachedWwwAuthByTab.clear()
+        cachedMeta402ByTab.clear()
         attachedBrowsers.clear()
         lastUrlByTab.clear()
         lastClassifiedByTab.clear()
@@ -549,11 +677,16 @@ class CdpDomPgpController(
     }
 
     private fun configureDevToolsDomains(tabId: String, browser: CefpackSession) {
-        browser.setDevToolsEventListener { method, _ ->
+        browser.setDevToolsEventListener { method, paramsJson ->
             when (method) {
+                "Network.responseReceived" -> {
+                    handleNetworkResponseReceived(tabId, browser, paramsJson.orEmpty())
+                }
+
                 "DOM.documentUpdated",
                 "Page.loadEventFired",
-                "Page.frameStoppedLoading" -> {
+                "Page.frameStoppedLoading",
+                -> {
                     runOnMain {
                         val activeBrowser = attachedBrowsers[tabId] ?: return@runOnMain
                         performFullScan(tabId, activeBrowser, resolveScanUrl(tabId, activeBrowser))
@@ -561,6 +694,7 @@ class CdpDomPgpController(
                 }
             }
         }
+        browser.executeDevToolsMethod("Network.enable", "{\"maxPostDataSize\":0}", null)
         browser.executeDevToolsMethod("Page.enable", "{}", null)
         browser.executeDevToolsMethod("DOM.enable", "{}", null)
         browser.executeDevToolsMethod(
@@ -575,6 +709,49 @@ class CdpDomPgpController(
             """{"color":{"r":13,"g":15,"b":18,"a":255}}""",
             null,
         )
+    }
+
+    private fun handleNetworkResponseReceived(
+        tabId: String,
+        browser: CefpackSession,
+        paramsJson: String,
+    ) {
+        if (paramsJson.isBlank()) return
+        val parsed = runCatching { JSONObject(paramsJson) }.getOrNull() ?: return
+        val resourceType = parsed.optString("type", "")
+        if (!resourceType.equals("Document", ignoreCase = true)) return
+
+        val response = parsed.optJSONObject("response") ?: return
+        val status = response.optInt("status", 0)
+        val rawUrl = response.optString("url", "").trim()
+        val resolvedUrl = rawUrl.ifEmpty { resolveScanUrl(tabId, browser) }
+        if (resolvedUrl.isBlank() || resolvedUrl == "about:blank") return
+
+        when {
+            status == 402 -> {
+                val wwwAuth = extractWwwAuthenticateHeader(response.optJSONObject("headers"))
+                if (wwwAuth.isNotEmpty()) {
+                    cachedWwwAuthByTab[tabId] = resolvedUrl to wwwAuth
+                }
+                val metaFallback = cachedMeta402ByTab[tabId]
+                    ?.takeIf { samePageIgnoreTrailingSlash(it.first, resolvedUrl) }
+                    ?.second
+                    .orEmpty()
+                if (wwwAuth.isNotEmpty() || metaFallback.isNotEmpty()) {
+                    runOnMain {
+                        onHttp402Challenge(tabId, resolvedUrl, wwwAuth, metaFallback)
+                    }
+                }
+            }
+
+            status in 200..299 -> {
+                cachedWwwAuthByTab.remove(tabId)
+                cachedMeta402ByTab.remove(tabId)
+                runOnMain {
+                    onHttp200Loaded(tabId, resolvedUrl)
+                }
+            }
+        }
     }
 
     private fun resolveScanUrl(
@@ -627,11 +804,32 @@ class CdpDomPgpController(
             val rootNodeId = rootObj?.optInt("nodeId", 0) ?: 0
 
             val classified = classifyDomTree(docJson)
-            lastClassifiedByTab[tabId] = classified
+            val classifiedMeta402 = classified
+                .firstOrNull { it.kind == "xmr402_challenge" && it.text.isNotBlank() }
+                ?.text
+                ?.trim()
+                .orEmpty()
+            val visualClassified = classified.filter { it.kind != "xmr402_challenge" }
+            lastClassifiedByTab[tabId] = visualClassified
 
             fetchOuterHtml(browser, rootNodeId) { domHtml ->
                 if (generation != currentGeneration(tabId)) return@fetchOuterHtml
-                if (classified.isEmpty()) {
+
+                val resolvedMeta402 = classifiedMeta402.ifEmpty {
+                    extractMetaXmr402ContentFromHtml(domHtml)
+                }
+                if (resolvedMeta402.isNotEmpty()) {
+                    cachedMeta402ByTab[tabId] = currentUrl to resolvedMeta402
+                    val cachedWwwAuth = cachedWwwAuthByTab[tabId]
+                        ?.takeIf { samePageIgnoreTrailingSlash(it.first, currentUrl) }
+                        ?.second
+                        .orEmpty()
+                    runOnMain {
+                        onHttp402Challenge(tabId, currentUrl, cachedWwwAuth, resolvedMeta402)
+                    }
+                }
+
+                if (visualClassified.isEmpty()) {
                     publishTabNodes(tabId, emptyList())
                     onNodesDetected(tabId, currentUrl, domHtml, emptyList())
                     return@fetchOuterHtml
@@ -647,7 +845,7 @@ class CdpDomPgpController(
                     resolveAllNodeBounds(
                         tabId = tabId,
                         browser = browser,
-                        classified = classified,
+                        classified = visualClassified,
                         metrics = metrics,
                         generation = generation,
                     ) { detected ->

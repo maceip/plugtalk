@@ -237,6 +237,7 @@ data class ContextMenuUiState(
     val selectedText: String? = null,
     val classificationKind: String = "plain",
     val armoredPayload: String = "",
+    val fingerprintHint: String = "",
 )
 
 @Immutable
@@ -280,7 +281,16 @@ data class MoneroUiState(
     val prefillSendAmount: String = "",
     val prefillSendDescription: String = "",
     val activeSwapTabMap: Map<String, String> = emptyMap(),
+    val adHocSwapByTab: Map<String, OvNative.TrackedBtcXmrSwap> = emptyMap(),
     val dismissedHudSwapIds: Set<String> = emptySet(),
+    val active402Challenge: OvNative.Xmr402Challenge? = null,
+    val challengesByTab: Map<String, OvNative.Xmr402Challenge> = emptyMap(),
+    val xmr402SheetOpen: Boolean = false,
+    val dismissed402TabIds: Set<String> = emptySet(),
+    val paying402: Boolean = false,
+    val provingTxid: String? = null,
+    val lastTxProof: OvNative.XmrTxProofResult? = null,
+    val qrMatrices: Map<String, OvNative.QrMatrixResult> = emptyMap(),
     val lastTxid: String? = null,
     val lastFeeXmr: String? = null,
     val error: String? = null,
@@ -293,6 +303,17 @@ data class MoneroUiState(
             it.status == "awaiting_form" || it.status == "awaiting_btc_deposit"
         }
 
+    fun challengeForTab(tabId: String): OvNative.Xmr402Challenge? =
+        challengesByTab[tabId] ?: active402Challenge
+
+    fun dedicatedSwapSubaddressForTab(tabId: String): String? {
+        val mappedId = activeSwapTabMap[tabId]?.takeIf { it.isNotBlank() } ?: return null
+        return status.swaps
+            .firstOrNull { it.swapId == mappedId && it.status != "dismissed" }
+            ?.subaddress
+            ?.takeIf { it.isNotBlank() }
+    }
+
     fun activeSwapForTab(tabId: String): OvNative.TrackedBtcXmrSwap? {
         val mappedId = activeSwapTabMap[tabId]
         if (!mappedId.isNullOrBlank()) {
@@ -302,6 +323,9 @@ data class MoneroUiState(
                     it.swapId !in dismissedHudSwapIds
             }?.let { return it }
         }
+        adHocSwapByTab[tabId]
+            ?.takeIf { it.swapId !in dismissedHudSwapIds && it.status != "dismissed" }
+            ?.let { return it }
         return activeSwap
     }
 

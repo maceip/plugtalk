@@ -73,6 +73,7 @@ import dev.onionvault.ui.TrapThemeFamily
 import dev.onionvault.ui.TrapThemeMode
 import dev.onionvault.ui.isBlankOrStartUrl
 import dev.onionvault.ui.pods.isOnionHostUrl
+import dev.onionvault.ui.pods.truncateOnionPreservingTail
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -459,6 +460,17 @@ class MainActivity : FragmentActivity() {
                         ),
                     )
                 },
+                onCopySiteSubaddress = { pageUrl -> copyOrMintSiteSubaddress(pageUrl) },
+                onProveXmrTx = { txid, recipientAddress, message ->
+                    proveXmrTx(txid, recipientAddress, message)
+                },
+                onOpenXmr402Payment = { openXmr402Modal() },
+                onDismissXmr402Payment = { dismissXmr402Modal() },
+                onPayAndUnlockXmr402 = { challenge -> payXmr402AndUnlock(challenge) },
+                onUseXmr402PageDaemon = { daemonUrl -> adoptPageDaemonAndSync(daemonUrl) },
+                onSendXmrFromContextMenu = { addressOrUri, amountHint ->
+                    openSendXmrFromSelection(addressOrUri, amountHint)
+                },
                 surface = {
                     ActiveBrowserSurfaceHost(activeTabId = uiState.activeTabId)
                 },
@@ -745,6 +757,17 @@ class MainActivity : FragmentActivity() {
                     }
                     maybeAttachDetectedBtcDepositToActiveSwap(tabId, url, nodes)
                 },
+                onHttp402Challenge = { tabId, responseUrl, wwwAuthenticate, fallbackMetaJson ->
+                    handleHttp402Challenge(
+                        tabId = tabId,
+                        responseUrl = responseUrl,
+                        wwwAuthenticateHeader = wwwAuthenticate,
+                        fallbackMetaJson = fallbackMetaJson,
+                    )
+                },
+                onHttp200Loaded = { tabId, responseUrl ->
+                    handleTabHttp200Loaded(tabId, responseUrl)
+                },
             )
             tabSessionManager = TabSessionManager(
                 context = this,
@@ -805,6 +828,11 @@ class MainActivity : FragmentActivity() {
                         }
 
                         else -> false
+                    }
+                },
+                onMainFrameHttpStatus = { tabId, statusCode, url ->
+                    if (statusCode in 200..299) {
+                        handleTabHttp200Loaded(tabId, url)
                     }
                 },
             )
@@ -916,6 +944,7 @@ class MainActivity : FragmentActivity() {
                 }
                 val computedPreview = activeSnapshotView ?: previousEntry?.toBackPreviewState()
                 val canNavigateBack = (activeTab?.canGoBack == true) || (previousEntry != null)
+                val tabChallenge = uiState.xmr.challengesByTab[effectiveActiveId]
 
                 uiState = uiState.copy(
                     url = activeTab?.url ?: "about:blank",
@@ -931,6 +960,14 @@ class MainActivity : FragmentActivity() {
                     zoomPercent = activeTab?.zoomPercent ?: prefs.defaultZoomPercent,
                     podsRetracted = snapshot.podsRetracted,
                     pgp = uiState.pgp.copy(fields = liveNodes),
+                    xmr = uiState.xmr.copy(
+                        active402Challenge = tabChallenge,
+                        xmr402SheetOpen = if (tabChallenge == null) {
+                            false
+                        } else {
+                            uiState.xmr.xmr402SheetOpen && effectiveActiveId !in uiState.xmr.dismissed402TabIds
+                        },
+                    ),
                 )
                 mediaDisplayNormalizer.applyWindowHdrHeadroom(
                     window = window,
@@ -1098,6 +1135,7 @@ class MainActivity : FragmentActivity() {
 
         val effectiveTabId = targetTabId ?: tabSessionManager.activeTabId.value
             ?: tabSessionManager.ensureInitialTab()
+        clearTab402UiState(effectiveTabId)
         val decision = tabSessionManager.loadUrl(trimmed, effectiveTabId)
         if (!decision.allowed &&
             !decision.requiresClearnetConsent &&
@@ -1332,6 +1370,7 @@ class MainActivity : FragmentActivity() {
         if (!controllersReady) return
         activeSnapshotView = null
         resetFindInPage()
+        clearTab402UiState(tabId, clearAdHocSwap = true)
         tabSessionManager.closeTab(tabId)
         refreshTorStatusNow()
         syncPipParams()
@@ -1648,7 +1687,8 @@ class MainActivity : FragmentActivity() {
             uiState.pgp.decryptPassphraseRequest != null ||
             uiState.pgp.plaintext != null ||
             uiState.xmr.walletSheetOpen ||
-            uiState.xmr.swapSheetOpen
+            uiState.xmr.swapSheetOpen ||
+            uiState.xmr.xmr402SheetOpen
         ) {
             uiState = uiState.copy(
                 contextMenu = null,
@@ -1663,6 +1703,7 @@ class MainActivity : FragmentActivity() {
                 xmr = uiState.xmr.copy(
                     walletSheetOpen = false,
                     swapSheetOpen = false,
+                    xmr402SheetOpen = false,
                     revealedMnemonic = null,
                 ),
             )
@@ -1861,6 +1902,7 @@ class MainActivity : FragmentActivity() {
                 uiState.xmr.copy(
                     walletSheetOpen = false,
                     swapSheetOpen = false,
+                    xmr402SheetOpen = false,
                     revealedMnemonic = null,
                     newlyCreatedMnemonic = null,
                 )
@@ -2422,6 +2464,7 @@ class MainActivity : FragmentActivity() {
                 selectedText = target.selectedText,
                 classificationKind = target.textClassification?.kind ?: "plain",
                 armoredPayload = target.textClassification?.armored.orEmpty(),
+                fingerprintHint = target.textClassification?.fingerprintHint.orEmpty(),
             ),
         )
     }
@@ -2509,6 +2552,7 @@ class MainActivity : FragmentActivity() {
                 walletSheetOpen = true,
                 walletInitialTab = initialTab,
                 swapSheetOpen = false,
+                xmr402SheetOpen = false,
                 error = null,
             ),
         )
@@ -2530,6 +2574,7 @@ class MainActivity : FragmentActivity() {
             xmr = uiState.xmr.copy(
                 swapSheetOpen = true,
                 walletSheetOpen = false,
+                xmr402SheetOpen = false,
                 error = null,
             ),
         )
@@ -2550,6 +2595,7 @@ class MainActivity : FragmentActivity() {
             xmr = uiState.xmr.copy(
                 walletSheetOpen = true,
                 swapSheetOpen = false,
+                xmr402SheetOpen = false,
                 walletInitialTab = MoneroWalletTab.Send,
                 prefillSendAddress = payment.address,
                 prefillSendAmount = payment.amountXmr,
@@ -2558,6 +2604,332 @@ class MainActivity : FragmentActivity() {
             ),
         )
         refreshXmrStatus()
+    }
+
+    private fun openSendXmrFromSelection(addressOrUri: String, amountHint: String) {
+        dismissContextMenu()
+        dismissSelectionPgp()
+        val trimmed = addressOrUri.trim()
+        val parsed = OvNative.parseMoneroUri(trimmed)
+            ?: OvNative.extractStandaloneMoneroAddress(trimmed)?.let { extracted ->
+                OvNative.parseMoneroUri(extracted)
+                    ?: OvNative.MoneroPaymentRequest(
+                        address = extracted,
+                        amountXmr = amountHint.trim(),
+                    )
+            }
+            ?: OvNative.MoneroPaymentRequest(
+                address = trimmed,
+                amountXmr = amountHint.trim(),
+            )
+        openMoneroSendWithPayment(parsed)
+    }
+
+    private fun openXmr402Modal() {
+        val activeId = (if (controllersReady) tabSessionManager.activeTabId.value else null)
+            ?: uiState.activeTabId
+        uiState = uiState.copy(
+            xmr = uiState.xmr.copy(
+                xmr402SheetOpen = true,
+                walletSheetOpen = false,
+                swapSheetOpen = false,
+                dismissed402TabIds = uiState.xmr.dismissed402TabIds - activeId,
+                error = null,
+            ),
+        )
+        refreshXmrStatus()
+    }
+
+    private fun dismissXmr402Modal() {
+        val activeId = (if (controllersReady) tabSessionManager.activeTabId.value else null)
+            ?: uiState.activeTabId
+        uiState = uiState.copy(
+            xmr = uiState.xmr.copy(
+                xmr402SheetOpen = false,
+                dismissed402TabIds = uiState.xmr.dismissed402TabIds + activeId,
+                error = null,
+            ),
+        )
+    }
+
+    private fun clearTab402UiState(tabId: String, clearAdHocSwap: Boolean = false) {
+        if (tabId.isBlank()) return
+        val nextChallenges = uiState.xmr.challengesByTab - tabId
+        val nextDismissed = uiState.xmr.dismissed402TabIds - tabId
+        val nextAdHoc = if (clearAdHocSwap) {
+            uiState.xmr.adHocSwapByTab - tabId
+        } else {
+            uiState.xmr.adHocSwapByTab
+        }
+        val activeId = (if (controllersReady) tabSessionManager.activeTabId.value else null)
+            ?: uiState.activeTabId
+        val isActive = tabId == activeId
+        uiState = uiState.copy(
+            xmr = uiState.xmr.copy(
+                challengesByTab = nextChallenges,
+                dismissed402TabIds = nextDismissed,
+                adHocSwapByTab = nextAdHoc,
+                active402Challenge = if (isActive) null else uiState.xmr.active402Challenge,
+                xmr402SheetOpen = if (isActive) false else uiState.xmr.xmr402SheetOpen,
+            ),
+        )
+    }
+
+    private fun handleTabHttp200Loaded(tabId: String, @Suppress("UNUSED_PARAMETER") url: String) {
+        if (tabId !in uiState.xmr.challengesByTab &&
+            (tabId != uiState.activeTabId || uiState.xmr.active402Challenge == null)
+        ) {
+            return
+        }
+        clearTab402UiState(tabId)
+    }
+
+    private fun handleHttp402Challenge(
+        tabId: String,
+        responseUrl: String,
+        wwwAuthenticateHeader: String,
+        fallbackMetaJson: String,
+    ) {
+        if (!OvNative.isLoaded) return
+        val cleanUrl = responseUrl.trim()
+        if (wwwAuthenticateHeader.isBlank() && fallbackMetaJson.isBlank()) return
+        lifecycleScope.launch {
+            val (parsedChallenge, statusSnap) = withContext(Dispatchers.IO) {
+                val raw = runCatching {
+                    OvNative.nativeXmrParse402ChallengeJson(
+                        wwwAuthenticateHeader,
+                        fallbackMetaJson,
+                        cleanUrl,
+                    )
+                }.getOrDefault("")
+                val challenge = OvNative.parseXmr402Challenge(raw)
+                val statusJson = runCatching { OvNative.nativeXmrStatusJson() }.getOrDefault("")
+                challenge to OvNative.parseXmrStatus(statusJson)
+            }
+            if (!parsedChallenge.ok) return@launch
+
+            val activeId = (if (controllersReady) tabSessionManager.activeTabId.value else null)
+                ?: uiState.activeTabId
+            val isActive = tabId == activeId
+            val nextChallenges = uiState.xmr.challengesByTab + (tabId to parsedChallenge)
+            val shouldOpenSheet = isActive &&
+                tabId !in uiState.xmr.dismissed402TabIds &&
+                !uiState.xmr.walletSheetOpen &&
+                !uiState.xmr.swapSheetOpen
+
+            uiState = uiState.copy(
+                xmr = uiState.xmr.copy(
+                    status = statusSnap,
+                    challengesByTab = nextChallenges,
+                    active402Challenge = if (isActive) parsedChallenge else uiState.xmr.active402Challenge,
+                    xmr402SheetOpen = if (isActive) {
+                        uiState.xmr.xmr402SheetOpen || shouldOpenSheet
+                    } else {
+                        uiState.xmr.xmr402SheetOpen
+                    },
+                    error = null,
+                ),
+            )
+        }
+    }
+
+    private fun adoptPageDaemonAndSync(daemonUrl: String) {
+        if (!OvNative.isLoaded) {
+            setXmrError("Native Monero wallet engine is unavailable.")
+            return
+        }
+        val cleanEndpoint = daemonUrl.trim()
+        if (cleanEndpoint.isEmpty()) return
+        uiState = uiState.copy(
+            xmr = uiState.xmr.copy(syncing = true, error = null),
+        )
+        lifecycleScope.launch {
+            val finalStatus = withContext(Dispatchers.IO) {
+                val setJson = runCatching {
+                    OvNative.nativeXmrSetDaemonEndpointJson(cleanEndpoint, "monerod_onion")
+                }.getOrDefault("")
+                val afterSet = OvNative.parseXmrStatus(setJson)
+                if (!afterSet.ok || !afterSet.hasWallet) {
+                    afterSet
+                } else {
+                    val syncJson = runCatching { OvNative.nativeXmrSyncJson() }.getOrDefault("")
+                    val synced = OvNative.parseXmrStatus(syncJson)
+                    if (synced.hasWallet) synced else afterSet
+                }
+            }
+            uiState = uiState.copy(
+                xmr = uiState.xmr.copy(
+                    status = finalStatus,
+                    syncing = false,
+                    error = if (!finalStatus.ok) {
+                        finalStatus.error.ifBlank { "Could not sync page .onion node." }
+                    } else {
+                        null
+                    },
+                ),
+            )
+        }
+    }
+
+    private fun payXmr402AndUnlock(challenge: OvNative.Xmr402Challenge) {
+        if (!OvNative.isLoaded) {
+            setXmrError("Native Monero wallet engine is unavailable.")
+            return
+        }
+        if (uiState.xmr.paying402) return
+        authenticateBiometricIfRequired(
+            subtitle = "Authenticate to pay ${challenge.amountXmr} XMR and unlock HTTP 402 resource",
+        ) {
+            uiState = uiState.copy(
+                xmr = uiState.xmr.copy(paying402 = true, error = null),
+            )
+            lifecycleScope.launch {
+                val (payRes, statusSnap) = withContext(Dispatchers.IO) {
+                    val rawPay = runCatching {
+                        OvNative.nativeXmrPay402Json(challenge.toChallengeJson())
+                    }.getOrDefault("")
+                    val parsedPay = OvNative.parseXmr402PayResult(rawPay)
+                    val rawStatus = runCatching { OvNative.nativeXmrStatusJson() }.getOrDefault("")
+                    parsedPay to OvNative.parseXmrStatus(rawStatus)
+                }
+                if (payRes.ok && payRes.authorizationHeader.isNotBlank()) {
+                    val targetTabId = (if (controllersReady) tabSessionManager.activeTabId.value else null)
+                        ?: uiState.activeTabId
+                    val targetUrl = challenge.pageUrl.ifBlank {
+                        (if (controllersReady) tabSessionManager.activeTab()?.url else null)
+                            ?: uiState.url
+                    }
+                    uiState = uiState.copy(
+                        xmr = uiState.xmr.copy(
+                            status = statusSnap,
+                            paying402 = false,
+                            xmr402SheetOpen = false,
+                            active402Challenge = null,
+                            challengesByTab = uiState.xmr.challengesByTab - targetTabId,
+                            dismissed402TabIds = uiState.xmr.dismissed402TabIds - targetTabId,
+                            lastTxid = payRes.txid.takeIf { it.isNotBlank() },
+                            lastFeeXmr = payRes.feeXmr.takeIf { it.isNotBlank() },
+                            error = null,
+                        ),
+                    )
+                    if (controllersReady && targetUrl.isNotBlank()) {
+                        tabSessionManager.replayWithXmr402Authorization(
+                            tabId = targetTabId,
+                            targetUrl = targetUrl,
+                            authorizationHeader = payRes.authorizationHeader,
+                        )
+                    }
+                } else {
+                    uiState = uiState.copy(
+                        xmr = uiState.xmr.copy(
+                            status = statusSnap,
+                            paying402 = false,
+                            error = payRes.error.ifBlank { "XMR402 payment failed." },
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun proveXmrTx(txid: String, recipientAddress: String, message: String) {
+        if (!OvNative.isLoaded) {
+            setXmrError("Native Monero wallet engine is unavailable.")
+            return
+        }
+        val cleanTxid = txid.trim()
+        if (cleanTxid.isEmpty()) return
+        authenticateBiometricIfRequired(
+            subtitle = "Authenticate to generate canonical OutProofV2 payment proof",
+        ) {
+            uiState = uiState.copy(
+                xmr = uiState.xmr.copy(provingTxid = cleanTxid, error = null),
+            )
+            lifecycleScope.launch {
+                val proofRes = withContext(Dispatchers.IO) {
+                    val raw = runCatching {
+                        OvNative.nativeXmrProveTxJson(
+                            cleanTxid,
+                            recipientAddress.trim(),
+                            message,
+                        )
+                    }.getOrDefault("")
+                    OvNative.parseXmrTxProof(raw)
+                }
+                uiState = uiState.copy(
+                    xmr = uiState.xmr.copy(
+                        provingTxid = null,
+                        lastTxProof = proofRes,
+                        error = if (!proofRes.ok) {
+                            proofRes.error.ifBlank { "Could not generate OutProofV2." }
+                        } else {
+                            null
+                        },
+                    ),
+                )
+            }
+        }
+    }
+
+    private fun copyOrMintSiteSubaddress(pageUrl: String) {
+        if (!OvNative.isLoaded) return
+        val host = extractHostForSiteSubaddress(pageUrl)
+        if (isBlankOrStartUrl(pageUrl) || host.isEmpty()) {
+            val activeAddr = uiState.xmr.status.activeSubaddress.ifBlank {
+                uiState.xmr.status.primaryAddress
+            }
+            if (activeAddr.isNotBlank()) {
+                copyToClipboard(
+                    label = "Monero Subaddress",
+                    text = activeAddr,
+                    toastMessage = "Copied active 8… subaddress",
+                )
+            }
+            return
+        }
+        lifecycleScope.launch {
+            val (subRes, statusSnap) = withContext(Dispatchers.IO) {
+                val rawSub = runCatching {
+                    OvNative.nativeXmrNewSubaddressJson("site:$host")
+                }.getOrDefault("")
+                val parsedSub = OvNative.parseXmrNewSubaddressResult(rawSub)
+                val rawStatus = runCatching { OvNative.nativeXmrStatusJson() }.getOrDefault("")
+                parsedSub to OvNative.parseXmrStatus(rawStatus)
+            }
+            if (subRes.ok && subRes.address.isNotBlank()) {
+                uiState = uiState.copy(
+                    xmr = uiState.xmr.copy(status = statusSnap, error = null),
+                )
+                copyToClipboard(
+                    label = "Site Monero Subaddress",
+                    text = subRes.address,
+                    toastMessage = "Copied site-isolated 8… subaddress (#${subRes.index})",
+                )
+            } else {
+                setXmrError(subRes.error.ifBlank { "Could not mint site subaddress." })
+            }
+        }
+    }
+
+    private fun extractHostForSiteSubaddress(rawUrl: String): String {
+        if (isBlankOrStartUrl(rawUrl)) return ""
+        val trimmed = rawUrl.trim()
+        if (!trimmed.startsWith("http://", ignoreCase = true) &&
+            !trimmed.startsWith("https://", ignoreCase = true)
+        ) {
+            return ""
+        }
+        return trimmed
+            .removePrefix("https://")
+            .removePrefix("HTTPS://")
+            .removePrefix("http://")
+            .removePrefix("HTTP://")
+            .substringBefore('/')
+            .substringBefore('?')
+            .substringBefore('#')
+            .substringBefore(':')
+            .trimEnd('.')
+            .lowercase()
     }
 
     private fun refreshXmrStatus() {
@@ -2843,7 +3215,9 @@ class MainActivity : FragmentActivity() {
                             newlyCreatedMnemonic = null,
                             lastTxid = null,
                             lastFeeXmr = null,
+                            lastTxProof = null,
                             activeSwapTabMap = emptyMap(),
+                            adHocSwapByTab = emptyMap(),
                             error = null,
                         ),
                     )
@@ -3010,17 +3384,19 @@ class MainActivity : FragmentActivity() {
             return
         }
         val activeTabId = if (controllersReady) tabSessionManager.activeTabId.value.orEmpty() else ""
-        val mappedSwapSubaddress = uiState.xmr.activeSwapForTab(activeTabId)
-            ?.subaddress
+        val activeTabUrl = (if (controllersReady) tabSessionManager.activeTab()?.url else null)
             ?.takeIf { it.isNotBlank() }
+            ?: uiState.url
+        val pageHost = extractHostForSiteSubaddress(activeTabUrl)
+        val dedicatedSwapSubaddress = uiState.xmr.dedicatedSwapSubaddressForTab(activeTabId)
 
         lifecycleScope.launch {
             val resolved = withContext(Dispatchers.IO) {
-                if (!mappedSwapSubaddress.isNullOrBlank()) {
+                if (!dedicatedSwapSubaddress.isNullOrBlank()) {
                     val statusSnap = OvNative.parseXmrStatus(
                         runCatching { OvNative.nativeXmrStatusJson() }.getOrDefault(""),
                     )
-                    return@withContext Triple(mappedSwapSubaddress, null as String?, statusSnap)
+                    return@withContext Triple(dedicatedSwapSubaddress, null as String?, statusSnap)
                 }
 
                 var createdSeed: String? = null
@@ -3043,7 +3419,19 @@ class MainActivity : FragmentActivity() {
                 }
 
                 var subaddress = statusSnap.activeSubaddress.trim()
-                if (subaddress.isEmpty() || !subaddress.startsWith("8")) {
+                if (pageHost.isNotEmpty()) {
+                    val siteMinted = OvNative.parseXmrNewSubaddressResult(
+                        runCatching {
+                            OvNative.nativeXmrNewSubaddressJson("site:$pageHost")
+                        }.getOrDefault(""),
+                    )
+                    if (siteMinted.ok && siteMinted.address.isNotBlank()) {
+                        subaddress = siteMinted.address
+                    }
+                    statusSnap = OvNative.parseXmrStatus(
+                        runCatching { OvNative.nativeXmrStatusJson() }.getOrDefault(""),
+                    )
+                } else if (subaddress.isEmpty() || !subaddress.startsWith("8")) {
                     val minted = OvNative.parseXmrNewSubaddressResult(
                         runCatching {
                             OvNative.nativeXmrNewSubaddressJson("Swap Payout")
@@ -3086,21 +3474,75 @@ class MainActivity : FragmentActivity() {
         url: String,
         nodes: List<CdpDomPgpController.DetectedPgpNode>,
     ) {
-        if (!OvNative.isLoaded || nodes.isEmpty()) return
+        if (!OvNative.isLoaded) return
         val btcNode = nodes.firstOrNull {
             it.kind == "btc_deposit_address" && it.text.isNotBlank()
-        } ?: return
-
-        val candidateSwap = uiState.xmr.activeSwapForTab(tabId)
-            ?.takeIf { it.status == "awaiting_form" || it.status == "awaiting_btc_deposit" }
-            ?: return
+        }
+        if (btcNode == null) {
+            val existingAdHoc = uiState.xmr.adHocSwapByTab[tabId]
+            if (existingAdHoc != null) {
+                val prevHost = extractHostForSiteSubaddress(existingAdHoc.orderUrl)
+                val nextHost = extractHostForSiteSubaddress(url)
+                if (isBlankOrStartUrl(url) || (prevHost.isNotEmpty() && nextHost.isNotEmpty() && prevHost != nextHost)) {
+                    uiState = uiState.copy(
+                        xmr = uiState.xmr.copy(adHocSwapByTab = uiState.xmr.adHocSwapByTab - tabId),
+                    )
+                }
+            }
+            return
+        }
 
         val detectedAddr = btcNode.text.trim()
         val detectedAmt = btcNode.fingerprintHint.trim()
         val cleanOrderUrl = url.trim()
-        if (candidateSwap.status == "awaiting_btc_deposit" &&
-            candidateSwap.btcDepositAddress == detectedAddr &&
-            (cleanOrderUrl.isEmpty() || candidateSwap.orderUrl == cleanOrderUrl)
+
+        val mappedId = uiState.xmr.activeSwapTabMap[tabId]
+        val persistedCandidate = (if (!mappedId.isNullOrBlank()) {
+            uiState.xmr.status.swaps.firstOrNull { it.swapId == mappedId }
+        } else {
+            null
+        } ?: uiState.xmr.status.swaps.firstOrNull {
+            it.status == "awaiting_form" || it.status == "awaiting_btc_deposit"
+        })?.takeIf { it.status == "awaiting_form" || it.status == "awaiting_btc_deposit" }
+
+        if (persistedCandidate == null) {
+            val pageHost = extractHostForSiteSubaddress(cleanOrderUrl)
+            val providerLabel = when {
+                pageHost.endsWith(".onion") -> truncateOnionPreservingTail(pageHost)
+                pageHost.isNotEmpty() -> pageHost
+                else -> "Tor Swap"
+            }
+            val adHocId = "adhoc-$tabId"
+            val adHocSwap = OvNative.TrackedBtcXmrSwap(
+                swapId = adHocId,
+                provider = providerLabel,
+                btcAmount = detectedAmt,
+                launchUrl = cleanOrderUrl,
+                subaddressIndex = uiState.xmr.status.activeSubaddressIndex,
+                subaddress = uiState.xmr.status.activeSubaddress.ifBlank {
+                    uiState.xmr.status.primaryAddress
+                },
+                btcDepositAddress = detectedAddr,
+                btcDepositAmount = detectedAmt,
+                orderUrl = cleanOrderUrl,
+                status = "awaiting_btc_deposit",
+            )
+            val existing = uiState.xmr.adHocSwapByTab[tabId]
+            if (existing?.btcDepositAddress == detectedAddr && existing.orderUrl == cleanOrderUrl) {
+                return
+            }
+            uiState = uiState.copy(
+                xmr = uiState.xmr.copy(
+                    adHocSwapByTab = uiState.xmr.adHocSwapByTab + (tabId to adHocSwap),
+                    dismissedHudSwapIds = uiState.xmr.dismissedHudSwapIds - adHocId,
+                ),
+            )
+            return
+        }
+
+        if (persistedCandidate.status == "awaiting_btc_deposit" &&
+            persistedCandidate.btcDepositAddress == detectedAddr &&
+            (cleanOrderUrl.isEmpty() || persistedCandidate.orderUrl == cleanOrderUrl)
         ) {
             return
         }
@@ -3108,11 +3550,11 @@ class MainActivity : FragmentActivity() {
         lifecycleScope.launch {
             val updatedStatus = withContext(Dispatchers.IO) {
                 val actionJson = OvNative.buildSwapUpdateOrderActionJson(
-                    swapId = candidateSwap.swapId,
+                    swapId = persistedCandidate.swapId,
                     btcDepositAddress = detectedAddr,
-                    btcDepositAmount = detectedAmt.ifBlank { candidateSwap.btcAmount },
-                    providerOrderId = candidateSwap.providerOrderId,
-                    orderUrl = cleanOrderUrl.ifBlank { candidateSwap.orderUrl },
+                    btcDepositAmount = detectedAmt.ifBlank { persistedCandidate.btcAmount },
+                    providerOrderId = persistedCandidate.providerOrderId,
+                    orderUrl = cleanOrderUrl.ifBlank { persistedCandidate.orderUrl },
                     status = "awaiting_btc_deposit",
                 )
                 runCatching { OvNative.nativeXmrSwapsActionJson(actionJson) }
@@ -3122,7 +3564,7 @@ class MainActivity : FragmentActivity() {
             uiState = uiState.copy(
                 xmr = uiState.xmr.copy(
                     status = updatedStatus,
-                    dismissedHudSwapIds = uiState.xmr.dismissedHudSwapIds - candidateSwap.swapId,
+                    dismissedHudSwapIds = uiState.xmr.dismissedHudSwapIds - persistedCandidate.swapId,
                 ),
             )
         }

@@ -74,6 +74,7 @@ class TabSessionManager(
     private val onNavigationRecovered: (tabId: String) -> Unit = {},
     private val onMoneroUriIntercepted: (OvNative.MoneroPaymentRequest) -> Unit = {},
     private val onInternalRouteIntercepted: (String) -> Boolean = { false },
+    private val onMainFrameHttpStatus: (tabId: String, statusCode: Int, url: String) -> Unit = { _, _, _ -> },
 ) {
 
     data class TabState(
@@ -139,6 +140,7 @@ class TabSessionManager(
         var onionAutoRetryScheduled: Boolean = false,
         var lastBrowserLoadingState: Boolean = false,
         var pendingRetryRunnable: Runnable? = null,
+        var armedXmr402ReplayUrl: String? = null,
     )
 
     private inner class TouchGateFrameLayout(
@@ -1036,6 +1038,9 @@ class TabSessionManager(
                             lastBlockReason = null,
                         )
                     }
+                    managed.armedXmr402ReplayUrl = null
+                    cdpController.clearTab402State(targetTabId)
+                    cdpController.clearExtraHttpHeaders(targetTabId, browser)
                     browser?.loadUrl(candidate)
                     return OvNative.UrlPolicyResult(
                         allowed = true,
@@ -1132,8 +1137,79 @@ class TabSessionManager(
             )
         }
 
+        managed.armedXmr402ReplayUrl = null
+        cdpController.clearTab402State(targetTabId)
+        cdpController.clearExtraHttpHeaders(targetTabId, browser)
         browser?.loadUrl(normalized)
         return decision
+    }
+
+    /**
+     * Replays [targetUrl] on [tabId] with a single-shot `Authorization: XMR402 ...` HTTP header
+     * via `Network.setExtraHTTPHeaders`. Extra headers are cleared back to `{"headers":{}}`
+     * immediately in `SessionCallback.onLoadEnd` (or on any subsequent `loadUrl`) so credentials
+     * never leak to other navigations or origins.
+     */
+    fun replayWithXmr402Authorization(
+        tabId: String = _activeTabId.value.orEmpty(),
+        targetUrl: String,
+        authorizationHeader: String,
+        onDispatched: (Boolean) -> Unit = {},
+    ): Boolean {
+        val managed = sessions[tabId]
+        val cleanUrl = targetUrl.trim()
+        val cleanAuth = authorizationHeader.trim()
+        if (managed == null || cleanUrl.isEmpty() || cleanAuth.isEmpty()) {
+            onDispatched(false)
+            return false
+        }
+        val decision = evaluateUrlPolicy(cleanUrl, _hiddenServiceOnly.value)
+        if (!decision.allowed && OvNative.isLoaded) {
+            onUrlBlocked(tabId, cleanUrl, decision.reason)
+            onDispatched(false)
+            return false
+        }
+        val normalized = if (OvNative.isLoaded) {
+            decision.normalizedUrl.ifBlank { cleanUrl }
+        } else {
+            cleanUrl
+        }
+
+        cancelOnionAutoRetry(managed, resetBudget = true)
+        if (decision.isOnion || isOnionAddress(normalized)) {
+            managed.onionOriginalTargetUrl = normalized
+            managed.onionNavStartedElapsedMs = elapsedRealtimeClock()
+        }
+        managed.overrideDisplayUrl = null
+        managed.pendingNavigationUrl = normalized
+        managed.armedXmr402ReplayUrl = normalized
+        cdpController.clearTab402State(tabId)
+        if (tabId == _activeTabId.value) {
+            _podsRetracted.value = false
+        }
+        updateTabState(tabId) {
+            it.copy(
+                url = normalized,
+                isLoading = true,
+                loadProgress = 15,
+                isOnion = decision.isOnion || isOnionAddress(normalized),
+                lastBlockedUrl = null,
+                lastBlockReason = null,
+            )
+        }
+        val browser = managed.browser
+        if (browser == null) {
+            onDispatched(true)
+            return true
+        }
+        cdpController.replayWithXmr402Authorization(
+            tabId = tabId,
+            browser = browser,
+            targetUrl = normalized,
+            authorizationHeader = cleanAuth,
+            onDispatched = onDispatched,
+        )
+        return true
     }
 
     /**
@@ -1917,7 +1993,9 @@ class TabSessionManager(
                 val cleanMedia = srcUrl?.trim()?.takeIf { it.isNotEmpty() }
                 val selected = selectionText?.trim()?.takeIf { it.isNotEmpty() }
                     ?: runCatching { browser.selectedText }.getOrNull()?.trim()?.takeIf { it.isNotEmpty() }
-                val classification = selected?.let { classifySelectedText(it) }?.takeIf { it.isPgp }
+                val classification = selected
+                    ?.let { classifySelectedText(it) }
+                    ?.takeIf { it.isPgp || it.isMoneroAddress }
                 if (cleanLink != null || cleanMedia != null || selected != null) {
                     onContextMenu(
                         ContextMenuTarget(
@@ -1933,6 +2011,24 @@ class TabSessionManager(
         }
 
         browser.setSessionCallback(object : CefpackSession.SessionCallback {
+            override fun onLoadEnd(httpStatusCode: Int, isMainFrame: Boolean, url: String?) {
+                if (!isMainFrame) return
+                mainHandler.post {
+                    val managed = sessions[tabId]
+                    managed?.armedXmr402ReplayUrl = null
+                    cdpController.clearExtraHttpHeaders(tabId, browser)
+                    val effectiveUrl = url?.trim()?.takeIf { it.isNotEmpty() }
+                        ?: managed?.overrideDisplayUrl
+                        ?: browser.url.orEmpty()
+                    if (httpStatusCode > 0 && effectiveUrl.isNotBlank()) {
+                        onMainFrameHttpStatus(tabId, httpStatusCode, effectiveUrl)
+                    }
+                    if (httpStatusCode == 402 && effectiveUrl.isNotBlank()) {
+                        cdpController.attachAndScan(tabId, browser, effectiveUrl)
+                    }
+                }
+            }
+
             override fun onUrlChanged(url: String?) {
                 val rawTrimmed = url?.trim().orEmpty()
                 val rawSafeUrl = rawTrimmed.ifEmpty { "about:blank" }
@@ -2182,7 +2278,9 @@ class TabSessionManager(
             val selected = runCatching { browser.selectedText }.getOrNull()?.trim().orEmpty()
             if (selected.isNotEmpty()) {
                 val classification = classifySelectedText(selected)
-                if (classification.isPgp && classification.actionLabel.isNotBlank()) {
+                if ((classification.isPgp || classification.isMoneroAddress) &&
+                    classification.actionLabel.isNotBlank()
+                ) {
                     menu.add(Menu.NONE, MENU_ID_PGP_ACTION, Menu.FIRST, classification.actionLabel)
                         .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
                 }
@@ -2195,8 +2293,24 @@ class TabSessionManager(
                 val selected = runCatching { browser.selectedText }.getOrNull()?.trim().orEmpty()
                 if (selected.isNotEmpty()) {
                     val classification = classifySelectedText(selected)
-                    if (classification.isPgp) {
-                        onSelectionPgpAction(SelectionPgpAction(tabId, selected, classification))
+                    when {
+                        classification.isPgp -> {
+                            onSelectionPgpAction(SelectionPgpAction(tabId, selected, classification))
+                        }
+
+                        classification.isMoneroAddress -> {
+                            val candidate = classification.armored.ifBlank { selected }.trim()
+                            val payment = OvNative.parseMoneroUri(candidate)
+                                ?: candidate.takeIf { OvNative.isValidMoneroAddress(it) }?.let { addr ->
+                                    OvNative.MoneroPaymentRequest(
+                                        address = addr,
+                                        amountXmr = classification.fingerprintHint.trim(),
+                                    )
+                                }
+                            if (payment != null) {
+                                onMoneroUriIntercepted(payment)
+                            }
+                        }
                     }
                 }
                 mode.finish()
@@ -2372,8 +2486,27 @@ class TabSessionManager(
         return false
     }
 
-    private fun classifySelectedText(text: String): OvNative.TextClassification {
+    @VisibleForTesting
+    internal fun classifySelectedText(text: String): OvNative.TextClassification {
         if (!OvNative.isLoaded) {
+            val trimmed = text.trim()
+            OvNative.parseMoneroUri(trimmed)?.let { uriReq ->
+                return OvNative.TextClassification(
+                    kind = "monero_address",
+                    actionLabel = "Send XMR",
+                    armored = trimmed,
+                    fingerprintHint = uriReq.amountXmr,
+                )
+            }
+            OvNative.extractStandaloneMoneroAddress(trimmed)?.let { matched ->
+                val uriParsed = OvNative.parseMoneroUri(matched)
+                return OvNative.TextClassification(
+                    kind = "monero_address",
+                    actionLabel = "Send XMR",
+                    armored = matched,
+                    fingerprintHint = uriParsed?.amountXmr.orEmpty(),
+                )
+            }
             return OvNative.TextClassification()
         }
         val json = runCatching { OvNative.nativeClassifyText(text) }.getOrDefault("")
@@ -2631,6 +2764,8 @@ class TabSessionManager(
         }
 
         cancelOnionAutoRetry(managed, resetBudget = true)
+        managed.armedXmr402ReplayUrl = null
+        cdpController.clearExtraHttpHeaders(tabId, managed.browser)
         managed.hadErrorInCurrentLoad = true
         updateTabState(tabId) {
             it.copy(

@@ -2115,6 +2115,7 @@ fun MoneroWalletHardwarePod(
     onDismissNewSeedBackup: () -> Unit = {},
     onDeleteWallet: () -> Unit = {},
     onOpenSwap: () -> Unit = {},
+    onProveXmrTx: (txid: String, recipientAddress: String, message: String) -> Unit = { _, _, _ -> },
     onCopyText: (String) -> Unit = {},
 ) {
     val clipboard = LocalClipboardManager.current
@@ -2154,6 +2155,7 @@ fun MoneroWalletHardwarePod(
         mutableStateOf(status.syncEndpoint)
     }
     var confirmDeleteWallet by remember { mutableStateOf(false) }
+    var proofMessage by remember { mutableStateOf("") }
 
     HardwareModalFrame(
         title = "MONERO LIGHT WALLET",
@@ -2462,7 +2464,25 @@ fun MoneroWalletHardwarePod(
                 when (activeTab) {
                     MoneroWalletTab.Receive -> {
                         val activeAddr = status.activeSubaddress.ifBlank { status.primaryAddress }
+                        val receiveQrMatrix = if (activeAddr.isNotBlank()) {
+                            rememberNativeOrCachedQrMatrix("monero:$activeAddr", xmr.qrMatrices)
+                                ?: rememberNativeOrCachedQrMatrix(activeAddr, xmr.qrMatrices)
+                        } else {
+                            null
+                        }
                         HardwareSectionHeader("Active 8… Subaddress")
+                        if (receiveQrMatrix != null) {
+                            Box(
+                                modifier = Modifier.fillMaxWidth(),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                HardwareQrCodeBox(
+                                    matrix = receiveQrMatrix,
+                                    testTag = "xmr_receive_qr",
+                                    boxSize = 136.dp,
+                                )
+                            }
+                        }
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -2606,13 +2626,107 @@ fun MoneroWalletHardwarePod(
                                         )
                                     }
                                     Spacer(Modifier.width(8.dp))
-                                    HardwareStatusChip(
-                                        text = if (tx.unlocked) "UNLOCKED" else "LOCKED",
-                                        accent = if (tx.unlocked) {
+                                    if (!isIncoming && tx.hasProof) {
+                                        HardwareBezelButton(
+                                            text = if (xmr.provingTxid == tx.txid) "…" else "Proof",
+                                            compact = true,
+                                            primary = true,
+                                            enabled = xmr.provingTxid != tx.txid,
+                                            onClick = {
+                                                onProveXmrTx(
+                                                    tx.txid,
+                                                    tx.recipientAddress,
+                                                    proofMessage.trim(),
+                                                )
+                                            },
+                                            modifier = Modifier.testTag("xmr_tx_prove_${tx.txid.take(8)}"),
+                                        )
+                                    } else {
+                                        HardwareStatusChip(
+                                            text = if (tx.unlocked) "UNLOCKED" else "LOCKED",
+                                            accent = if (tx.unlocked) {
+                                                MetaToolsTokens.PhosphorOnionGreen
+                                            } else {
+                                                MetaToolsTokens.PhosphorLoadingAmber
+                                            },
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        if (xmr.lastTxProof != null) {
+                            val txProof = xmr.lastTxProof
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(MetaToolsTokens.CrtBlackGlass)
+                                    .border(
+                                        1.dp,
+                                        if (txProof.ok) {
                                             MetaToolsTokens.PhosphorOnionGreen
                                         } else {
-                                            MetaToolsTokens.PhosphorLoadingAmber
+                                            MetaToolsTokens.StreetMagenta
                                         },
+                                        RoundedCornerShape(10.dp),
+                                    )
+                                    .padding(10.dp)
+                                    .testTag("xmr_tx_proof_box"),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                HardwareSectionHeader("CANONICAL OUTPROOFV2")
+                                HardwareCrtTextField(
+                                    value = proofMessage,
+                                    onValueChange = { proofMessage = it },
+                                    placeholder = "Optional challenge message",
+                                    singleLine = true,
+                                    testTag = "xmr_tx_proof_message_input",
+                                )
+                                if (txProof.ok && txProof.proof.isNotBlank()) {
+                                    Text(
+                                        text = txProof.proof,
+                                        color = MetaToolsTokens.PhosphorOnionGreen,
+                                        fontSize = 11.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        maxLines = 4,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.testTag("xmr_tx_proof_text"),
+                                    )
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        HardwareBezelButton(
+                                            text = "Copy Proof",
+                                            primary = true,
+                                            compact = true,
+                                            onClick = { copyString(txProof.proof) },
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .testTag("xmr_copy_tx_proof_button"),
+                                        )
+                                        HardwareBezelButton(
+                                            text = "Regenerate",
+                                            compact = true,
+                                            enabled = xmr.provingTxid == null,
+                                            onClick = {
+                                                onProveXmrTx(
+                                                    txProof.txid,
+                                                    txProof.recipientAddress,
+                                                    proofMessage.trim(),
+                                                )
+                                            },
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .testTag("xmr_tx_proof_regen_button"),
+                                        )
+                                    }
+                                } else if (txProof.error.isNotBlank()) {
+                                    Text(
+                                        text = txProof.error,
+                                        color = MetaToolsTokens.StreetMagenta,
+                                        fontSize = 11.5.sp,
                                     )
                                 }
                             }
@@ -2620,7 +2734,43 @@ fun MoneroWalletHardwarePod(
                     }
 
                     MoneroWalletTab.Send -> {
-                        HardwareSectionHeader("Destination 4… / 8… Address or monero: URI")
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Text(
+                                text = "Destination 4… / 8… or URI",
+                                color = MetaToolsTokens.StencilInk,
+                                fontSize = 11.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace,
+                                modifier = Modifier.weight(1f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            HardwareBezelButton(
+                                text = "Paste",
+                                compact = true,
+                                onClick = {
+                                    val clip = clipboard.getText()?.text?.trim().orEmpty()
+                                    if (clip.isNotEmpty()) {
+                                        val parsedUri = OvNative.parseMoneroUri(clip)
+                                        if (parsedUri != null) {
+                                            destAddress = parsedUri.address
+                                            if (parsedUri.amountXmr.isNotBlank()) {
+                                                sweepAll = false
+                                                amountInput = parsedUri.amountXmr
+                                            }
+                                        } else {
+                                            destAddress = clip
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.testTag("xmr_send_paste_button"),
+                            )
+                        }
                         HardwareCrtTextField(
                             value = destAddress,
                             onValueChange = { input ->
@@ -3054,6 +3204,7 @@ fun BtcToXmrSwapHardwarePod(
             if (xmr.activeTrackedSwaps.isNotEmpty()) {
                 EngravedGrooveDivider()
                 HardwareSectionHeader("Tracked Swaps (${xmr.activeTrackedSwaps.size})")
+                var renderedPrimaryBtcQr = false
                 xmr.activeTrackedSwaps.forEach { swap ->
                     val statusBadge = when (swap.status) {
                         "completed" -> "COMPLETED"
@@ -3109,6 +3260,35 @@ fun BtcToXmrSwapHardwarePod(
                                 text = statusBadge,
                                 accent = statusAccent,
                             )
+                        }
+
+                        if (swap.btcDepositAddress.isNotBlank()) {
+                            val cleanDepAmt = swap.btcDepositAmount.ifBlank { swap.btcAmount }.trim()
+                            val btcUriPayload = if (cleanDepAmt.isNotEmpty()) {
+                                "bitcoin:${swap.btcDepositAddress}?amount=$cleanDepAmt"
+                            } else {
+                                "bitcoin:${swap.btcDepositAddress}"
+                            }
+                            val btcQr = rememberNativeOrCachedQrMatrix(btcUriPayload, xmr.qrMatrices)
+                                ?: rememberNativeOrCachedQrMatrix(swap.btcDepositAddress, xmr.qrMatrices)
+                            if (btcQr != null) {
+                                val qrTag = if (!renderedPrimaryBtcQr) {
+                                    renderedPrimaryBtcQr = true
+                                    "btc_deposit_qr"
+                                } else {
+                                    "btc_deposit_qr_${swap.swapId}"
+                                }
+                                Box(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    HardwareQrCodeBox(
+                                        matrix = btcQr,
+                                        testTag = qrTag,
+                                        boxSize = 132.dp,
+                                    )
+                                }
+                            }
                         }
 
                         Row(
@@ -3354,6 +3534,384 @@ fun ActiveSwapBrowserHud(
                             .weight(1f)
                             .testTag("active_swap_sync_button"),
                     )
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// 11. XMR402 (`HTTP 402 Payment Required`) Hardware Pod & Reopen Banner
+// ============================================================================
+
+@Composable
+fun Xmr402PaymentHardwarePod(
+    challenge: OvNative.Xmr402Challenge,
+    xmr: MoneroUiState,
+    onPayAndUnlock: (OvNative.Xmr402Challenge) -> Unit,
+    onUsePageDaemon: (daemonUrl: String) -> Unit,
+    onOpenSwap: () -> Unit,
+    onSyncWallet: () -> Unit,
+    onCreateWallet: (label: String) -> Unit,
+    onCopyText: (String) -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val clipboard = LocalClipboardManager.current
+    val status = xmr.status
+    val canAfford = status.hasWallet && OvNative.hasSufficientUnlockedAtomic(
+        unlockedAtomic = status.unlockedBalanceAtomic,
+        requiredAtomic = challenge.amountAtomic,
+        unlockedXmr = status.unlockedBalanceXmr,
+        requiredXmr = challenge.amountXmr,
+    )
+    val shortfallXmr = OvNative.formatAtomicShortfallXmr(
+        unlockedAtomic = status.unlockedBalanceAtomic,
+        requiredAtomic = challenge.amountAtomic,
+        unlockedXmr = status.unlockedBalanceXmr,
+        requiredXmr = challenge.amountXmr,
+    )
+    val pageDaemonDiffers = challenge.daemonUrl.isNotBlank() &&
+        !challenge.daemonUrl.trim().equals(status.syncEndpoint.trim(), ignoreCase = true)
+
+    fun copyString(text: String) {
+        if (text.isBlank()) return
+        runCatching { clipboard.setText(AnnotatedString(text)) }
+        onCopyText(text)
+    }
+
+    HardwareModalFrame(
+        title = "HTTP 402 · XMR402 GATE",
+        ledColor = if (canAfford) MetaToolsTokens.LedGreen else MetaToolsTokens.LedAmber,
+        onDismiss = onDismiss,
+        modifier = modifier.testTag("xmr402_payment_sheet"),
+    ) {
+        SensitiveContentEffect()
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f, fill = false)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MetaToolsTokens.CrtBlackGlass)
+                    .border(1.dp, MetaToolsTokens.GrooveHighlight, RoundedCornerShape(12.dp))
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        text = "${challenge.amountXmr} XMR",
+                        color = MetaToolsTokens.PhosphorLoadingAmber,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.testTag("xmr402_required_amount_text"),
+                    )
+                    Text(
+                        text = "Unlocked ${if (status.hasWallet) status.unlockedBalanceXmr else "0"} XMR",
+                        color = if (canAfford) {
+                            MetaToolsTokens.PhosphorOnionGreen
+                        } else {
+                            MetaToolsTokens.StencilInk
+                        },
+                        fontSize = 11.5.sp,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.testTag("xmr402_wallet_balance_text"),
+                    )
+                }
+
+                if (challenge.pageUrl.isNotBlank()) {
+                    Text(
+                        text = challenge.pageUrl,
+                        color = MetaToolsTokens.PhosphorClearnetCyan,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag("xmr402_resource_url_text"),
+                    )
+                }
+            }
+
+            HardwareSectionHeader("Recipient Monero Address")
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MetaToolsTokens.AnodizedRecessedWell)
+                    .border(1.dp, MetaToolsTokens.GrooveHighlight, RoundedCornerShape(10.dp))
+                    .clickable(
+                        role = Role.Button,
+                        onClick = { copyString(challenge.address) },
+                    )
+                    .padding(horizontal = 12.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = challenge.address,
+                    color = MetaToolsTokens.PhosphorOnionGreen,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("xmr402_recipient_address_text"),
+                )
+                Spacer(Modifier.width(8.dp))
+                HardwareStatusChip(
+                    text = "COPY",
+                    accent = MetaToolsTokens.PhosphorClearnetGreen,
+                )
+            }
+
+            if (pageDaemonDiffers) {
+                HardwareBezelButton(
+                    text = if (xmr.syncing) "Syncing Page Node…" else "Sync Page .onion Node",
+                    enabled = !xmr.syncing,
+                    onClick = { onUsePageDaemon(challenge.daemonUrl) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("xmr402_use_page_daemon_button"),
+                )
+            }
+
+            if (!xmr.error.isNullOrBlank()) {
+                Text(
+                    text = xmr.error,
+                    color = MetaToolsTokens.StreetMagenta,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.testTag("xmr402_error_text"),
+                )
+            }
+
+            if (canAfford) {
+                HardwareBezelButton(
+                    text = if (xmr.paying402) {
+                        "Signing Ring-16 & Unlocking…"
+                    } else {
+                        "Pay ${challenge.amountXmr} XMR & Unlock"
+                    },
+                    primary = true,
+                    enabled = !xmr.paying402,
+                    onClick = { onPayAndUnlock(challenge) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp)
+                        .testTag("xmr402_pay_unlock_button"),
+                )
+                HardwareBezelButton(
+                    text = "View 402 Page",
+                    enabled = !xmr.paying402,
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("xmr402_view_page_button"),
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(MetaToolsTokens.CrtBlackGlass)
+                        .border(1.dp, MetaToolsTokens.PhosphorLoadingAmber.copy(alpha = 0.7f), RoundedCornerShape(10.dp))
+                        .padding(10.dp),
+                ) {
+                    Text(
+                        text = if (!status.hasWallet) {
+                            "No Monero wallet yet — need ${challenge.amountXmr} XMR unlocked"
+                        } else {
+                            "Shortfall: $shortfallXmr XMR (need ${challenge.amountXmr} XMR unlocked)"
+                        },
+                        color = MetaToolsTokens.PhosphorLoadingAmber,
+                        fontSize = 11.5.sp,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.testTag("xmr402_shortfall_text"),
+                    )
+                }
+
+                if (!status.hasWallet) {
+                    HardwareBezelButton(
+                        text = if (xmr.creatingOrRestoring) {
+                            "Generating Seed…"
+                        } else {
+                            "Create 25-Word Wallet"
+                        },
+                        primary = true,
+                        enabled = !xmr.creatingOrRestoring,
+                        onClick = { onCreateWallet("Trap Light Wallet") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("xmr402_create_wallet_button"),
+                    )
+                }
+
+                HardwareBezelButton(
+                    text = "Open BTC → XMR Swap Quotes",
+                    primary = status.hasWallet,
+                    onClick = onOpenSwap,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("xmr402_fund_via_swap_button"),
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    HardwareBezelButton(
+                        text = "View 402 Page / Swap Desk",
+                        compact = true,
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("xmr402_view_page_button"),
+                    )
+                    HardwareBezelButton(
+                        text = if (xmr.syncing) "Syncing…" else "Sync Wallet",
+                        compact = true,
+                        enabled = status.hasWallet && !xmr.syncing,
+                        onClick = onSyncWallet,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("xmr402_sync_wallet_button"),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun Xmr402ReopenBanner(
+    challenge: OvNative.Xmr402Challenge,
+    onReopen: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val shape = RoundedCornerShape(14.dp)
+    Row(
+        modifier = modifier
+            .fillMaxWidth(0.92f)
+            .metaToolsDropShadow(cornerRadius = 14.dp)
+            .clip(shape)
+            .background(MetaToolsTokens.AnodizedSurface)
+            .border(1.2.dp, MetaToolsTokens.PhosphorLoadingAmber, shape)
+            .clickable(role = Role.Button, onClick = onReopen)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .testTag("xmr402_reopen_banner"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Canvas(modifier = Modifier.size(8.dp)) {
+            drawRecessedGlassLedBead(
+                center = center,
+                beadDiameterPx = 6.dp.toPx(),
+                litColor = MetaToolsTokens.LedAmber,
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = "HTTP 402 · ${challenge.amountXmr} XMR",
+            color = Color(0xFFF0F4F8),
+            fontSize = 12.5.sp,
+            fontWeight = FontWeight.Bold,
+            fontFamily = FontFamily.Monospace,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(8.dp))
+        HardwareBezelButton(
+            text = "Pay / Review",
+            primary = true,
+            compact = true,
+            onClick = onReopen,
+        )
+    }
+}
+
+// ============================================================================
+// 12. Scannable ISO/IEC 18004 QR Matrix Canvas (`HardwareQrCodeBox`)
+// ============================================================================
+
+@Composable
+internal fun rememberNativeOrCachedQrMatrix(
+    payload: String,
+    cachedMatrices: Map<String, OvNative.QrMatrixResult> = emptyMap(),
+): OvNative.QrMatrixResult? {
+    val clean = payload.trim()
+    if (clean.isEmpty()) return null
+    cachedMatrices[clean]
+        ?.takeIf { it.ok && it.size > 0 && it.rows.size == it.size }
+        ?.let { return it }
+    return remember(clean) {
+        if (OvNative.isLoaded) {
+            val raw = runCatching { OvNative.nativeXmrQrMatrixJson(clean) }.getOrDefault("")
+            OvNative.parseQrMatrix(raw).takeIf { it.ok && it.size > 0 && it.rows.size == it.size }
+        } else {
+            null
+        }
+    }
+}
+
+@Composable
+fun HardwareQrCodeBox(
+    matrix: OvNative.QrMatrixResult,
+    testTag: String,
+    modifier: Modifier = Modifier,
+    boxSize: Dp = 140.dp,
+) {
+    if (!matrix.ok || matrix.size <= 0 || matrix.rows.size != matrix.size) return
+    val quietZoneModules = 4
+    val totalModules = matrix.size + quietZoneModules * 2
+    val shape = RoundedCornerShape(12.dp)
+    Box(
+        modifier = modifier
+            .size(boxSize)
+            .clip(shape)
+            .background(MetaToolsTokens.CrtBlackGlass)
+            .border(1.dp, MetaToolsTokens.PhosphorOnionGreen.copy(alpha = 0.72f), shape)
+            .padding(8.dp)
+            .testTag(testTag),
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val side = minOf(size.width, size.height)
+            val originX = (size.width - side) / 2f
+            val originY = (size.height - side) / 2f
+            val modulePx = side / totalModules.toFloat()
+
+            // Crisp 4-module phosphor-green quiet zone + obsidian ('1') dark modules
+            drawRect(
+                color = MetaToolsTokens.PhosphorOnionGreen,
+                topLeft = Offset(originX, originY),
+                size = androidx.compose.ui.geometry.Size(side, side),
+            )
+            for (r in 0 until matrix.size) {
+                val row = matrix.rows[r]
+                val y = originY + (r + quietZoneModules) * modulePx
+                for (c in 0 until minOf(row.length, matrix.size)) {
+                    if (row[c] == '1') {
+                        val x = originX + (c + quietZoneModules) * modulePx
+                        drawRect(
+                            color = MetaToolsTokens.CrtBlackGlass,
+                            topLeft = Offset(x, y),
+                            size = androidx.compose.ui.geometry.Size(
+                                width = modulePx + 0.35f,
+                                height = modulePx + 0.35f,
+                            ),
+                        )
+                    }
                 }
             }
         }

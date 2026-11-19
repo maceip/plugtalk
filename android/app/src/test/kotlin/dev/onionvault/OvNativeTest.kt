@@ -11,27 +11,28 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
 /**
- * Verifies 1:1 JNI symbol parity across all 35 [OvNative] `external fun` declarations
+ * Verifies 1:1 JNI symbol parity across all 39 [OvNative] `external fun` declarations
  * and `src/lib.rs`'s `#[no_mangle] pub extern "system" fn Java_dev_onionvault_OvNative_*`
  * exports, along with JSON contract parsers for clearnet consent, Tor status,
- * Monero light wallet (`crates/ov-xmr`), and zero-JS BTC -> XMR Tor swap tracking.
+ * Monero light wallet (`crates/ov-xmr`), `XMR402` (`HTTP 402`), `OutProofV2`, QR matrices,
+ * and zero-JS BTC -> XMR Tor swap tracking.
  */
 @RunWith(RobolectricTestRunner::class)
 class OvNativeTest {
 
     @Test
-    fun every_external_method_has_a_matching_native_export_across_all_35_symbols() {
+    fun every_external_method_has_a_matching_native_export_across_all_39_symbols() {
         val declared = externalMethods()
         assertEquals(
-            "OvNative must declare exact 35 JNI external methods",
-            35,
+            "OvNative must declare exact 39 JNI external methods",
+            39,
             declared.size,
         )
 
         val exported = nativeExports()
         assertEquals(
-            "src/lib.rs must export exact 35 JNI functions",
-            35,
+            "src/lib.rs must export exact 39 JNI functions",
+            39,
             exported.size,
         )
 
@@ -285,6 +286,147 @@ class OvNativeTest {
         assertNull(OvNative.parseMoneroUri("https://example.org"))
         assertNull(OvNative.parseMoneroUri("monero:not_a_valid_monero_address"))
         assertNull(OvNative.parseMoneroUri("monero:$subAddr1?tx_amount=-1.5"))
+    }
+
+    @Test
+    fun xmr402_challenge_pay_tx_proof_and_qr_matrix_parsers_match_ov_xmr_contract() {
+        val vaultSubAddr =
+            "82ffYh7xRhFBvBHEHGV8TNRBoYucBFNoyYnwrJJjnMGpHKPWosZeB4BDr7pBG4DCux1WKepdAV6rRTimi1LqWMacF88hvQm"
+        val daemonOnion =
+            "http://citadel2222222222222222222222222222222222222222222222222d.onion:18081"
+        val pageUrl =
+            "http://citadel2222222222222222222222222222222222222222222222222d.onion/vault"
+
+        // 1. Xmr402Challenge parser + round-trip serialization
+        assertFalse(OvNative.parseXmr402Challenge("").ok)
+        val challenge = OvNative.parseXmr402Challenge(
+            """
+            {
+              "ok": true,
+              "scheme": "XMR402",
+              "pageUrl": "$pageUrl",
+              "address": "$vaultSubAddr",
+              "amountAtomic": "250000000000",
+              "amountXmr": "0.25",
+              "message": "xmr402-citadel-1732000500-a1b2c3d4e5f60718",
+              "timestamp": 1732000500,
+              "daemonUrl": "$daemonOnion",
+              "error": ""
+            }
+            """.trimIndent(),
+        )
+        assertTrue(challenge.ok)
+        assertEquals("XMR402", challenge.scheme)
+        assertEquals(pageUrl, challenge.pageUrl)
+        assertEquals(vaultSubAddr, challenge.address)
+        assertEquals("250000000000", challenge.amountAtomic)
+        assertEquals("0.25", challenge.amountXmr)
+        assertEquals("xmr402-citadel-1732000500-a1b2c3d4e5f60718", challenge.message)
+        assertEquals(1732000500L, challenge.timestamp)
+        assertEquals(daemonOnion, challenge.daemonUrl)
+        assertTrue(challenge.toChallengeJson().contains("xmr402-citadel-1732000500-a1b2c3d4e5f60718"))
+
+        // 2. Exact picomonero funding & shortfall math
+        assertFalse(OvNative.hasSufficientUnlockedAtomic("0", "250000000000"))
+        assertEquals("0.25", OvNative.formatAtomicShortfallXmr("0", "250000000000"))
+        assertEquals("0.15", OvNative.formatAtomicShortfallXmr("100000000000", "250000000000"))
+        assertTrue(OvNative.hasSufficientUnlockedAtomic("250000000000", "250000000000"))
+        assertTrue(OvNative.hasSufficientUnlockedAtomic("1000000000000", "250000000000"))
+
+        // 3. Xmr402PayResult parser
+        val sampleTxid = "f1e2d3c4b5a697887766554433221100ffeeddccbbaa99887766554433221100"
+        val sampleProof = "OutProofV2" + "1".repeat(132)
+        assertFalse(OvNative.parseXmr402PayResult("").ok)
+        val payRes = OvNative.parseXmr402PayResult(
+            """
+            {
+              "ok": true,
+              "txid": "$sampleTxid",
+              "proof": "$sampleProof",
+              "authorizationHeader": "XMR402 txid=\"$sampleTxid\", proof=\"$sampleProof\"",
+              "amountAtomic": "250000000000",
+              "amountXmr": "0.25",
+              "feeAtomic": "28600000",
+              "feeXmr": "0.0000286",
+              "error": ""
+            }
+            """.trimIndent(),
+        )
+        assertTrue(payRes.ok)
+        assertEquals(sampleTxid, payRes.txid)
+        assertTrue(payRes.proof.startsWith("OutProofV2"))
+        assertEquals(142, payRes.proof.length)
+        assertEquals("XMR402 txid=\"$sampleTxid\", proof=\"$sampleProof\"", payRes.authorizationHeader)
+        assertEquals("0.0000286", payRes.feeXmr)
+
+        // 4. XmrTxProofResult parser + additive hasProof/recipientAddress on XmrTxItem
+        assertFalse(OvNative.parseXmrTxProof("").ok)
+        val txProof = OvNative.parseXmrTxProof(
+            """
+            {
+              "ok": true,
+              "txid": "$sampleTxid",
+              "recipientAddress": "$vaultSubAddr",
+              "message": "audit-1",
+              "proof": "$sampleProof",
+              "authorizationHeader": "XMR402 txid=\"$sampleTxid\", proof=\"$sampleProof\"",
+              "error": ""
+            }
+            """.trimIndent(),
+        )
+        assertTrue(txProof.ok)
+        assertEquals(sampleTxid, txProof.txid)
+        assertEquals(vaultSubAddr, txProof.recipientAddress)
+        assertEquals(sampleProof, txProof.proof)
+        assertTrue(txProof.authorizationHeader.startsWith("XMR402 txid="))
+
+        val statusWithProofTx = OvNative.parseXmrStatus(
+            """
+            {
+              "ok": true,
+              "hasWallet": true,
+              "recentTxs": [
+                {
+                  "txid": "$sampleTxid",
+                  "direction": "out",
+                  "amountAtomic": "250000000000",
+                  "amountXmr": "0.25",
+                  "feeAtomic": "28600000",
+                  "feeXmr": "0.0000286",
+                  "height": 95,
+                  "timestamp": 1732000510,
+                  "subaddressIndex": 0,
+                  "unlocked": true,
+                  "hasProof": true,
+                  "recipientAddress": "$vaultSubAddr"
+                }
+              ]
+            }
+            """.trimIndent(),
+        )
+        assertEquals(1, statusWithProofTx.recentTxs.size)
+        assertTrue(statusWithProofTx.recentTxs[0].hasProof)
+        assertEquals(vaultSubAddr, statusWithProofTx.recentTxs[0].recipientAddress)
+
+        // 5. QrMatrixResult parser + dimension integrity validation
+        assertFalse(OvNative.parseQrMatrix("").ok)
+        assertFalse(
+            OvNative.parseQrMatrix("""{"ok":true,"size":3,"rows":["101","010"],"error":""}""").ok,
+        )
+        val qr = OvNative.parseQrMatrix(
+            """{"ok":true,"size":3,"rows":["111","101","111"],"error":""}""",
+        )
+        assertTrue(qr.ok)
+        assertEquals(3, qr.size)
+        assertEquals(listOf("111", "101", "111"), qr.rows)
+
+        // 6. TextClassification monero_address helper
+        val moneroTextClass = OvNative.parseTextClassification(
+            """{"kind":"monero_address","actionLabel":"Send XMR","armored":"$vaultSubAddr","fingerprintHint":"0.25"}""",
+        )
+        assertTrue(moneroTextClass.isMoneroAddress)
+        assertFalse(moneroTextClass.isPgp)
+        assertEquals(vaultSubAddr, OvNative.extractStandaloneMoneroAddress("Donate to $vaultSubAddr."))
     }
 
     private fun externalMethods(): Set<String> {
