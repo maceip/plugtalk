@@ -333,6 +333,7 @@ class MetaToolsPodsRenderTest {
         var backCalls by mutableIntStateOf(0)
         var forwardCalls by mutableIntStateOf(0)
         var homeCalls by mutableIntStateOf(0)
+        var decryptedFieldNodeId = ""
         var state by mutableStateOf(
             BrowserUiState(
                 url = "about:blank",
@@ -352,6 +353,7 @@ class MetaToolsPodsRenderTest {
                         homeCalls += 1
                         state = state.copy(url = "about:blank", canGoBack = false)
                     },
+                    onFieldAction = { field -> decryptedFieldNodeId = field.nodeId },
                     surface = {
                         Box(
                             modifier = Modifier
@@ -370,9 +372,11 @@ class MetaToolsPodsRenderTest {
         }
         compose.waitForIdle()
 
-        // 1. Verify 1.5x Hardware Pod Sizes & Browser-First Ergonomic Arrangement on StartPage:
-        //    Bottom Row: [ KptBackButtonPod (74dp) ] (8dp gap) [ RecessedCrtAddressPod (74dp tall) ] (8dp gap) [ TorKnurledOrbPod (86dp) ]
-        //    Right Dock: PhotoSoapSideRemote (70x154dp) above OpenPgpRockerPod (80x92dp) above TorKnurledOrbPod (86dp)
+        // 1. Verify exact metatools-reference.jpg 1:1 Spatial Cluster:
+        //    - Bottom-Left: TorKnurledOrbPod (~104dp, ONLY round ball)
+        //    - Left Above Orb: KptBackButtonPod (~62x40dp, strictly rectangular non-round pewter key)
+        //    - Center-Lower: RecessedCrtAddressPod (~156x135dp chunky ~5:4 CRT TV)
+        //    - Mid-Right: OpenPgpRockerPod (+20 deg red switchblade) above PhotoSoapSideRemote (+20 deg ZK "TOR" remote)
         val shellBounds = compose.onNodeWithTag("metatools_browser_shell").getUnclippedBoundsInRoot()
         val backBounds = compose.onNodeWithTag("kpt_back_pod").getUnclippedBoundsInRoot()
         val crtBounds = compose.onNodeWithTag("crt_address_pod").getUnclippedBoundsInRoot()
@@ -380,22 +384,13 @@ class MetaToolsPodsRenderTest {
         val pgpBounds = compose.onNodeWithTag("pgp_rocker_pod").getUnclippedBoundsInRoot()
         val remoteBounds = compose.onNodeWithTag("side_remote_pod").getUnclippedBoundsInRoot()
 
-        assertTrue("Expected KptBackButtonPod >= 72.dp, got ${backBounds.width} x ${backBounds.height}", backBounds.width >= 72.dp && backBounds.height >= 72.dp)
-        assertTrue("Expected RecessedCrtAddressPod height >= 70.dp, got ${crtBounds.height}", crtBounds.height >= 70.dp)
-        assertTrue("Expected TorKnurledOrbPod >= 84.dp, got ${orbBounds.width} x ${orbBounds.height}", orbBounds.width >= 84.dp && orbBounds.height >= 84.dp)
-        assertTrue("Expected OpenPgpRockerPod >= 78x90.dp, got ${pgpBounds.width} x ${pgpBounds.height}", pgpBounds.width >= 78.dp && pgpBounds.height >= 90.dp)
-        assertTrue("Expected PhotoSoapSideRemote >= 68x150.dp, got ${remoteBounds.width} x ${remoteBounds.height}", remoteBounds.width >= 68.dp && remoteBounds.height >= 150.dp)
-
-        // Confirm explicit open webpage gaps (>= 7.5dp) between Back -> CRT -> Tor Orb
-        val leftGapWidth = crtBounds.left - backBounds.right
-        val rightGapWidth = orbBounds.left - crtBounds.right
-        assertTrue("Expected >= 7.5dp open gap between Back Pod & CRT, got $leftGapWidth", leftGapWidth >= 7.5.dp)
-        assertTrue("Expected >= 7.5dp open gap between CRT & Tor Orb, got $rightGapWidth", rightGapWidth >= 7.5.dp)
-
-        // Confirm zero vertical collision along right-bezel dock on StartPage
-        assertTrue("Expected OpenPgpRockerPod above TorKnurledOrbPod, pgp.bottom=${pgpBounds.bottom} orb.top=${orbBounds.top}", orbBounds.top - pgpBounds.bottom >= 10.dp)
-        assertTrue("Expected PhotoSoapSideRemote above OpenPgpRockerPod, remote.bottom=${remoteBounds.bottom} pgp.top=${pgpBounds.top}", pgpBounds.top - remoteBounds.bottom >= 10.dp)
-        assertTrue("Expected right-dock pods 100% out on StartPage", remoteBounds.right <= shellBounds.right)
+        assertTrue("Expected non-round rectangular KptBackButtonPod (~62x40dp), got ${backBounds.width} x ${backBounds.height}", backBounds.width >= 58.dp && backBounds.height <= 44.dp && backBounds.width > backBounds.height * 1.35f)
+        assertTrue("Expected chunky ~5:4 RecessedCrtAddressPod (~156x135dp), got ${crtBounds.width} x ${crtBounds.height}", crtBounds.width in 150.dp..164.dp && crtBounds.height >= 128.dp)
+        assertTrue("Expected TorKnurledOrbPod >= 100.dp, got ${orbBounds.width} x ${orbBounds.height}", orbBounds.width >= 100.dp && orbBounds.height >= 100.dp)
+        assertTrue("Expected OpenPgpRockerPod above PhotoSoapSideRemote, pgp.bottom=${pgpBounds.bottom} remote.top=${remoteBounds.top}", remoteBounds.top - pgpBounds.bottom >= 10.dp)
+        assertTrue("Expected TorKnurledOrbPod bottom-left of CRT TV, orb.right=${orbBounds.right} crt.left=${crtBounds.left}", crtBounds.left - orbBounds.right >= 8.dp)
+        assertTrue("Expected KptBackButtonPod above TorKnurledOrbPod, back.bottom=${backBounds.bottom} orb.top=${orbBounds.top}", orbBounds.top - backBounds.bottom >= 8.dp)
+        assertTrue("Expected right-side pods right of CRT TV", pgpBounds.left > crtBounds.right && remoteBounds.left > crtBounds.right)
 
         // 2. On StartPage (canGoBack == false && isStartPage == true), tapping kpt_back_pod is a no-op
         compose.onNodeWithTag("kpt_back_pod").performClick()
@@ -403,25 +398,12 @@ class MetaToolsPodsRenderTest {
         assertEquals(0, backCalls)
         assertEquals(0, homeCalls)
 
-        // 3. Navigate to a first-hop directory page without PGP (canGoBack == false, isStartPage == false):
-        //    - Right-bezel pods auto-tuck ~72% into the right bezel!
-        //    - Tapping kpt_back_pod cleanly returns to StartPage via onHome!
-        state = state.copy(url = "http://dread7x.onion/", canGoBack = false, canGoForward = true)
-        compose.waitForIdle()
-
-        val tuckedRemoteBounds = compose.onNodeWithTag("side_remote_pod").getUnclippedBoundsInRoot()
-        val tuckedPgpBounds = compose.onNodeWithTag("pgp_rocker_pod").getUnclippedBoundsInRoot()
-        assertTrue(
-            "Expected Side Remote to auto-tuck >= 45dp into right bezel on live webpage, delta=${tuckedRemoteBounds.left - remoteBounds.left}",
-            tuckedRemoteBounds.left - remoteBounds.left >= 45.dp,
-        )
-        assertTrue(
-            "Expected PGP Rocker to auto-tuck >= 50dp into right bezel when no PGP on webpage, delta=${tuckedPgpBounds.left - pgpBounds.left}",
-            tuckedPgpBounds.left - pgpBounds.left >= 50.dp,
-        )
-
-        // When PGP content appears on webpage, OpenPgpRockerPod automatically slides out to 100%!
+        // 3. Navigate to live .onion page with PGP block -> 2 clicks on pgp_rocker_pod opens keyring_sheet
+        //    with instant 1-tap `keyring_decrypt_page_block` action at top!
         state = state.copy(
+            url = "http://dread7x.onion/",
+            canGoBack = false,
+            canGoForward = true,
             pgp = PgpOverlayState(
                 fields = listOf(
                     PgpFieldState(
@@ -435,11 +417,15 @@ class MetaToolsPodsRenderTest {
             ),
         )
         compose.waitForIdle()
-        val activePgpBounds = compose.onNodeWithTag("pgp_rocker_pod").getUnclippedBoundsInRoot()
-        assertTrue(
-            "Expected OpenPgpRockerPod to slide out to 100% when webpage has PGP content",
-            abs((activePgpBounds.left - pgpBounds.left).value) <= 2f,
-        )
+
+        compose.onNodeWithTag("pgp_rocker_pod").performTouchInput { doubleClick() }
+        compose.waitForIdle()
+        compose.onNodeWithTag("keyring_sheet").assertIsDisplayed()
+        compose.onNodeWithTag("keyring_page_pgp_actions").assertIsDisplayed()
+        compose.onNodeWithTag("keyring_decrypt_page_block").performClick()
+        compose.waitForIdle()
+        assertEquals("pgp-live", decryptedFieldNodeId)
+        compose.onNodeWithTag("keyring_sheet").assertDoesNotExist()
 
         // Long-press (400ms) on kpt_back_pod triggers Forward!
         compose.onNodeWithTag("kpt_back_pod").performTouchInput {
@@ -466,39 +452,39 @@ class MetaToolsPodsRenderTest {
         assertEquals(1, homeCalls)
         assertEquals("about:blank", state.url)
 
-        // 4. Hit-Test Passthrough: rails, open gaps, and cast shadows pass straight through to webpage!
-        // Tap directly on Left 4.5dp PerimeterSteelRail + spray splatter (x = 2.5dp, y = 26% height)
+        // 4. Hit-Test Passthrough: 12dp steel rails, open gaps, and below-CRT typewriter space pass straight through!
         compose.onNodeWithTag("metatools_browser_shell").performTouchInput {
-            click(Offset(2.5.dp.toPx(), visibleSize.height * 0.26f))
+            click(Offset(4.dp.toPx(), visibleSize.height * 0.30f))
         }
         compose.waitForIdle()
         assertEquals("Left steel rail & splatter must pass touch through to webpage", 1, webpageTaps)
 
         // Tap directly in open gap between KptBackButtonPod and RecessedCrtAddressPod
         val gap1X = ((backBounds.right.value + crtBounds.left.value) / 2f).dp
-        val podMidY = ((crtBounds.top.value + crtBounds.bottom.value) / 2f).dp
+        val backMidY = ((backBounds.top.value + backBounds.bottom.value) / 2f).dp
         compose.onNodeWithTag("metatools_browser_shell").performTouchInput {
-            click(Offset(gap1X.toPx(), podMidY.toPx()))
+            click(Offset(gap1X.toPx(), backMidY.toPx()))
         }
         compose.waitForIdle()
         assertEquals("Open gap between Back Pod and CRT must pass touch to webpage", 2, webpageTaps)
 
-        // Tap directly in open gap between RecessedCrtAddressPod and TorKnurledOrbPod
-        val gap2X = ((crtBounds.right.value + orbBounds.left.value) / 2f).dp
+        // Tap directly in open typewriter area below RecessedCrtAddressPod
+        val belowCrtX = ((crtBounds.left.value + crtBounds.right.value) / 2f).dp
+        val belowCrtY = (crtBounds.bottom.value + 24f).coerceAtMost(shellBounds.bottom.value - 8f).dp
         compose.onNodeWithTag("metatools_browser_shell").performTouchInput {
-            click(Offset(gap2X.toPx(), podMidY.toPx()))
+            click(Offset(belowCrtX.toPx(), belowCrtY.toPx()))
         }
         compose.waitForIdle()
-        assertEquals("Open gap between CRT and Tor Orb must pass touch to webpage", 3, webpageTaps)
+        assertEquals("Open typewriter space beneath CRT TV must pass touch to webpage", 3, webpageTaps)
 
-        // Tap directly on +10dp/+16dp cast drop shadow beneath CRT monitor
-        val shadowX = ((crtBounds.left.value + crtBounds.right.value) / 2f + 10f).dp
-        val shadowY = (crtBounds.bottom.value + 5f).coerceAtMost(shellBounds.bottom.value - 2f).dp
+        // Tap directly in open gap between CRT TV and right-side remote
+        val gap2X = ((crtBounds.right.value + remoteBounds.left.value) / 2f).dp
+        val crtMidY = ((crtBounds.top.value + crtBounds.bottom.value) / 2f).dp
         compose.onNodeWithTag("metatools_browser_shell").performTouchInput {
-            click(Offset(shadowX.toPx(), shadowY.toPx()))
+            click(Offset(gap2X.toPx(), crtMidY.toPx()))
         }
         compose.waitForIdle()
-        assertEquals("Cast drop shadow outside pod body must pass touch to webpage", 4, webpageTaps)
+        assertEquals("Open gap between CRT and right remote must pass touch to webpage", 4, webpageTaps)
 
         // Tapping physical TorKnurledOrbPod opens TorCircuit remote (268dp wide) without leaking to webpage
         compose.onNodeWithTag("tor_orb_pod").performClick()

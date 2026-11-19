@@ -6,8 +6,10 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -19,10 +21,13 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -41,6 +46,7 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
@@ -61,9 +67,23 @@ import dev.onionvault.ui.TrapGlyph
 import dev.onionvault.ui.TrapIcon
 import dev.onionvault.ui.TrapThemeFamily
 import dev.onionvault.ui.TrapThemeMode
+import dev.onionvault.ui.TrustedOnionDirectorySheet
 
 /**
- * Top-level `1.5x` Scaled Zero-Chrome Floating Hardware Pods Orchestrator (`metatools_browser_shell`).
+ * Top-level Zero-Chrome 1997 MetaTools Floating Hardware Pods Orchestrator (`metatools_browser_shell`) —
+ * Exact 1:1 Spatial Layout matching `metatools-reference.jpg`:
+ *
+ * - **Bottom-Left (`tor_orb_pod`)**: `TorKnurledOrbPod` (`104dp` purple orb — ONLY ONE ROUND BALL!).
+ * - **Left Above Purple Orb (`kpt_back_pod`)**: `KptBackButtonPod` (`64dp x 42dp` rectangular
+ *   chamfered cast-pewter `◀` tactile switch — strictly non-round!).
+ * - **Center-Lower (`crt_address_pod`)**: `RecessedCrtAddressPod` (`156dp x 130dp` chunky `~5:4`
+ *   brushed-pewter CRT TV floating over the typewriter zine sheet).
+ * - **Mid-Right (`pgp_rocker_pod`)**: `+20 deg` clockwise translucent red switchblade
+ *   (`1 click = New Tab`, `2 clicks = OpenPGP Keyring + Page PGP Actions`, upward pull = quick decrypt).
+ * - **Bottom-Right (`side_remote_pod` / `side_remote_collapsed_face`)**: `+20 deg` clockwise
+ *   `ZK "TOR"` LED remote with live 2x5 LED glow + `"Onion Sites"` directory mode.
+ * - **Perimeter (`perimeter_steel_rails`)**: `12dp` brushed-steel vertical rails + outer spray-paint
+ *   accents (`100%` touch passthrough).
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -146,6 +166,7 @@ fun MetaToolsBrowserShell(
 ) {
     val density = LocalDensity.current
     val clipboard = LocalClipboardManager.current
+    val focusManager = LocalFocusManager.current
     val chromeHiddenForPip = state.isInPipMode || state.isPipChromeHidden
 
     var crtEditing by remember { mutableStateOf(false) }
@@ -157,21 +178,9 @@ fun MetaToolsBrowserShell(
     var legalOpen by remember(showLegalModal) { mutableStateOf(showLegalModal) }
 
     var retracted by remember(podsRetracted) { mutableStateOf(podsRetracted) }
-    var wasRetracted by remember { mutableStateOf(podsRetracted) }
-    var rightDockSummoned by remember(state.url) { mutableStateOf(false) }
-
-    LaunchedEffect(podsRetracted) {
-        if (podsRetracted) {
-            rightDockSummoned = false
-        } else if (wasRetracted) {
-            rightDockSummoned = true
-        }
-        wasRetracted = podsRetracted
-    }
 
     fun restoreRetractedPods() {
         retracted = false
-        rightDockSummoned = true
         onSetPodsRetracted(false)
     }
 
@@ -261,7 +270,7 @@ fun MetaToolsBrowserShell(
         onOverlayOpenChanged(anyOverlayOpen)
     }
 
-    // 110ms Mechanical Retraction Animations for Bottom Primary Row
+    // 110ms Mechanical Retraction Animations during active downward webpage scroll
     val crtRetractOffsetY by animateDpAsState(
         targetValue = if (retracted && !hideClusterForImeOrEdit) 96.dp else 0.dp,
         animationSpec = tween(
@@ -271,21 +280,17 @@ fun MetaToolsBrowserShell(
         label = "crt_retract_y",
     )
 
-    val cornerPodScale by animateFloatAsState(
-        targetValue = if (retracted && !hideClusterForImeOrEdit) 0.75f else 1.0f,
+    val leftPodScale by animateFloatAsState(
+        targetValue = if (retracted && !hideClusterForImeOrEdit) 0.78f else 1.0f,
         animationSpec = tween(
             durationMillis = MetaToolsTokens.POD_SNAP_DURATION_MS,
             easing = MetaToolsTokens.PodSnapEasing,
         ),
-        label = "corner_pod_scale",
+        label = "left_pod_scale",
     )
 
-    // 120ms Right-Bezel KPT Tool Dock Auto-Tuck (72% into right bezel on live webpages unless summoned / PGP active)
-    val remoteShouldTuck = !remoteExpanded && (
-        retracted || (!state.isStartPage && !rightDockSummoned)
-        )
     val remoteDockOffsetX by animateDpAsState(
-        targetValue = if (remoteShouldTuck) 50.dp else 0.dp,
+        targetValue = if (!remoteExpanded && retracted) 50.dp else 0.dp,
         animationSpec = tween(
             durationMillis = MetaToolsTokens.RIGHT_DOCK_SLIDE_DURATION_MS,
             easing = MetaToolsTokens.PodSnapEasing,
@@ -293,11 +298,8 @@ fun MetaToolsBrowserShell(
         label = "remote_dock_offset_x",
     )
 
-    val pgpShouldTuck = retracted || (
-        !state.isStartPage && !hasPgpContent && !rightDockSummoned
-        )
     val pgpDockOffsetX by animateDpAsState(
-        targetValue = if (pgpShouldTuck) 58.dp else 0.dp,
+        targetValue = if (retracted) 58.dp else 0.dp,
         animationSpec = tween(
             durationMillis = MetaToolsTokens.RIGHT_DOCK_SLIDE_DURATION_MS,
             easing = MetaToolsTokens.PodSnapEasing,
@@ -310,27 +312,174 @@ fun MetaToolsBrowserShell(
             .fillMaxSize()
             .testTag("metatools_browser_shell"),
     ) {
-        // 1. Full-bleed Webpage / StartPage Surface (100% unobstructed edge-to-edge onto top status bar)
+        // 1. Full-bleed Webpage / StartPage Surface
         Box(modifier = Modifier.fillMaxSize()) {
             surface()
         }
 
         if (!chromeHiddenForPip) {
-            // 2. 4.5dp Cylindrical Brushed-Steel Frame + Street Overspray flush at y = 0 (100% Hit-Test Passthrough!)
+            // 2. 12dp Brushed-Steel Vertical Rails + Outer Street Overspray (100% Hit-Test Passthrough!)
             PerimeterSteelRails(
                 isLoading = state.isLoading,
                 loadProgress = state.loadProgress,
                 topInset = 0.dp,
             )
 
-            // 3. Right-Bezel KPT Tool Dock above TorKnurledOrbPod (hidden while CRT editing / Find / IME open)
-            if (!hideClusterForImeOrEdit) {
+            // 3. Exact `metatools-reference.jpg` Spatial Hardware Pod Cluster
+            if (crtEditing) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color(0xB8050608))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = {
+                                focusManager.clearFocus()
+                                crtEditing = false
+                            },
+                        )
+                        .testTag("crt_editor_scrim"),
+                )
+
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxSize()
+                        .statusBarsPadding()
+                        .navigationBarsPadding()
+                        .imePadding()
+                        .padding(top = 12.dp, bottom = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.Bottom),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(0.95f)
+                            .weight(1f, fill = false)
+                            .verticalScroll(rememberScrollState()),
+                    ) {
+                        TrustedOnionDirectorySheet(
+                            onSelectEntry = { entry ->
+                                focusManager.clearFocus()
+                                crtEditing = false
+                                onNavigate(entry.url)
+                            },
+                        )
+                    }
+
+                    RecessedCrtAddressPod(
+                        url = state.url,
+                        isLoading = state.isLoading,
+                        isEditing = true,
+                        onEditingChange = { editing -> crtEditing = editing },
+                        onNavigate = onNavigate,
+                        onSwitchAdjacentTab = { delta ->
+                            switchAdjacentTabFromList(state, delta, onSwitchAdjacentTab, onSelectTab)
+                        },
+                        onOpenTabSwitcher = { tabsOpen = true },
+                        isImeVisibleOverride = imeVisibleOverride,
+                    )
+                }
+            } else if (!hideClusterForImeOrEdit) {
+                // 3a. Bottom-Left — ONLY ONE ROUND BALL (`TorKnurledOrbPod`, 104dp)
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .navigationBarsPadding()
+                        .padding(start = 8.dp, bottom = 52.dp),
+                ) {
+                    TorKnurledOrbPod(
+                        torReady = state.tor.ready,
+                        bootstrapPercent = state.tor.percent,
+                        onToggleTorCircuitRemote = {
+                            if (retracted) {
+                                restoreRetractedPods()
+                            } else if (remoteExpanded && remoteMode == RemoteMode.TorCircuit) {
+                                remoteExpanded = false
+                            } else {
+                                remoteMode = RemoteMode.TorCircuit
+                                remoteExpanded = true
+                            }
+                        },
+                        onRotateTorIdentity = {
+                            restoreRetractedPods()
+                            onResetTorIsolation()
+                        },
+                        modifier = Modifier.graphicsLayer {
+                            scaleX = leftPodScale
+                            scaleY = leftPodScale
+                            transformOrigin = TransformOrigin(0f, 1f)
+                        },
+                    )
+                }
+
+                // 3b. Left Above Purple Orb — Rectangular Chamfered Pewter `◀` Key (`KptBackButtonPod`, 62x40dp)
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .navigationBarsPadding()
+                        .padding(start = 22.dp, bottom = 168.dp),
+                ) {
+                    KptBackButtonPod(
+                        canGoBack = state.canGoBack,
+                        canGoForward = state.canGoForward,
+                        canReturnToStartPage = !state.isStartPage,
+                        isRetracted = retracted,
+                        onRestoreRetracted = { restoreRetractedPods() },
+                        onBack = onBack,
+                        onReturnToStartPage = onHome,
+                        onForward = {
+                            restoreRetractedPods()
+                            onForward()
+                        },
+                        modifier = Modifier.graphicsLayer {
+                            scaleX = leftPodScale
+                            scaleY = leftPodScale
+                            transformOrigin = TransformOrigin(0f, 1f)
+                        },
+                    )
+                }
+
+                // 3c. Center-Lower — Chunky ~5:4 Brushed-Pewter CRT TV (`RecessedCrtAddressPod`, 156x135dp)
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(bottom = 132.dp)
+                        .offset(x = (-4).dp, y = crtRetractOffsetY),
+                ) {
+                    RecessedCrtAddressPod(
+                        url = state.url,
+                        isLoading = state.isLoading,
+                        isEditing = false,
+                        onEditingChange = { editing ->
+                            if (retracted) {
+                                restoreRetractedPods()
+                            } else {
+                                remoteExpanded = false
+                                crtEditing = editing
+                            }
+                        },
+                        onNavigate = onNavigate,
+                        onSwitchAdjacentTab = { delta ->
+                            switchAdjacentTabFromList(state, delta, onSwitchAdjacentTab, onSelectTab)
+                        },
+                        onOpenTabSwitcher = {
+                            restoreRetractedPods()
+                            tabsOpen = true
+                        },
+                        isImeVisibleOverride = imeVisibleOverride,
+                    )
+                }
+
+                // 3d. Mid-Right — +20 deg Clockwise Translucent Red Switchblade (`OpenPgpRockerPod`, 82x124dp)
                 if (!remoteExpanded) {
                     Box(
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
                             .navigationBarsPadding()
-                            .padding(end = 6.dp, bottom = 116.dp)
+                            .padding(end = 16.dp, bottom = 224.dp)
                             .offset(x = pgpDockOffsetX),
                     ) {
                         OpenPgpRockerPod(
@@ -342,12 +491,7 @@ fun MetaToolsBrowserShell(
                             },
                             onOpenPgpTools = {
                                 restoreRetractedPods()
-                                if (state.pgp.fields.isNotEmpty() || state.selectionPgp != null) {
-                                    remoteMode = RemoteMode.PgpActions
-                                    remoteExpanded = true
-                                } else {
-                                    keyringOpen = true
-                                }
+                                keyringOpen = true
                             },
                             onQuickVerifyOrDecrypt = {
                                 restoreRetractedPods()
@@ -370,12 +514,12 @@ fun MetaToolsBrowserShell(
                     }
                 }
 
-                val remoteBottomPadding = if (remoteExpanded) 104.dp else 230.dp
+                // 3e. Bottom-Right — +20 deg Clockwise `ZK "TOR"` LED Remote (`PhotoSoapSideRemote`, 60x186dp)
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
                         .navigationBarsPadding()
-                        .padding(end = 6.dp, bottom = remoteBottomPadding)
+                        .padding(end = if (remoteExpanded) 10.dp else 22.dp, bottom = 18.dp)
                         .offset(x = remoteDockOffsetX),
                 ) {
                     PhotoSoapSideRemote(
@@ -387,7 +531,6 @@ fun MetaToolsBrowserShell(
                             if (retracted) {
                                 restoreRetractedPods()
                             } else {
-                                rightDockSummoned = true
                                 remoteMode = RemoteMode.Menu
                                 remoteExpanded = true
                             }
@@ -398,6 +541,7 @@ fun MetaToolsBrowserShell(
                             if (remoteMode == RemoteMode.ContextMenu) onDismissContextMenu()
                             if (remoteMode == RemoteMode.PgpActions) onDismissSelectionPgp()
                         },
+                        onNavigate = onNavigate,
                         onBack = onBack,
                         onForward = onForward,
                         onReload = onReload,
@@ -430,113 +574,6 @@ fun MetaToolsBrowserShell(
                 }
             }
 
-            // 4. Bottom Primary Browser Row (10dp above navigationBarsPadding(), 8dp horizontal padding, 8dp gaps)
-            if (crtEditing) {
-                // Docked 8dp above IME keyboard at 95% viewport width (68dp height, 17sp input text)
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .navigationBarsPadding()
-                        .imePadding()
-                        .padding(bottom = 8.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    RecessedCrtAddressPod(
-                        url = state.url,
-                        isLoading = state.isLoading,
-                        isEditing = true,
-                        onEditingChange = { editing -> crtEditing = editing },
-                        onNavigate = onNavigate,
-                        onSwitchAdjacentTab = { delta ->
-                            switchAdjacentTabFromList(state, delta, onSwitchAdjacentTab, onSelectTab)
-                        },
-                        onOpenTabSwitcher = { tabsOpen = true },
-                        isImeVisibleOverride = imeVisibleOverride,
-                    )
-                }
-            } else if (!imeOpen) {
-                Row(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .navigationBarsPadding()
-                        .padding(start = 8.dp, end = 8.dp, bottom = 10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.Bottom,
-                ) {
-                    KptBackButtonPod(
-                        canGoBack = state.canGoBack,
-                        canGoForward = state.canGoForward,
-                        canReturnToStartPage = !state.isStartPage,
-                        isRetracted = retracted,
-                        onRestoreRetracted = { restoreRetractedPods() },
-                        onBack = onBack,
-                        onReturnToStartPage = onHome,
-                        onForward = {
-                            restoreRetractedPods()
-                            onForward()
-                        },
-                        modifier = Modifier.graphicsLayer {
-                            scaleX = cornerPodScale
-                            scaleY = cornerPodScale
-                            transformOrigin = TransformOrigin(0f, 1f)
-                        },
-                    )
-
-                    RecessedCrtAddressPod(
-                        url = state.url,
-                        isLoading = state.isLoading,
-                        isEditing = false,
-                        onEditingChange = { editing ->
-                            if (retracted) {
-                                restoreRetractedPods()
-                            } else {
-                                remoteExpanded = false
-                                crtEditing = editing
-                            }
-                        },
-                        onNavigate = onNavigate,
-                        onSwitchAdjacentTab = { delta ->
-                            switchAdjacentTabFromList(state, delta, onSwitchAdjacentTab, onSelectTab)
-                        },
-                        onOpenTabSwitcher = {
-                            restoreRetractedPods()
-                            tabsOpen = true
-                        },
-                        isImeVisibleOverride = imeVisibleOverride,
-                        modifier = Modifier
-                            .weight(1f)
-                            .offset(y = crtRetractOffsetY),
-                    )
-
-                    TorKnurledOrbPod(
-                        torReady = state.tor.ready,
-                        bootstrapPercent = state.tor.percent,
-                        onToggleTorCircuitRemote = {
-                            if (retracted) {
-                                restoreRetractedPods()
-                            } else if (remoteExpanded && remoteMode == RemoteMode.TorCircuit) {
-                                remoteExpanded = false
-                            } else {
-                                rightDockSummoned = true
-                                remoteMode = RemoteMode.TorCircuit
-                                remoteExpanded = true
-                            }
-                        },
-                        onRotateTorIdentity = {
-                            restoreRetractedPods()
-                            onResetTorIsolation()
-                        },
-                        modifier = Modifier.graphicsLayer {
-                            scaleX = cornerPodScale
-                            scaleY = cornerPodScale
-                            transformOrigin = TransformOrigin(1f, 1f)
-                        },
-                    )
-                }
-            }
-
             if (state.findInPage.visible && !crtEditing) {
                 Box(
                     modifier = Modifier
@@ -544,7 +581,7 @@ fun MetaToolsBrowserShell(
                         .fillMaxWidth()
                         .navigationBarsPadding()
                         .imePadding()
-                        .padding(bottom = if (imeOpen) 8.dp else 104.dp),
+                        .padding(bottom = if (imeOpen) 8.dp else 24.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     FindInPageHardwarePod(
@@ -556,7 +593,7 @@ fun MetaToolsBrowserShell(
                 }
             }
 
-            // 5. Sculptural Hardware Modal Pods
+            // 4. Sculptural Hardware Modal Pods
             val managementModalOpen = tabsOpen || keyringOpen || settingsOpen || legalOpen
 
             if (!managementModalOpen) {
@@ -591,6 +628,12 @@ fun MetaToolsBrowserShell(
                     onSetDefaultKey = onSetDefaultKey,
                     onDeleteKey = onDeleteKey,
                     onDismiss = { keyringOpen = false },
+                    pgpFields = state.pgp.fields,
+                    selectionPgp = state.selectionPgp,
+                    onFieldAction = onFieldAction,
+                    onInsertMyPubKey = onInsertMyPubKey,
+                    onDecryptArmoredText = onDecryptArmoredText,
+                    onEncryptSelectedText = onEncryptSelectedText,
                 )
             }
 

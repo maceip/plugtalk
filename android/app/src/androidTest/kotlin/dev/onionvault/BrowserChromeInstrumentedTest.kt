@@ -2,12 +2,13 @@ package dev.onionvault
 
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.doubleClick
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.AndroidComposeTestRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -19,8 +20,13 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.height
+import androidx.compose.ui.unit.width
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.espresso.Espresso
+import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import dev.cefpack.android.CefpackSession
 import dev.onionvault.ui.TrapPreferences
 import dev.onionvault.ui.TrapThemeFamily
@@ -51,7 +57,21 @@ import org.junit.runner.RunWith
 class BrowserChromeInstrumentedTest {
 
     @get:Rule
-    val composeRule = createAndroidComposeRule<MainActivity>()
+    val composeRule = AndroidComposeTestRule(
+        activityRule = ActivityScenarioRule<MainActivity>(
+            Intent(ApplicationProvider.getApplicationContext(), MainActivity::class.java).apply {
+                InstrumentationRegistry.getInstrumentation().uiAutomation
+                    .executeShellCommand("input keyevent KEYCODE_WAKEUP")
+                    .close()
+                putExtra(MainActivity.EXTRA_SHOW_OVER_KEYGUARD_FOR_TEST, true)
+            },
+        ),
+        activityProvider = { rule ->
+            var activity: MainActivity? = null
+            rule.scenario.onActivity { activity = it }
+            checkNotNull(activity) { "MainActivity was not created" }
+        },
+    )
 
     @Test
     fun chrome_settings_security_tabs_clearnet_consent_and_native_keyring_e2e() {
@@ -73,9 +93,9 @@ class BrowserChromeInstrumentedTest {
         composeRule.onNodeWithTag("pgp_rocker_pod").assertIsDisplayed()
         composeRule.onNodeWithTag("side_remote_pod").assertIsDisplayed()
         composeRule.onNodeWithTag("start_page").assertIsDisplayed()
-        composeRule.onNodeWithTag("start_tor_status").assertIsDisplayed()
-        composeRule.onNodeWithTag("start_search_box").assertIsDisplayed()
-        composeRule.onNodeWithTag("trusted_onion_directory").assertIsDisplayed()
+        composeRule.onNodeWithTag("start_tor_status").assertDoesNotExist()
+        composeRule.onNodeWithTag("start_search_box").assertDoesNotExist()
+        composeRule.onNodeWithTag("trusted_onion_directory").assertDoesNotExist()
         composeRule.onNodeWithTag("bottom_control_dock").assertDoesNotExist()
         composeRule.onNodeWithTag("top_identity_header").assertDoesNotExist()
         composeRule.onNodeWithTag("transport_footer").assertDoesNotExist()
@@ -89,12 +109,20 @@ class BrowserChromeInstrumentedTest {
         val crtBounds = composeRule.onNodeWithTag("crt_address_pod").getUnclippedBoundsInRoot()
         val orbBounds = composeRule.onNodeWithTag("tor_orb_pod").getUnclippedBoundsInRoot()
         val pgpBounds = composeRule.onNodeWithTag("pgp_rocker_pod").getUnclippedBoundsInRoot()
-        assertTrue(crtBounds.left - backBounds.right >= 6.dp)
-        assertTrue(orbBounds.left - crtBounds.right >= 6.dp)
-        assertTrue(orbBounds.top - pgpBounds.bottom >= 8.dp)
+        val remoteBounds = composeRule.onNodeWithTag("side_remote_pod").getUnclippedBoundsInRoot()
+        assertTrue(backBounds.width > backBounds.height * 1.3f)
+        assertTrue(crtBounds.height >= 125.dp)
+        assertTrue(orbBounds.right < crtBounds.left)
+        assertTrue(backBounds.bottom < orbBounds.top)
+        assertTrue(pgpBounds.bottom < remoteBounds.top)
 
-        // 2. Side Remote -> Settings Hardware Pod persists Theme Family & Appearance Mode
+        // 2. Side Remote -> Onion Sites drawer + Settings Hardware Pod persists Theme Family & Appearance Mode
         composeRule.onNodeWithTag("side_remote_collapsed_face").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("remote_onion_sites").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("remote_onion_directory").assertIsDisplayed()
+        composeRule.onNodeWithTag("remote_switch_to_menu").performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("remote_settings").performScrollTo().performClick()
         composeRule.waitForIdle()

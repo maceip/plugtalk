@@ -22,7 +22,10 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -87,7 +90,7 @@ object MetaToolsTokens {
     val PhosphorClearnetGreen = Color(0xFF5CFF8A)
     val PhosphorClearnetCyan = Color(0xFF7DF9FF)
     val PhosphorPathDim = Color(0xFF4A5560)
-    val PhosphorMutedHint = Color(0xFF568A63)
+    val PhosphorMutedHint = Color(0xFF6AE87E)
 
     // 3D Raytraced Tor Sphere
     val TorPurpleBright = Color(0xFFB565FF)
@@ -127,6 +130,19 @@ object MetaToolsTokens {
     const val ORB_DEPRESS_DURATION_MS = 75
     const val REMOTE_SLIDE_DURATION_MS = 140
     const val TOR_BOOT_TICK_MS = 166
+}
+
+/**
+ * Resolves a `drawable-nodpi/pod_*.webp` 3D hardware sprite [Painter] by resource name if
+ * packaged, returning `null` only if absent in isolated unit-test harnesses.
+ */
+@Composable
+internal fun rememberOptionalPodPainter(drawableName: String): Painter? {
+    val context = LocalContext.current
+    val resId = remember(drawableName, context) {
+        context.resources.getIdentifier(drawableName, "drawable", context.packageName)
+    }
+    return if (resId != 0) painterResource(resId) else null
 }
 
 /**
@@ -170,11 +186,15 @@ fun Modifier.metaToolsDropShadow(
     cornerRadius: Dp = 22.dp,
     isCircle: Boolean = false,
     rotationDegrees: Float = 0f,
+    insetHorizontal: Dp = 0.dp,
+    insetVertical: Dp = 0.dp,
 ): Modifier = this.drawBehind {
     val dx = MetaToolsTokens.ShadowOffsetX.toPx()
     val dy = MetaToolsTokens.ShadowOffsetY.toPx()
     val blur = MetaToolsTokens.ShadowBlurRadius.toPx()
     val rPx = cornerRadius.toPx()
+    val ix = insetHorizontal.toPx()
+    val iy = insetVertical.toPx()
 
     withTransform({
         if (rotationDegrees != 0f) {
@@ -188,14 +208,14 @@ fun Modifier.metaToolsDropShadow(
                 setShadowLayer(blur, dx, dy, MetaToolsTokens.ShadowColor.toArgb())
             }
             if (isCircle) {
-                val radius = size.minDimension / 2f
-                canvas.nativeCanvas.drawCircle(center.x, center.y, radius - 0.5f, paint)
+                val radius = (size.minDimension / 2f - maxOf(ix, iy)).coerceAtLeast(1f)
+                canvas.nativeCanvas.drawCircle(center.x, center.y, radius, paint)
             } else {
                 canvas.nativeCanvas.drawRoundRect(
-                    0.5f,
-                    0.5f,
-                    size.width - 0.5f,
-                    size.height - 0.5f,
+                    0.5f + ix,
+                    0.5f + iy,
+                    (size.width - 0.5f - ix).coerceAtLeast(ix + 1f),
+                    (size.height - 0.5f - iy).coerceAtLeast(iy + 1f),
                     rPx,
                     rPx,
                     paint,
@@ -352,14 +372,22 @@ fun formatCrtDisplayAddress(
     isLoading: Boolean,
 ): CrtFormattedReadout {
     if (isBlankOrStartUrl(url)) {
+        val hintShadow = Shadow(
+            color = MetaToolsTokens.PhosphorMutedHint.copy(alpha = 0.62f),
+            offset = Offset.Zero,
+            blurRadius = 6f,
+        )
         return CrtFormattedReadout(
             text = AnnotatedString(
                 text = "search / .onion",
-                spanStyle = SpanStyle(color = MetaToolsTokens.PhosphorMutedHint),
+                spanStyle = SpanStyle(
+                    color = MetaToolsTokens.PhosphorMutedHint,
+                    shadow = hintShadow,
+                ),
             ),
             isOnion = false,
             isStartPage = true,
-            halationShadow = null,
+            halationShadow = hintShadow,
         )
     }
 

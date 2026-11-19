@@ -256,35 +256,46 @@ class ScreenshotTest {
 
         compose.onNodeWithTag("start_page").assertIsDisplayed()
         compose.onNodeWithTag("start_zine_wallpaper", useUnmergedTree = true).assertIsDisplayed()
-        compose.onNodeWithText("TRAP").assertIsDisplayed()
-        compose.onNodeWithTag("start_tor_status").assertIsDisplayed()
-        compose.onNodeWithText("Tor ready").assertIsDisplayed()
-        compose.onNodeWithTag("start_search_box").assertIsDisplayed()
-        compose.onNodeWithTag("trusted_onion_directory").assertIsDisplayed()
+        compose.onNodeWithTag("start_tor_status").assertDoesNotExist()
+        compose.onNodeWithTag("start_search_box").assertDoesNotExist()
+        compose.onNodeWithTag("trusted_onion_directory").assertDoesNotExist()
 
-        // 3. Tapping start_tor_status expands PhotoSoapSideRemote in TorCircuit mode; BackHandler collapses it.
-        compose.onNodeWithTag("start_tor_status").performClick()
+        // 3. Verify exact metatools-reference.jpg 1:1 pod bounds & zero-two-balls layout:
+        //    - TorKnurledOrbPod (~104dp) bottom-left (ONLY round ball)
+        //    - KptBackButtonPod (~62x40dp) non-round horizontal rectangular pewter key above orb
+        //    - RecessedCrtAddressPod (~156x135dp) chunky ~5:4 CRT TV lower-center
+        //    - OpenPgpRockerPod mid-right above PhotoSoapSideRemote
+        val backBounds = compose.onNodeWithTag("kpt_back_pod").getUnclippedBoundsInRoot()
+        val crtBounds = compose.onNodeWithTag("crt_address_pod").getUnclippedBoundsInRoot()
+        val orbBounds = compose.onNodeWithTag("tor_orb_pod").getUnclippedBoundsInRoot()
+        val pgpBounds = compose.onNodeWithTag("pgp_rocker_pod").getUnclippedBoundsInRoot()
+        val remoteBounds = compose.onNodeWithTag("side_remote_pod").getUnclippedBoundsInRoot()
+        assertTrue(backBounds.width >= 58.dp && backBounds.height <= 44.dp)
+        assertTrue("Back key must be strictly non-round horizontal rectangle", backBounds.width > backBounds.height * 1.35f)
+        assertTrue(orbBounds.width >= 100.dp && orbBounds.height >= 100.dp)
+        assertTrue(crtBounds.width in 150.dp..164.dp && crtBounds.height >= 128.dp)
+        assertTrue(orbBounds.right < crtBounds.left)
+        assertTrue(backBounds.bottom < orbBounds.top)
+        assertTrue(pgpBounds.bottom < remoteBounds.top)
+
+        // 4. Side Remote "Onion Sites" drawer exposes TrustedOnionDirectory on 1 tap!
+        compose.onNodeWithTag("side_remote_collapsed_face").performClick()
         compose.waitForIdle()
-        compose.onNodeWithTag("remote_tor_circuit").assertIsDisplayed()
+        compose.onNodeWithTag("remote_onion_sites").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("remote_onion_directory").assertIsDisplayed()
         compose.runOnUiThread {
             compose.activity.onBackPressedDispatcher.onBackPressed()
         }
         compose.waitForIdle()
-        compose.onNodeWithTag("remote_tor_circuit").assertDoesNotExist()
+        compose.onNodeWithTag("remote_onion_directory").assertDoesNotExist()
 
-        // 4. Verify 1.5x pod bounds & open webpage gaps across [ Back (74dp) ] -> [ CRT (74dp tall) ] -> [ Tor Orb (86dp) ].
-        val backBounds = compose.onNodeWithTag("kpt_back_pod").getUnclippedBoundsInRoot()
-        val crtBounds = compose.onNodeWithTag("crt_address_pod").getUnclippedBoundsInRoot()
-        val orbBounds = compose.onNodeWithTag("tor_orb_pod").getUnclippedBoundsInRoot()
-        assertTrue(backBounds.width >= 72.dp && backBounds.height >= 72.dp)
-        assertTrue(crtBounds.height >= 70.dp)
-        assertTrue(orbBounds.width >= 84.dp && orbBounds.height >= 84.dp)
-        assertTrue(crtBounds.left - backBounds.right >= 7.5.dp)
-        assertTrue(orbBounds.left - crtBounds.right >= 7.5.dp)
-
-        // 5. Submitting a search query on start_search_box routes directly to DuckDuckGo v3 .onion!
-        compose.onNodeWithTag("start_search_box").performTextInput("securedrop")
-        compose.onNodeWithTag("start_search_submit").performClick()
+        // 5. Tapping CRT TV opens CRT editor + TrustedOnionDirectory; submitting search routes to DuckDuckGo .onion!
+        compose.onNodeWithTag("crt_address_pod").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("trusted_onion_directory").assertIsDisplayed()
+        compose.onNodeWithTag("crt_address_input").performTextInput("securedrop")
+        compose.onNodeWithTag("crt_address_input").performImeAction()
         compose.waitForIdle()
         assertEquals(
             TrustedOnionDirectory.resolveSearchOrAddress("securedrop"),
@@ -296,9 +307,9 @@ class ScreenshotTest {
         // 6. Hit-test passthrough on live webpage through open gap between KptBackButtonPod and CRT pod!
         val liveBackBounds = compose.onNodeWithTag("kpt_back_pod").getUnclippedBoundsInRoot()
         val liveCrtBounds = compose.onNodeWithTag("crt_address_pod").getUnclippedBoundsInRoot()
-        assertTrue(liveCrtBounds.left - liveBackBounds.right >= 7.5.dp)
+        assertTrue(liveCrtBounds.left - liveBackBounds.right >= 12.dp)
         val gapX = ((liveBackBounds.right.value + liveCrtBounds.left.value) / 2f).dp
-        val gapY = ((liveCrtBounds.top.value + liveCrtBounds.bottom.value) / 2f).dp
+        val gapY = ((liveBackBounds.top.value + liveBackBounds.bottom.value) / 2f).dp
         compose.onNodeWithTag("metatools_browser_shell").performTouchInput {
             click(Offset(gapX.toPx(), gapY.toPx()))
         }

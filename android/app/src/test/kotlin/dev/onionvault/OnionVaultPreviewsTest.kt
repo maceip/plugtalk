@@ -78,7 +78,9 @@ class OnionVaultPreviewsTest {
         compose.onNodeWithTag("side_remote_pod").assertIsDisplayed()
         compose.onNodeWithTag("start_page").assertIsDisplayed()
         compose.onNodeWithTag("start_zine_wallpaper", useUnmergedTree = true).assertIsDisplayed()
-        compose.onNodeWithTag("trusted_onion_directory").assertIsDisplayed()
+        compose.onNodeWithTag("start_search_box").assertDoesNotExist()
+        compose.onNodeWithTag("start_tor_status").assertDoesNotExist()
+        compose.onNodeWithTag("trusted_onion_directory").assertDoesNotExist()
         compose.onNodeWithTag("bottom_control_dock").assertDoesNotExist()
     }
 

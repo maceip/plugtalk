@@ -240,8 +240,7 @@ class TrustedOnionDirectoryTest {
     }
 
     @Test
-    fun start_page_renders_zine_surface_search_directory_scroll_clearance_and_label_density() {
-        var securityOpened = 0
+    fun start_page_is_unobstructed_and_directory_works_in_crt_editor_and_side_remote() {
         val navigatedUrls = mutableListOf<String>()
         var uiState by mutableStateOf(
             BrowserUiState(
@@ -256,53 +255,54 @@ class TrustedOnionDirectoryTest {
                 mode = uiState.themeMode,
             ) {
                 Box(modifier = Modifier.fillMaxSize()) {
-                    StartPage(
+                    dev.onionvault.ui.pods.MetaToolsBrowserShell(
                         state = uiState,
-                        onOpenSecurity = { securityOpened += 1 },
                         onNavigate = { navigatedUrls += it },
+                        surface = {
+                            StartPage(
+                                state = uiState,
+                                onOpenSecurity = {},
+                                onNavigate = { navigatedUrls += it },
+                            )
+                        },
                     )
                 }
             }
         }
 
-        // 1. Masthead, live Tor readout, recessed CRT search box, and directory headers exist
+        // 1. StartPage renders 100% raw & unobstructed (ZERO flat cards, search box, or top pill)
         compose.onNodeWithTag("start_page").assertIsDisplayed()
-        compose.onNodeWithText("TRAP").assertIsDisplayed()
-        compose.onNodeWithTag("start_tor_status").assertIsDisplayed().performClick()
-        assertEquals(1, securityOpened)
-        compose.onNodeWithText("Tor ready").assertIsDisplayed()
+        compose.onNodeWithTag("start_zine_wallpaper", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithTag("start_tor_status").assertDoesNotExist()
+        compose.onNodeWithTag("start_search_box").assertDoesNotExist()
+        compose.onNodeWithTag("trusted_onion_directory").assertDoesNotExist()
 
-        compose.onNodeWithTag("start_search_box").assertIsDisplayed()
-        compose.onNodeWithText("Search DuckDuckGo .onion or enter address...").assertIsDisplayed()
+        captureStartPageBitmap("start-page-zine-dark")
+
+        // 2. Tapping CRT TV opens CRT editor + TrustedOnionDirectorySheet (`trusted_onion_directory`)
+        compose.onNodeWithTag("crt_address_pod").performClick()
+        compose.waitForIdle()
         compose.onNodeWithTag("trusted_onion_directory").assertIsDisplayed()
         compose.onNodeWithText("SEARCH & PRESS").assertIsDisplayed()
 
-        // Capture dark zine screenshot for visual inspection
-        captureStartPageBitmap("start-page-zine-dark")
-
-        // 2. Search input submits DuckDuckGo v3 .onion HTML query on ImeAction.Search
-        compose.onNodeWithTag("start_search_box").performTextInput("whistleblower drop")
-        compose.onNodeWithTag("start_search_box").performImeAction()
+        // Search input inside CRT editor resolves DuckDuckGo v3 .onion HTML query on ImeAction.Go
+        compose.onNodeWithTag("crt_address_input").performTextInput("whistleblower drop")
+        compose.onNodeWithTag("crt_address_input").performImeAction()
+        compose.waitForIdle()
         assertEquals(
             "https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/html/?q=whistleblower%20drop",
             navigatedUrls.last(),
         )
 
-        // Clear button resets query, and GO button submits direct host
-        compose.onNodeWithTag("start_search_clear").performClick()
-        compose.onNodeWithTag("start_search_box").performTextInput("tor.taxi")
-        compose.onNodeWithTag("start_search_submit").performClick()
-        assertEquals("tor.taxi", navigatedUrls.last())
-        compose.onNodeWithTag("start_search_clear").performClick()
-
-        // 3. Every single directory row obeys <= 2:1 label density (1 title + 2 secondary tokens = 3 text nodes)
-        //    and navigates to its exact verified v3 .onion URL on 1 tap!
+        // Every directory row inside CRT editor obeys <= 2:1 label density and navigates on 1 tap!
         for (entry in TrustedOnionDirectory.entries) {
+            compose.onNodeWithTag("crt_address_pod").performClick()
+            compose.waitForIdle()
             val rowInteraction = compose.onNodeWithTag("onion_dir_${entry.id}")
             rowInteraction.performScrollTo().assertIsDisplayed()
             assertRowObeysTwoToOneLabelDensity(entry.id)
-
             rowInteraction.performClick()
+            compose.waitForIdle()
             assertEquals(
                 "Row ${entry.id} must navigate to ${entry.url}",
                 entry.url,
@@ -310,25 +310,23 @@ class TrustedOnionDirectoryTest {
             )
         }
 
-        // 4. Verify >= 132.dp bottom clearance spacer so bottom items scroll clear of floating pods
-        compose.onNodeWithTag("start_bottom_clearance", useUnmergedTree = true).performScrollTo()
-        val clearanceHeight = compose
-            .onNodeWithTag("start_bottom_clearance", useUnmergedTree = true)
-            .getUnclippedBoundsInRoot()
-            .height
-        assertTrue(
-            "Expected >= 132.dp bottom clearance spacer, got $clearanceHeight",
-            clearanceHeight >= 131.dp,
-        )
+        // 3. PhotoSoapSideRemote "Onion Sites" drawer (`remote_onion_sites`) launches .onion entries in 1 tap!
+        compose.onNodeWithTag("side_remote_collapsed_face").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("remote_onion_sites").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("remote_onion_directory").assertIsDisplayed()
+        val sampleEntry = TrustedOnionDirectory.entries.first { it.id == "bellingcat" }
+        compose.onNodeWithTag("remote_onion_dir_${sampleEntry.id}").performScrollTo().performClick()
+        compose.waitForIdle()
+        assertEquals(sampleEntry.url, navigatedUrls.last())
 
-        // 5. Verify Tor bootstrapping state + Light newsprint mode render cleanly
+        // 4. Verify Tor bootstrapping state + Light mode render cleanly
         uiState = uiState.copy(
             tor = TorBootstrapState(percent = 45, stage = "connecting", ready = false),
             themeMode = TrapThemeMode.Light,
         )
         compose.waitForIdle()
-        compose.onNodeWithTag("start_tor_status").performScrollTo()
-        compose.onNodeWithText("Connecting to Tor \u00B7 45%").assertIsDisplayed()
         captureStartPageBitmap("start-page-zine-light")
     }
 

@@ -5,6 +5,7 @@ import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -43,9 +45,12 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -56,24 +61,38 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.onionvault.OvNative
+import dev.onionvault.R
 import dev.onionvault.ui.BrowserUiState
 import dev.onionvault.ui.PgpFieldState
 import dev.onionvault.ui.TrapGlyph
 import dev.onionvault.ui.TrapIcon
+import dev.onionvault.ui.TrustedOnionDirectory
 import dev.onionvault.ui.formatClearnetRuleTtl
+
+private const val REMOTE_COLLAPSED_ROTATION_DEG = 20f
+
+// Exact normalized 2x5 + top-pilot LED bezel coordinates inside upright `pod_zk_tor_remote.webp` (200 x 620 px)
+private const val REMOTE_LED_LEFT_X_FRAC = 0.2468f
+private const val REMOTE_LED_RIGHT_X_FRAC = 0.7152f
+private val REMOTE_LED_ROW_Y_FRACS = floatArrayOf(0.1469f, 0.2367f, 0.3257f, 0.4143f, 0.5029f)
+private const val REMOTE_LED_RADIUS_W_FRAC = 0.0696f
+private const val REMOTE_PILOT_LED_X_FRAC = 0.4835f
+private const val REMOTE_PILOT_LED_Y_FRAC = 0.0604f
+private const val REMOTE_PILOT_LED_RADIUS_W_FRAC = 0.048f
 
 /**
  * Operational modes of the detached right-edge [PhotoSoapSideRemote].
  */
 enum class RemoteMode {
     Menu,
+    OnionDirectory,
     TorCircuit,
     ContextMenu,
     PgpActions,
 }
 
 /**
- * Truthful 4-channel hardware LED status vector derived strictly from live [BrowserUiState].
+ * Truthful 5-pair (2x5) hardware LED status vector derived strictly from live [BrowserUiState].
  * Zero fabricated lights or synthetic activity pulses.
  */
 @Immutable
@@ -82,12 +101,23 @@ data class RemoteTelemetryLeds(
     val torAmber: Boolean,
     val routingGreen: Boolean,
     val routingAmber: Boolean,
+    val isolationGreen: Boolean,
+    val loadingAmber: Boolean,
     val pgpGreen: Boolean,
     val pgpAmber: Boolean,
     val zeroJsGreen: Boolean,
     val zeroJsAmber: Boolean,
     val stencilCode: String,
-)
+) {
+    val fivePairs: List<Pair<Boolean, Boolean>>
+        get() = listOf(
+            torGreen to torAmber,
+            routingGreen to routingAmber,
+            isolationGreen to loadingAmber,
+            pgpGreen to pgpAmber,
+            zeroJsGreen to zeroJsAmber,
+        )
+}
 
 fun deriveRemoteTelemetryLeds(
     state: BrowserUiState,
@@ -105,7 +135,7 @@ fun deriveRemoteTelemetryLeds(
     val stencil = if (keySourceFp.length >= 4) {
         "ZK\n${keySourceFp.takeLast(4)}"
     } else {
-        "ZK\nTOR"
+        "ZK\n\"TOR\""
     }
 
     return RemoteTelemetryLeds(
@@ -113,6 +143,8 @@ fun deriveRemoteTelemetryLeds(
         torAmber = !state.tor.ready && (state.tor.percent > 0 || state.tor.stage.isNotBlank()),
         routingGreen = isOnion || state.hiddenServiceOnly,
         routingAmber = hasClearnetActivity,
+        isolationGreen = !state.tor.isolationToken.isNullOrBlank() || state.isStartPage,
+        loadingAmber = state.isLoading,
         pgpGreen = state.keys.isNotEmpty(),
         pgpAmber = hasPgpContent || !state.pgp.error.isNullOrBlank(),
         zeroJsGreen = !state.isScreenRecordingActive && !state.viewingSnapshot,
@@ -122,16 +154,16 @@ fun deriveRemoteTelemetryLeds(
 }
 
 /**
- * `1.5x` Scaled Anodized Pill Remote docked on the right thumb edge (`side_remote_pod`).
+ * Bottom-Right `+20 deg` Clockwise `ZK "TOR"` LED Remote (`side_remote_pod` / `side_remote_collapsed_face`) —
+ * `metatools-reference.jpg` 1:1.
  *
- * - **Collapsed (`70.dp x 154.dp`)**: Vertical `10.5.dp` recessed glass LED beads (`#00FF66` green
- *   glow / `#FFAA00` amber glow / `#121418` unlit — backed by REAL Tor bootstrap, `.onion`
- *   isolation vs clearnet rule, Keyring/PGP status, and Zero-JS lock) + torn monochrome street-zine
- *   sticker + bold `#C4CCD4` stencil type (`ZK / TOR` or real 4-hex default key short-hash).
- * - **Expanded (`140ms` linear slide to `268.dp`, zero bounce)**: `48.dp` tactile grooved buttons
- *   (`15.sp` typography, `2.dp` engraved grooves, inverted bevel + `1.dp` down-right shift + lit
- *   LED on press!). Includes `Forward`, `Reload`, `New Tab`, `Tabs (N)`, `Copy URL`, `Home`,
- *   `Zoom [- 100% +]`, `Tor Circuit`, `Keyring`, `Settings`, and `Licences`.
+ * - **Collapsed (`72.dp x 174.dp`, rotated `+20f` clockwise)**: Renders `R.drawable.pod_zk_tor_remote`
+ *   (`pod_zk_tor_remote.webp`) with live 2x5 green/amber LED glow dots overlaid accurately on the
+ *   2x5 recessed LED bezels!
+ * - **Expanded (`268.dp` wide, upright `0 deg`)**: Tactile hardware menu including `"Onion Sites"`
+ *   (`RemoteMode.OnionDirectory` — all 11 live-verified `.onion` sites), `Forward`, `Reload`,
+ *   `Text Search`, `New Tab`, `Tabs (N)`, `Copy URL`, `Home`, `Zoom`, `Tor Circuit`, `Keyring`,
+ *   `Settings`, and `Licences`.
  */
 @Composable
 fun PhotoSoapSideRemote(
@@ -165,12 +197,14 @@ fun PhotoSoapSideRemote(
     onImportArmoredKey: (String) -> Unit,
     onEncryptSelectedText: (String) -> Unit,
     modifier: Modifier = Modifier,
+    onNavigate: (String) -> Unit = {},
     onZoomIn: () -> Unit = {},
     onZoomOut: () -> Unit = {},
     onOpenFindInPage: () -> Unit = {},
 ) {
     val haptics = LocalHapticFeedback.current
     val grainBrush = rememberPewterGrainBrush()
+    val remoteSpritePainter = painterResource(R.drawable.pod_zk_tor_remote)
     val leds = remember(state, hasPgpContent) {
         deriveRemoteTelemetryLeds(state = state, hasPgpContent = hasPgpContent)
     }
@@ -180,7 +214,7 @@ fun PhotoSoapSideRemote(
     }
 
     val animatedWidth by animateDpAsState(
-        targetValue = if (expanded) 268.dp else 70.dp,
+        targetValue = if (expanded) 268.dp else 60.dp,
         animationSpec = tween(
             durationMillis = MetaToolsTokens.REMOTE_SLIDE_DURATION_MS,
             easing = LinearEasing,
@@ -188,26 +222,43 @@ fun PhotoSoapSideRemote(
         label = "side_remote_width",
     )
 
-    val pillRadius = if (expanded) 24.dp else 35.dp
+    val pillRadius = if (expanded) 24.dp else 30.dp
     val pillShape = RoundedCornerShape(pillRadius)
+    val rotationDeg = if (expanded) 0f else REMOTE_COLLAPSED_ROTATION_DEG
 
     Box(
         modifier = modifier
             .width(animatedWidth)
-            .metaToolsDropShadow(cornerRadius = pillRadius)
-            .clip(pillShape)
-            .drawBehind {
-                drawAnodizedRemoteChassis(
-                    grainBrush = grainBrush,
-                    cornerRadiusPx = pillRadius.toPx(),
-                    isCollapsed = !expanded,
-                )
+            .metaToolsDropShadow(
+                cornerRadius = pillRadius,
+                rotationDegrees = rotationDeg,
+                insetHorizontal = if (expanded) 0.dp else 4.dp,
+                insetVertical = if (expanded) 0.dp else 4.dp,
+            )
+            .graphicsLayer {
+                rotationZ = rotationDeg
             }
+            .then(
+                if (expanded) {
+                    Modifier
+                        .clip(pillShape)
+                        .drawBehind {
+                            drawAnodizedRemoteChassis(
+                                grainBrush = grainBrush,
+                                cornerRadiusPx = pillRadius.toPx(),
+                                isCollapsed = false,
+                            )
+                        }
+                } else {
+                    Modifier
+                },
+            )
             .testTag("side_remote_pod"),
     ) {
         if (!expanded) {
             CollapsedRemoteFace(
                 leds = leds,
+                spritePainter = remoteSpritePainter,
                 onClick = {
                     haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                     onExpandMenu()
@@ -220,6 +271,7 @@ fun PhotoSoapSideRemote(
                 leds = leds,
                 onSelectMode = onSelectMode,
                 onCollapse = onCollapse,
+                onNavigate = onNavigate,
                 onForward = onForward,
                 onReload = onReload,
                 onNewTab = onNewTab,
@@ -252,11 +304,12 @@ fun PhotoSoapSideRemote(
 @Composable
 private fun CollapsedRemoteFace(
     leds: RemoteTelemetryLeds,
+    spritePainter: androidx.compose.ui.graphics.painter.Painter,
     onClick: () -> Unit,
 ) {
-    Column(
+    Box(
         modifier = Modifier
-            .size(width = 70.dp, height = 154.dp)
+            .size(width = 60.dp, height = 186.dp)
             .clickable(
                 role = Role.Button,
                 onClick = onClick,
@@ -264,65 +317,84 @@ private fun CollapsedRemoteFace(
             .semantics {
                 contentDescription = "Open hardware remote menu"
             }
-            .padding(top = 13.dp, bottom = 11.dp)
             .testTag("side_remote_collapsed_face"),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceBetween,
     ) {
-        // 4 Paired 10.5.dp Recessed Glass LED Channels (Green OK left | Amber Warn/Active right)
-        // Left column centered at x = 16.dp from pill edge so when tucked 72% into right bezel,
-        // the glowing emerald 10.5.dp LED bead column peeks cleanly out!
-        Canvas(
-            modifier = Modifier
-                .width(70.dp)
-                .height(82.dp),
-        ) {
-            val beadDiameterPx = 10.5.dp.toPx()
-            val leftColX = 18.dp.toPx()
-            val rightColX = 51.dp.toPx()
-            val rowSpacing = size.height / 4f
-            val pairs = listOf(
-                leds.torGreen to leds.torAmber,
-                leds.routingGreen to leds.routingAmber,
-                leds.pgpGreen to leds.pgpAmber,
-                leds.zeroJsGreen to leds.zeroJsAmber,
-            )
-            pairs.forEachIndexed { index, (greenOn, amberOn) ->
-                val y = rowSpacing * (index + 0.5f)
-                drawRecessedGlassLedBead(
-                    center = Offset(leftColX, y),
-                    beadDiameterPx = beadDiameterPx,
-                    litColor = if (greenOn) MetaToolsTokens.LedGreen else null,
-                )
-                drawRecessedGlassLedBead(
-                    center = Offset(rightColX, y),
-                    beadDiameterPx = beadDiameterPx,
-                    litColor = if (amberOn) MetaToolsTokens.LedAmber else null,
+        Image(
+            painter = spritePainter,
+            contentDescription = null,
+            contentScale = ContentScale.FillBounds,
+            modifier = Modifier.fillMaxSize(),
+        )
+        // Live 2x5 + Top Pilot Green/Amber LED Glow Overlay aligned to the raytraced LED bezels
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val pilotColor = when {
+                leds.torGreen -> MetaToolsTokens.LedGreen
+                leds.torAmber -> MetaToolsTokens.LedAmber
+                else -> null
+            }
+            if (pilotColor != null) {
+                drawLiveSpriteLedOverlay(
+                    center = Offset(
+                        x = size.width * REMOTE_PILOT_LED_X_FRAC,
+                        y = size.height * REMOTE_PILOT_LED_Y_FRAC,
+                    ),
+                    lensRadiusPx = size.width * REMOTE_PILOT_LED_RADIUS_W_FRAC,
+                    litColor = pilotColor,
                 )
             }
-        }
 
-        // Torn monochrome street-zine sticker detail across middle flank
-        Canvas(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(17.dp),
-        ) {
-            drawTornMonochromeSticker()
+            val lensRadiusPx = size.width * REMOTE_LED_RADIUS_W_FRAC
+            val leftX = size.width * REMOTE_LED_LEFT_X_FRAC
+            val rightX = size.width * REMOTE_LED_RIGHT_X_FRAC
+            leds.fivePairs.forEachIndexed { index, (greenOn, amberOn) ->
+                val y = size.height * REMOTE_LED_ROW_Y_FRACS[index]
+                if (greenOn) {
+                    drawLiveSpriteLedOverlay(
+                        center = Offset(leftX, y),
+                        lensRadiusPx = lensRadiusPx,
+                        litColor = MetaToolsTokens.LedGreen,
+                    )
+                }
+                if (amberOn) {
+                    drawLiveSpriteLedOverlay(
+                        center = Offset(rightX, y),
+                        lensRadiusPx = lensRadiusPx,
+                        litColor = MetaToolsTokens.LedAmber,
+                    )
+                }
+            }
         }
-
-        // Bold distressed #C4CCD4 stencil type (ZK / TOR or real 4-hex default key short-hash)
-        Text(
-            text = leds.stencilCode,
-            color = MetaToolsTokens.StencilInk,
-            fontSize = 13.5.sp,
-            lineHeight = 14.5.sp,
-            fontWeight = FontWeight.Black,
-            fontFamily = FontFamily.Monospace,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.testTag("side_remote_stencil"),
-        )
     }
+}
+
+private fun DrawScope.drawLiveSpriteLedOverlay(
+    center: Offset,
+    lensRadiusPx: Float,
+    litColor: Color,
+) {
+    drawCircle(
+        brush = Brush.radialGradient(
+            0.0f to litColor.copy(alpha = 0.66f),
+            0.58f to litColor.copy(alpha = 0.24f),
+            1.0f to Color.Transparent,
+            center = center,
+            radius = lensRadiusPx * 2.25f,
+        ),
+        radius = lensRadiusPx * 2.25f,
+        center = center,
+    )
+    drawCircle(
+        brush = Brush.radialGradient(
+            0.0f to Color.White.copy(alpha = 0.96f),
+            0.36f to litColor,
+            0.88f to litColor.copy(alpha = 0.86f),
+            1.0f to Color.Transparent,
+            center = Offset(center.x - lensRadiusPx * 0.24f, center.y - lensRadiusPx * 0.24f),
+            radius = lensRadiusPx * 1.12f,
+        ),
+        radius = lensRadiusPx,
+        center = center,
+    )
 }
 
 @Composable
@@ -332,6 +404,7 @@ private fun ExpandedRemoteFace(
     leds: RemoteTelemetryLeds,
     onSelectMode: (RemoteMode) -> Unit,
     onCollapse: () -> Unit,
+    onNavigate: (String) -> Unit,
     onForward: () -> Unit,
     onReload: () -> Unit,
     onNewTab: () -> Unit,
@@ -359,6 +432,7 @@ private fun ExpandedRemoteFace(
 ) {
     val headerLabel = when (mode) {
         RemoteMode.Menu -> "REMOTE"
+        RemoteMode.OnionDirectory -> "ONION SITES"
         RemoteMode.TorCircuit -> "TOR CIRCUIT"
         RemoteMode.ContextMenu -> "LINK / TEXT"
         RemoteMode.PgpActions -> "OPENPGP"
@@ -370,7 +444,6 @@ private fun ExpandedRemoteFace(
             .heightIn(max = 620.dp)
             .padding(top = 12.dp, bottom = 10.dp),
     ) {
-        // Engraved Hardware Header Strip (1 primary label + action keys -> <= 2:1 density)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -421,6 +494,7 @@ private fun ExpandedRemoteFace(
                 RemoteMode.Menu -> RemoteMenuBody(
                     state = state,
                     onCollapse = onCollapse,
+                    onOpenOnionDirectory = { onSelectMode(RemoteMode.OnionDirectory) },
                     onForward = onForward,
                     onReload = onReload,
                     onNewTab = onNewTab,
@@ -434,6 +508,13 @@ private fun ExpandedRemoteFace(
                     onZoomIn = onZoomIn,
                     onZoomOut = onZoomOut,
                     onOpenFindInPage = onOpenFindInPage,
+                )
+
+                RemoteMode.OnionDirectory -> RemoteOnionDirectoryBody(
+                    onSelectOnionUrl = { targetUrl ->
+                        onCollapse()
+                        onNavigate(targetUrl)
+                    },
                 )
 
                 RemoteMode.TorCircuit -> RemoteTorCircuitBody(
@@ -475,6 +556,7 @@ private fun ExpandedRemoteFace(
 private fun RemoteMenuBody(
     state: BrowserUiState,
     onCollapse: () -> Unit,
+    onOpenOnionDirectory: () -> Unit,
     onForward: () -> Unit,
     onReload: () -> Unit,
     onNewTab: () -> Unit,
@@ -489,6 +571,14 @@ private fun RemoteMenuBody(
     onZoomOut: () -> Unit,
     onOpenFindInPage: () -> Unit,
 ) {
+    RemoteEngravedRowButton(
+        label = "Onion Sites",
+        glyph = TrapGlyph.Onion,
+        trailingToken = "${TrustedOnionDirectory.entries.size}",
+        ledIdleColor = MetaToolsTokens.LedGreen,
+        onClick = onOpenOnionDirectory,
+        testTag = "remote_onion_sites",
+    )
     RemoteEngravedRowButton(
         label = "Forward",
         glyph = TrapGlyph.Forward,
@@ -625,6 +715,30 @@ private fun RemoteMenuBody(
 }
 
 @Composable
+private fun RemoteOnionDirectoryBody(
+    onSelectOnionUrl: (String) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("remote_onion_directory"),
+    ) {
+        val allEntries = TrustedOnionDirectory.entries
+        allEntries.forEachIndexed { idx, entry ->
+            RemoteEngravedRowButton(
+                label = entry.title,
+                glyph = TrapGlyph.Onion,
+                trailingToken = "${entry.rootV3Label.take(4)}…${entry.rootV3Label.takeLast(4)}",
+                ledIdleColor = MetaToolsTokens.LedGreen,
+                showBottomGroove = idx < allEntries.lastIndex,
+                onClick = { onSelectOnionUrl(entry.url) },
+                testTag = "remote_onion_dir_${entry.id}",
+            )
+        }
+    }
+}
+
+@Composable
 private fun RemoteTorCircuitBody(
     state: BrowserUiState,
     onToggleHiddenServiceOnly: (Boolean) -> Unit,
@@ -641,7 +755,6 @@ private fun RemoteTorCircuitBody(
             .fillMaxWidth()
             .testTag("remote_tor_circuit"),
     ) {
-        // Real Arti Bootstrap & Loopback SOCKS5 Telemetry Well
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -683,7 +796,6 @@ private fun RemoteTorCircuitBody(
 
         EngravedGrooveDivider()
 
-        // 2-Tap Confirm New Tor Identity Button
         RemoteEngravedRowButton(
             label = if (confirmIdentityReset) "Confirm New ID?" else "New Tor Identity",
             glyph = TrapGlyph.RefreshIdentity,
@@ -699,7 +811,6 @@ private fun RemoteTorCircuitBody(
             testTag = "remote_new_identity",
         )
 
-        // .onion-only Toggle
         RemoteEngravedRowButton(
             label = ".onion-Only Lock",
             glyph = TrapGlyph.Onion,
@@ -709,7 +820,6 @@ private fun RemoteTorCircuitBody(
             testTag = "remote_onion_only_toggle",
         )
 
-        // Active 3-Day Clearnet Rules List
         if (state.clearnetRules.isNotEmpty()) {
             Text(
                 text = "CLEARNET RULES (${state.clearnetRules.size})",
@@ -1013,13 +1123,6 @@ private fun RemotePgpActionsBody(
     }
 }
 
-/**
- * `1.5x` Tactile Grooved Hardware Button Row inside expanded [PhotoSoapSideRemote]:
- * - `48.dp` row height, `15.sp` typography
- * - `2.dp` engraved bottom groove (`1.dp #0A0B0D` over `1.dp #343942`)
- * - On press: inverted bevel + `1.dp` down-right shift + lit `8.5.dp` recessed green LED!
- * - Strict `<= 2:1` label density (1 primary label + at most 1 trailing token).
- */
 @Composable
 private fun RemoteEngravedRowButton(
     label: String,
@@ -1203,7 +1306,6 @@ private fun DrawScope.drawAnodizedRemoteChassis(
 ) {
     val corner = CornerRadius(cornerRadiusPx, cornerRadiusPx)
 
-    // Cylindrical dark-anodized gunmetal aluminum body
     drawRoundRect(
         brush = Brush.horizontalGradient(
             0.0f to MetaToolsTokens.AnodizedSurfaceTop,
@@ -1213,10 +1315,7 @@ private fun DrawScope.drawAnodizedRemoteChassis(
         ),
         cornerRadius = corner,
     )
-    drawRoundRect(
-        brush = grainBrush,
-        cornerRadius = corner,
-    )
+    drawRoundRect(brush = grainBrush, cornerRadius = corner)
 
     drawMetallicSquircleBevel(
         cornerRadiusPx = cornerRadiusPx,
@@ -1233,19 +1332,9 @@ private fun DrawScope.drawAnodizedRemoteChassis(
             end = Offset(size.width - 1.5.dp.toPx(), size.height * 0.27f),
             strokeWidth = 1.2.dp.toPx(),
         )
-        drawLine(
-            color = scuffColor,
-            start = Offset(size.width - 3.4.dp.toPx(), size.height * 0.36f),
-            end = Offset(size.width - 1.8.dp.toPx(), size.height * 0.38f),
-            strokeWidth = 1.0.dp.toPx(),
-        )
     }
 }
 
-/**
- * Renders the torn monochrome street-zine masking-tape sticker across the middle flank
- * of the `70.dp x 154.dp` collapsed anodized pill remote.
- */
 private fun DrawScope.drawTornMonochromeSticker() {
     val h = size.height
     val w = size.width
@@ -1272,18 +1361,5 @@ private fun DrawScope.drawTornMonochromeSticker() {
         start = Offset(5.5.dp.toPx(), h * 0.52f),
         end = Offset(stickerW * 0.62f, h * 0.52f),
         strokeWidth = 1.3.dp.toPx(),
-    )
-
-    drawRoundRect(
-        color = MetaToolsTokens.StickerInk,
-        topLeft = Offset(w * 0.74f, h * 0.40f),
-        size = Size(w * 0.22f, h * 0.36f),
-        cornerRadius = CornerRadius(1.5.dp.toPx(), 1.5.dp.toPx()),
-    )
-    drawLine(
-        color = MetaToolsTokens.StickerPaper,
-        start = Offset(w * 0.77f, h * 0.58f),
-        end = Offset(w * 0.92f, h * 0.58f),
-        strokeWidth = 1.2.dp.toPx(),
     )
 }

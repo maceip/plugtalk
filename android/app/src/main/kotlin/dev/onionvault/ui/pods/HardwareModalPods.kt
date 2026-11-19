@@ -75,7 +75,9 @@ import dev.onionvault.ui.DecryptPassphraseRequestState
 import dev.onionvault.ui.EncryptRequestState
 import dev.onionvault.ui.KeyInfo
 import dev.onionvault.ui.LegalDocument
+import dev.onionvault.ui.PgpFieldState
 import dev.onionvault.ui.PgpPlaintextState
+import dev.onionvault.ui.SelectionPgpUiState
 import dev.onionvault.ui.TabItemState
 import dev.onionvault.ui.TrapGlyph
 import dev.onionvault.ui.TrapIcon
@@ -821,6 +823,12 @@ fun KeyringHardwarePod(
     onDeleteKey: (fingerprint: String) -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
+    pgpFields: List<PgpFieldState> = emptyList(),
+    selectionPgp: SelectionPgpUiState? = null,
+    onFieldAction: (PgpFieldState) -> Unit = {},
+    onInsertMyPubKey: (PgpFieldState) -> Unit = {},
+    onDecryptArmoredText: (String) -> Unit = {},
+    onEncryptSelectedText: (String) -> Unit = {},
 ) {
     val clipboard = LocalClipboardManager.current
     var section by remember { mutableStateOf(HardwareKeyringSection.Keys) }
@@ -898,6 +906,126 @@ fun KeyringHardwarePod(
         ) {
             when (section) {
                 HardwareKeyringSection.Keys -> {
+                    val primaryMessageBlock = pgpFields.firstOrNull { it.kind == "pgp_message" }
+                    val primaryPubKeyBlock = pgpFields.firstOrNull {
+                        it.kind == "pgp_public_key" && !it.label.equals("Insert My PubKey", ignoreCase = true)
+                    }
+                    val primaryEditableField = pgpFields.firstOrNull { it.isEditablePgpField }
+                    val hasPagePgpActions = primaryMessageBlock != null ||
+                        primaryPubKeyBlock != null ||
+                        primaryEditableField != null ||
+                        selectionPgp != null
+
+                    if (hasPagePgpActions) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(MetaToolsTokens.CrtBlackGlass)
+                                .border(1.dp, MetaToolsTokens.PhosphorOnionGreen.copy(alpha = 0.55f), RoundedCornerShape(12.dp))
+                                .padding(10.dp)
+                                .testTag("keyring_page_pgp_actions"),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            HardwareSectionHeader("PAGE OPENPGP ACTIONS")
+
+                            if (primaryMessageBlock != null) {
+                                HardwareBezelButton(
+                                    text = "Decrypt Page PGP Block",
+                                    primary = true,
+                                    onClick = {
+                                        onDismiss()
+                                        onFieldAction(primaryMessageBlock)
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("keyring_decrypt_page_block"),
+                                )
+                            } else if (selectionPgp != null && selectionPgp.kind == "pgp_message") {
+                                HardwareBezelButton(
+                                    text = "Decrypt Page PGP Block",
+                                    primary = true,
+                                    onClick = {
+                                        onDismiss()
+                                        onDecryptArmoredText(selectionPgp.armored.ifBlank { selectionPgp.selectedText })
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("keyring_decrypt_page_block"),
+                                )
+                            }
+
+                            if (primaryPubKeyBlock != null) {
+                                HardwareBezelButton(
+                                    text = "Import Page PubKey",
+                                    onClick = {
+                                        onDismiss()
+                                        onFieldAction(primaryPubKeyBlock)
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("keyring_import_page_pubkey"),
+                                )
+                            }
+
+                            if (primaryEditableField != null) {
+                                val isPubKeyOnly = primaryEditableField.kind == "pgp_public_key" &&
+                                    primaryEditableField.label.equals("Insert My PubKey", ignoreCase = true)
+                                if (isPubKeyOnly) {
+                                    HardwareBezelButton(
+                                        text = "Insert My PubKey",
+                                        primary = primaryMessageBlock == null,
+                                        onClick = {
+                                            onDismiss()
+                                            onInsertMyPubKey(primaryEditableField)
+                                        },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("keyring_insert_my_pubkey"),
+                                    )
+                                } else {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        HardwareBezelButton(
+                                            text = "Encrypt Field",
+                                            primary = primaryMessageBlock == null,
+                                            onClick = {
+                                                onDismiss()
+                                                onFieldAction(primaryEditableField)
+                                            },
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .testTag("keyring_encrypt_page_field"),
+                                        )
+                                        HardwareBezelButton(
+                                            text = "Insert My PubKey",
+                                            onClick = {
+                                                onDismiss()
+                                                onInsertMyPubKey(primaryEditableField)
+                                            },
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .testTag("keyring_insert_my_pubkey"),
+                                        )
+                                    }
+                                }
+                            } else if (selectionPgp != null && selectionPgp.selectedText.isNotBlank()) {
+                                HardwareBezelButton(
+                                    text = "Encrypt Selection",
+                                    onClick = {
+                                        onDismiss()
+                                        onEncryptSelectedText(selectionPgp.selectedText)
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("keyring_encrypt_selection"),
+                                )
+                            }
+                        }
+                    }
+
                     if (keys.isEmpty()) {
                         Text(
                             text = "Keyring is empty. Generate your own keypair or import a hidden service public key.",

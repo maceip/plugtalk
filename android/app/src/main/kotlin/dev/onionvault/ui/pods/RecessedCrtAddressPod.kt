@@ -2,6 +2,7 @@ package dev.onionvault.ui.pods
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -18,7 +19,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -48,11 +49,13 @@ import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
@@ -70,30 +73,34 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.onionvault.R
+import dev.onionvault.ui.TrustedOnionDirectory
 import dev.onionvault.ui.isBlankOrStartUrl
 import kotlin.math.abs
 
+// Exact normalized inner CRT glass text rect of `pod_crt_pewter_tv.webp` (500 x 434 px)
+private const val CRT_GLASS_LEFT_FRACTION = 0.165f
+private const val CRT_GLASS_TOP_FRACTION = 0.280f
+private const val CRT_GLASS_RIGHT_FRACTION = 0.835f
+private const val CRT_GLASS_BOTTOM_FRACTION = 0.730f
+
 /**
- * `1.5x` Scaled Sculptural 1997 CRT TV Monitor Address Pod (`crt_address_pod`) — Bottom-Center.
+ * Chunky `~5:4` (`156.dp x 130.dp`) Brushed-Pewter 1997 CRT TV Address Pod (`crt_address_pod`) —
+ * Lower-Center (`metatools-reference.jpg` 1:1).
  *
  * Resting State:
- * - `74.dp` height, fills flexible `weight(1f)` width (`~197dp–219dp`), `22.dp` squircle collar.
- * - Thick `7.dp` cast-pewter TV housing (`#7D838C` + `3%` monochrome grain, `2.dp` `#C4CCD4`
- *   top-left specular bevel & `#26292E` bottom-right shadow bevel, sunken inner CRT tube lip).
- * - Deeply recessed `#050608` curved CRT glass well with radial phosphor bloom, subtle scanlines,
- *   heavy inset bezel overhang shadow, and curved top CRT glass reflection arc.
- * - Typography: Bold `16.5.sp` Monospace phosphor green `#39FF14` (`#FFB000` while loading) with
- *   `8px` phosphor halation and tail-preserving `.onion` suffix; StartPage shows `"search / .onion"`.
+ * - `156.dp x 130.dp` chunky CRT TV monitor (`pod_crt_pewter_tv.webp`, NOT a wide bottom pill!),
+ *   floating over the lower-center typewriter zine sheet.
+ * - Glowing phosphor green centered readout (`dread7x.onion`-style host when browsing,
+ *   `search / .onion` on StartPage).
  * - Gestures:
- *   - **Tap**: Expands horizontally to `95%` viewport width (`68.dp` height, `17.sp` input text)
- *     docked `8.dp` above IME keyboard!
- *   - **Horizontal swipe left/right**: Calls [onSwitchAdjacentTab] (`+1` / `-1`) with haptic tick!
- *   - **Pull upward** (`dy < -24.dp`): Calls [onOpenTabSwitcher] with haptic tick!
+ *   - **Tap**: Opens the CRT address editor + `TrustedOnionDirectory` overlay (`isEditing = true`).
+ *   - **Horizontal swipe left/right**: Calls [onSwitchAdjacentTab] (`+1` / `-1`).
+ *   - **Pull upward** (`dy <= -24.dp`): Calls [onOpenTabSwitcher] (`tabs_sheet`).
  *
  * Editing State:
- * - `TextFieldValue` with **auto-select-all on focus**, `KeyboardType.Uri`, `ImeAction.Go`,
- *   `autoCorrectEnabled = false`, tactile `[Paste]` & `[Clear]` hardware bezel keys, and
- *   auto-collapse when IME hides or Back is pressed!
+ * - Expands to `95%` viewport width (`68.dp` height, `17.sp` input text) docked above IME,
+ *   resolving search queries to DuckDuckGo `.onion` and preserving direct hosts/URLs.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -114,6 +121,7 @@ fun RecessedCrtAddressPod(
     val focusRequester = remember { FocusRequester() }
     val density = LocalDensity.current
     val grainBrush = rememberPewterGrainBrush()
+    val tvSpritePainter = painterResource(R.drawable.pod_crt_pewter_tv)
 
     val rawEditableUrl = remember(url) {
         if (isBlankOrStartUrl(url)) "" else url.trim()
@@ -159,23 +167,22 @@ fun RecessedCrtAddressPod(
         onEditingChange(false)
     }
 
-    val outerCornerRadius = 22.dp
-    val outerShape = RoundedCornerShape(outerCornerRadius)
-
     if (isEditing) {
+        val editCornerRadius = 22.dp
+        val editShape = RoundedCornerShape(editCornerRadius)
         Box(
             modifier = modifier
                 .fillMaxWidth(0.95f)
                 .height(68.dp)
-                .metaToolsDropShadow(cornerRadius = outerCornerRadius)
-                .clip(outerShape)
+                .metaToolsDropShadow(cornerRadius = editCornerRadius)
+                .clip(editShape)
                 .testTag("crt_address_pod"),
             contentAlignment = Alignment.Center,
         ) {
             Canvas(modifier = Modifier.fillMaxSize()) {
                 drawCrtPewterHousingAndWell(
                     grainBrush = grainBrush,
-                    outerRadiusPx = outerCornerRadius.toPx(),
+                    outerRadiusPx = editCornerRadius.toPx(),
                     collarThicknessPx = 6.dp.toPx(),
                     isFocused = true,
                 )
@@ -213,9 +220,11 @@ fun RecessedCrtAddressPod(
                     keyboardActions = KeyboardActions(
                         onGo = {
                             val submitted = textFieldValue.text.trim()
+                            val resolved = TrustedOnionDirectory.resolveSearchOrAddress(submitted)
+                                ?: "about:blank"
                             focusManager.clearFocus()
                             onEditingChange(false)
-                            onNavigate(submitted.ifEmpty { "about:blank" })
+                            onNavigate(resolved)
                         },
                     ),
                     decorationBox = { inner ->
@@ -235,7 +244,7 @@ fun RecessedCrtAddressPod(
                     },
                 )
 
-                // Strictly 2 tactile hardware bezel keys: [Paste] & [Clear]
+                // Strictly 2 tactile hardware bezel keys: [Paste] & [Clear] (<= 2:1 label density)
                 CrtBezelKeyButton(
                     label = "Paste",
                     onClick = {
@@ -270,16 +279,27 @@ fun RecessedCrtAddressPod(
         } else {
             "Address bar: $fullTarget"
         }
-        // Tight tracking on 19-20 char truncated .onion strings so 16.5.sp bold monospace
-        // fits end-to-end inside the ~219dp CRT well without trailing ellipsis.
-        val readoutLetterSpacing = if (readout.text.length >= 18) (-0.65).sp else (-0.2).sp
+
+        val charLen = readout.text.length
+        val readoutFontSize = when {
+            charLen <= 14 -> 12.8.sp
+            charLen <= 16 -> 11.2.sp
+            else -> 9.4.sp
+        }
+        val readoutLetterSpacing = when {
+            charLen <= 14 -> (-0.15).sp
+            charLen <= 16 -> (-0.30).sp
+            else -> (-0.42).sp
+        }
+
+        val tvWidth = 156.dp
+        val tvHeight = 135.dp
+        val tvCornerRadius = 26.dp
 
         Box(
             modifier = modifier
-                .widthIn(min = 156.dp)
-                .height(74.dp)
-                .metaToolsDropShadow(cornerRadius = outerCornerRadius)
-                .clip(outerShape)
+                .size(width = tvWidth, height = tvHeight)
+                .metaToolsDropShadow(cornerRadius = tvCornerRadius, insetHorizontal = 5.dp, insetVertical = 5.dp)
                 .semantics {
                     role = Role.Button
                     contentDescription = a11yAddressDesc
@@ -341,29 +361,39 @@ fun RecessedCrtAddressPod(
                 .testTag("crt_address_pod"),
             contentAlignment = Alignment.Center,
         ) {
-            Canvas(modifier = Modifier.matchParentSize()) {
-                drawCrtPewterHousingAndWell(
-                    grainBrush = grainBrush,
-                    outerRadiusPx = outerCornerRadius.toPx(),
-                    collarThicknessPx = 7.dp.toPx(),
-                    isFocused = false,
+            Image(
+                painter = tvSpritePainter,
+                contentDescription = null,
+                contentScale = ContentScale.FillBounds,
+                modifier = Modifier.fillMaxSize(),
+            )
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(
+                        start = tvWidth * CRT_GLASS_LEFT_FRACTION,
+                        end = tvWidth * (1f - CRT_GLASS_RIGHT_FRACTION),
+                        top = tvHeight * CRT_GLASS_TOP_FRACTION,
+                        bottom = tvHeight * (1f - CRT_GLASS_BOTTOM_FRACTION),
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = readout.text,
+                    fontSize = readoutFontSize,
+                    letterSpacing = readoutLetterSpacing,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .padding(horizontal = 3.dp)
+                        .testTag("crt_address_readout"),
                 )
             }
-
-            Text(
-                text = readout.text,
-                fontSize = 16.5.sp,
-                letterSpacing = readoutLetterSpacing,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center,
-                maxLines = 1,
-                softWrap = false,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .padding(horizontal = 12.dp)
-                    .testTag("crt_address_readout"),
-            )
         }
     }
 }
@@ -398,11 +428,6 @@ private fun CrtBezelKeyButton(
     }
 }
 
-/**
- * Draws the chunky 1997 CRT TV monitor cast-pewter collar (`7.dp` thick, `2.dp` `#C4CCD4` /
- * `#26292E` bevels + `3%` grain + contoured inner CRT lip) and deeply sunken `#050608` curved
- * CRT glass tube with phosphor bloom, scanlines, heavy inset shadow, and curved reflection arc.
- */
 private fun DrawScope.drawCrtPewterHousingAndWell(
     grainBrush: androidx.compose.ui.graphics.ShaderBrush,
     outerRadiusPx: Float,
@@ -411,7 +436,6 @@ private fun DrawScope.drawCrtPewterHousingAndWell(
 ) {
     val outerCorner = CornerRadius(outerRadiusPx, outerRadiusPx)
 
-    // 1. Sculptural Cast-Pewter CRT TV Monitor Collar + Pillowed Metallic Contour + 3% Grain
     drawRoundRect(
         brush = Brush.linearGradient(
             0.0f to Color(0xFFA6AEB8),
@@ -423,12 +447,8 @@ private fun DrawScope.drawCrtPewterHousingAndWell(
         ),
         cornerRadius = outerCorner,
     )
-    drawRoundRect(
-        brush = grainBrush,
-        cornerRadius = outerCorner,
-    )
+    drawRoundRect(brush = grainBrush, cornerRadius = outerCorner)
 
-    // 2.dp Top-Left Highlight & Bottom-Right Shadow Outer Bevel
     drawMetallicSquircleBevel(
         cornerRadiusPx = outerRadiusPx,
         strokeWidthPx = 2.dp.toPx(),
@@ -436,16 +456,14 @@ private fun DrawScope.drawCrtPewterHousingAndWell(
         shadowColor = MetaToolsTokens.PewterShadowBevel,
     )
 
-    // 2. Deeply Sunken CRT Black Glass Tube Well (#050608)
     val wellLeft = collarThicknessPx
     val wellTop = collarThicknessPx
     val wellWidth = (size.width - collarThicknessPx * 2f).coerceAtLeast(1f)
     val wellHeight = (size.height - collarThicknessPx * 2f).coerceAtLeast(1f)
-    val wellRadiusPx = (outerRadiusPx - collarThicknessPx * 0.78f).coerceAtLeast(8f)
+    val wellRadiusPx = (outerRadiusPx - collarThicknessPx * 0.55f).coerceAtLeast(10f)
     val wellCorner = CornerRadius(wellRadiusPx, wellRadiusPx)
 
-    // Stepped inner CRT bezel lip (deep dark sunken overhang top-left, bright steel catchlight bottom-right)
-    val lipExpand = 1.6.dp.toPx()
+    val lipExpand = 1.8.dp.toPx()
     drawRoundRect(
         brush = Brush.linearGradient(
             0.0f to Color(0xFF0E1014),
@@ -479,25 +497,23 @@ private fun DrawScope.drawCrtPewterHousingAndWell(
     }
 
     clipPath(wellPath) {
-        // Curved green CRT tube center bloom matching reference TV monitor
         drawRect(
             brush = Brush.radialGradient(
-                0.0f to Color(0x281B662C),
-                0.65f to Color(0x100E3617),
+                0.0f to Color(0x321D7030),
+                0.65f to Color(0x140E3617),
                 1.0f to Color.Transparent,
                 center = Offset(wellLeft + wellWidth * 0.5f, wellTop + wellHeight * 0.52f),
-                radius = wellWidth * 0.58f,
+                radius = wellWidth * 0.62f,
             ),
             topLeft = Offset(wellLeft, wellTop),
             size = Size(wellWidth, wellHeight),
         )
 
-        // Subtle horizontal CRT phosphor scanlines (2.dp pitch)
         val scanStep = 2.dp.toPx()
         var scanY = wellTop + scanStep
         while (scanY < wellTop + wellHeight) {
             drawLine(
-                color = Color(0x12000000),
+                color = Color(0x14000000),
                 start = Offset(wellLeft, scanY),
                 end = Offset(wellLeft + wellWidth, scanY),
                 strokeWidth = 0.8.dp.toPx(),
@@ -505,67 +521,17 @@ private fun DrawScope.drawCrtPewterHousingAndWell(
             scanY += scanStep
         }
 
-        // Heavy inset overhang shadow along top, left, and bottom CRT tube edges
-        val insetDepthY = 9.5.dp.toPx()
-        val insetDepthX = 7.dp.toPx()
-        drawRect(
-            brush = Brush.verticalGradient(
-                0.0f to Color.Black.copy(alpha = 0.96f),
-                0.55f to Color.Black.copy(alpha = 0.48f),
-                1.0f to Color.Transparent,
-                startY = wellTop,
-                endY = wellTop + insetDepthY,
-            ),
-            topLeft = Offset(wellLeft, wellTop),
-            size = Size(wellWidth, insetDepthY),
-        )
-        drawRect(
-            brush = Brush.horizontalGradient(
-                0.0f to Color.Black.copy(alpha = 0.90f),
-                0.55f to Color.Black.copy(alpha = 0.36f),
-                1.0f to Color.Transparent,
-                startX = wellLeft,
-                endX = wellLeft + insetDepthX,
-            ),
-            topLeft = Offset(wellLeft, wellTop),
-            size = Size(insetDepthX, wellHeight),
-        )
-        drawRect(
-            brush = Brush.verticalGradient(
-                0.0f to Color.Transparent,
-                1.0f to Color.Black.copy(alpha = 0.55f),
-                startY = wellTop + wellHeight - 5.dp.toPx(),
-                endY = wellTop + wellHeight,
-            ),
-            topLeft = Offset(wellLeft, wellTop + wellHeight - 5.dp.toPx()),
-            size = Size(wellWidth, 5.dp.toPx()),
-        )
-
-        // Curved top CRT glass tube reflection arc
         val arcPath = Path().apply {
-            val leftX = wellLeft + wellWidth * 0.07f
-            val rightX = wellLeft + wellWidth * 0.93f
-            val topY = wellTop + 3.dp.toPx()
-            val bellyY = wellTop + wellHeight * 0.34f
-            moveTo(leftX, topY + 4.dp.toPx())
-            quadraticTo(
-                wellLeft + wellWidth * 0.5f,
-                topY - 2.dp.toPx(),
-                rightX,
-                topY + 4.dp.toPx(),
-            )
-            quadraticTo(
-                wellLeft + wellWidth * 0.5f,
-                bellyY,
-                leftX,
-                topY + 4.dp.toPx(),
-            )
+            val leftX = wellLeft + wellWidth * 0.08f
+            val rightX = wellLeft + wellWidth * 0.88f
+            val topY = wellTop + 4.dp.toPx()
+            val bellyY = wellTop + wellHeight * 0.36f
+            moveTo(leftX, topY + 5.dp.toPx())
+            quadraticTo(wellLeft + wellWidth * 0.45f, topY - 2.dp.toPx(), rightX, topY + 6.dp.toPx())
+            quadraticTo(wellLeft + wellWidth * 0.42f, bellyY, leftX, topY + 5.dp.toPx())
             close()
         }
-        drawPath(
-            path = arcPath,
-            color = MetaToolsTokens.CrtGlassReflection,
-        )
+        drawPath(path = arcPath, color = MetaToolsTokens.CrtGlassReflection)
 
         if (isFocused) {
             drawRoundRect(
