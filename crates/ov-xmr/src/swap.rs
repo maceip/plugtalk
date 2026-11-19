@@ -144,7 +144,7 @@ pub async fn fetch_btc_xmr_quotes_from_base(
 pub fn parse_orangefren_quotes_html(
     html: &str,
     btc_amount: &str,
-    hidden_service_only: bool,
+    _hidden_service_only: bool,
 ) -> Result<Vec<BtcSwapQuoteItem>> {
     let clean_btc = normalize_btc_amount_decimal(btc_amount)?;
     let mut quotes = Vec::new();
@@ -258,10 +258,9 @@ pub fn parse_orangefren_quotes_html(
         });
     }
 
-    if hidden_service_only {
-        // Stable sort placing `.onion` launch URLs first while preserving rate order within each tier.
-        quotes.sort_by_key(|q| !q.is_onion_url);
-    }
+    // Stable sort placing `.onion` launch URLs first in all routing modes while
+    // preserving best-rate order within the `.onion` tier and clearnet tier.
+    quotes.sort_by_key(|q| !q.is_onion_url);
 
     Ok(quotes)
 }
@@ -588,5 +587,11 @@ mod tests {
         assert!(!quotes[2].is_onion_url);
         assert_eq!(quotes[2].provider, "Xchange");
         assert!(quotes[2].kyc_warning.contains("Tainted coins"));
+
+        // Clearnet-consent mode (`hidden_service_only = false`) also prioritizes `.onion` offers first:
+        let quotes_consent = parse_orangefren_quotes_html(html, "0.01", false).unwrap();
+        assert!(quotes_consent[0].is_onion_url);
+        assert!(quotes_consent[1].is_onion_url);
+        assert!(!quotes_consent[2].is_onion_url);
     }
 }

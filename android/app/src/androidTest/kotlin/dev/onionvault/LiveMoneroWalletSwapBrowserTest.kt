@@ -353,8 +353,10 @@ class LiveMoneroWalletSwapBrowserTest {
         activity.runOnUiThread {
             hasFocusRef.set(activity.hasWindowFocus())
         }
+        val ui = activity.currentUiStateForTest()
+        val needsWebComposite = !ui.isStartPage && !ui.xmr.walletSheetOpen && !ui.xmr.swapSheetOpen
         var bitmap: Bitmap? = null
-        if (hasFocusRef.get()) {
+        if (hasFocusRef.get() && !needsWebComposite) {
             bitmap = runCatching { instrumentation.uiAutomation.takeScreenshot() }.getOrNull()
         }
         if (bitmap == null) {
@@ -419,29 +421,54 @@ class LiveMoneroWalletSwapBrowserTest {
         // or draw winBmp first and blend SurfaceView when window backdrop is opaque.
         val ui = activity.currentUiStateForTest()
         val modalOpen = ui.xmr.walletSheetOpen || ui.xmr.swapSheetOpen
-        if (!ui.isStartPage && !modalOpen && surfaceViews.isNotEmpty()) {
-            // Capture SurfaceView first, then replace solid #0D0F12 background pixels in winBmp with transparent so pods/HUD composite cleanly over webpage!
-            for ((sv, loc) in surfaceViews) {
-                if (sv.width <= 0 || sv.height <= 0 || !sv.holder.surface.isValid) continue
-                val svBmp = Bitmap.createBitmap(sv.width, sv.height, Bitmap.Config.ARGB_8888)
-                val svLatch = CountDownLatch(1)
-                val svResult = AtomicReference(PixelCopy.ERROR_UNKNOWN)
-                runCatching {
-                    PixelCopy.request(
-                        sv,
-                        svBmp,
-                        { res ->
-                            svResult.set(res)
-                            svLatch.countDown()
-                        },
-                        mainHandler,
-                    )
-                }.onFailure { svLatch.countDown() }
-                svLatch.await(5, TimeUnit.SECONDS)
-                if (svResult.get() == PixelCopy.SUCCESS) {
-                    canvas.drawBitmap(svBmp, loc[0].toFloat(), loc[1].toFloat(), null)
+        if (!ui.isStartPage && !modalOpen) {
+            var drewWebpage = false
+            val liveBrowser = activity.activeCefpackSessionForTest()
+            if (liveBrowser != null) {
+                val cefBmpRef = AtomicReference<Bitmap?>(null)
+                val cefLatch = CountDownLatch(1)
+                activity.runOnUiThread {
+                    runCatching {
+                        liveBrowser.captureBitmap { captured ->
+                            val copy = captured?.let { bmp ->
+                                if (!bmp.isRecycled) bmp.copy(Bitmap.Config.ARGB_8888, false) else null
+                            }
+                            cefBmpRef.set(copy)
+                            cefLatch.countDown()
+                        }
+                    }.onFailure { cefLatch.countDown() }
                 }
-                svBmp.recycle()
+                cefLatch.await(5, TimeUnit.SECONDS)
+                cefBmpRef.get()?.let { cefBmp ->
+                    val dstRect = android.graphics.Rect(0, 0, w, h)
+                    canvas.drawBitmap(cefBmp, null, dstRect, null)
+                    cefBmp.recycle()
+                    drewWebpage = true
+                }
+            }
+            if (!drewWebpage) {
+                for ((sv, loc) in surfaceViews) {
+                    if (sv.width <= 0 || sv.height <= 0 || !sv.holder.surface.isValid) continue
+                    val svBmp = Bitmap.createBitmap(sv.width, sv.height, Bitmap.Config.ARGB_8888)
+                    val svLatch = CountDownLatch(1)
+                    val svResult = AtomicReference(PixelCopy.ERROR_UNKNOWN)
+                    runCatching {
+                        PixelCopy.request(
+                            sv,
+                            svBmp,
+                            { res ->
+                                svResult.set(res)
+                                svLatch.countDown()
+                            },
+                            mainHandler,
+                        )
+                    }.onFailure { svLatch.countDown() }
+                    svLatch.await(5, TimeUnit.SECONDS)
+                    if (svResult.get() == PixelCopy.SUCCESS) {
+                        canvas.drawBitmap(svBmp, loc[0].toFloat(), loc[1].toFloat(), null)
+                    }
+                    svBmp.recycle()
+                }
             }
             if (winResult.get() == PixelCopy.SUCCESS) {
                 val pixels = IntArray(w * h)
@@ -451,7 +478,7 @@ class LiveMoneroWalletSwapBrowserTest {
                     val r = (c ushr 16) and 0xFF
                     val g = (c ushr 8) and 0xFF
                     val b = c and 0xFF
-                    if (r in 11..15 && g in 13..17 && b in 16..20) {
+                    if (r in 10..16 && g in 12..18 && b in 15..21) {
                         pixels[i] = 0x00000000
                     }
                 }
