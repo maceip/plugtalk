@@ -119,5 +119,21 @@ class OnionVaultPreviewsTest {
     fun the_monero_wallet_preview_renders() {
         compose.setContent { dev.onionvault.ui.previews.MoneroWalletHomescreenPreview() }
         compose.onAllNodes(isRoot())[0].assertExists()
+        compose.onNodeWithTag("xmr_wallet_sheet").assertIsDisplayed()
+        compose.onNodeWithTag("xmr_receive_qr").assertIsDisplayed()
+    }
+
+    @Test
+    fun the_btc_xmr_swap_preview_renders() {
+        compose.setContent { dev.onionvault.ui.previews.BtcXmrSwapHomescreenPreview() }
+        compose.onAllNodes(isRoot())[0].assertExists()
+        compose.onNodeWithTag("btc_xmr_swap_sheet").assertIsDisplayed()
+    }
+
+    @Test
+    fun the_steel_rails_load_pulse_preview_renders() {
+        compose.setContent { dev.onionvault.ui.previews.SteelRailsLoadPulsePreview() }
+        compose.onAllNodes(isRoot())[0].assertExists()
+        compose.onNodeWithTag("active_swap_hud").assertIsDisplayed()
     }
 }

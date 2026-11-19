@@ -75,11 +75,15 @@ jobs:
             site/app.js \
             site/generated/homescreen-sync.json \
             site/generated/assets/homescreen-preview.webp \
+            site/generated/assets/state-zerojs-page.webp \
+            site/generated/assets/state-steel-rails-load.webp \
+            site/generated/assets/state-predictive-back.webp \
             site/generated/assets/state-crt-directory.webp \
             site/generated/assets/state-side-remote.webp \
             site/generated/assets/state-tor-circuit.webp \
             site/generated/assets/state-pgp-keyring.webp \
             site/generated/assets/state-monero-wallet.webp \
+            site/generated/assets/state-btc-xmr-swap.webp \
             site/generated/assets/sprites/bg_trap_street_zine.webp \
             site/generated/assets/sprites/pod_crt_pewter_tv.webp \
             site/generated/assets/sprites/pod_pewter_back_key.webp \
@@ -96,8 +100,8 @@ jobs:
           data = json.loads(pathlib.Path("site/generated/homescreen-sync.json").read_text())
           comps = len(data["components"])
           states = len(data["states"])
-          assert comps == 7, f"expected 7 components, got {comps}"
-          assert states == 6, f"expected 6 states, got {states}"
+          assert comps == 9, f"expected 9 components, got {comps}"
+          assert states == 10, f"expected 10 states, got {states}"
           print("Verified homescreen-sync.json:", data["appVersion"], data["viewport"])
           '
 

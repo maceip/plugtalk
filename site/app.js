@@ -2,51 +2,64 @@
    Trap — Synced Compose @Preview Showcase & Full-Screen Interactive Browser
    ========================================================================== */
 
+const SVG_NS = "http://www.w3.org/2000/svg";
+
 /* --------------------------------------------------------------------------
-   STAGE 1: Clean High-Contrast Prose Callouts + Synced Semantics Geometry
+   STAGE 1: Clean High-Contrast Prose Callouts + Encircling Contours +
+            Animated Jetpack Compose @Preview Expansion
    -------------------------------------------------------------------------- */
 
 const CALLOUT_PROSE = {
   "start-zine-viewport": {
     heading: "Full-Bleed Zero-JavaScript Viewport",
     copy:
-      "Draws edge-to-edge from the top of the screen with no top bar, bottom bar, or notification banners. Displays the street-zine canvas on blank tabs and renders active .onion documents inside an off-the-record Chromium 156 surface with JavaScript disabled at every layer."
+      "Draws edge-to-edge onto the top status bar with no top bar, bottom bar, or snackbars. Click to open the live Compose @Preview of an active .onion page with zero-JS native OpenPGP field actions."
   },
   "perimeter-steel-rails": {
     heading: "Perimeter Brushed-Steel Rails",
     copy:
-      "Frames the left and right edges with brushed-steel vertical bars and street overspray while passing every touch straight through to the webpage. Sweeps an acid-yellow pulse across the top seam while a Tor circuit or hidden service document is loading."
+      "Frames both vertical edges with 12dp brushed-steel bars and street overspray at 100% touch passthrough. Click to open the Compose @Preview of the acid-yellow load pulse and active swap HUD."
   },
   "kpt-back-pod": {
     heading: "Cast-Pewter Back & Forward Switch",
     copy:
-      "Rectangular chamfered pewter keycap positioned above the Tor orb so the orb remains the sole sphere in the shell. A single tap steps back through tab history or returns to the start zine; holding briefly steps forward."
+      "Chamfered non-round pewter keycap above the Tor orb: tap steps back, hold steps forward. Click to open the Compose @Preview of Trap's mid-swipe Predictive Back snapshot transition."
   },
   "tor-orb-pod": {
     heading: "Knurled Tor Circuit & Identity Orb",
     copy:
-      "Driven by the embedded Rust Arti client, shifting from an amber orbital beacon during bootstrap to ultraviolet once the local SOCKS5h proxy is ready. Tapping opens per-site circuit telemetry; holding rotates to a fresh Tor identity."
-  },
-  "crt-address-pod": {
-    heading: "Pewter CRT Address & Directory Monitor",
-    copy:
-      "Displays a tail-preserving green phosphor .onion readout so v3 vanity and checksum suffixes stay legible. Tapping expands the address bar alongside eleven SHA3-verified .onion services, swiping horizontally switches tabs, and pulling upward opens the tab switcher."
+      "Embedded Rust Arti indicator shifting from amber bootstrap to ultraviolet once local SOCKS5h is ready; hold to rotate identity. Click to open the Compose @Preview of the Tor Circuit inspector."
   },
   "pgp-rocker-pod": {
     heading: "Translucent Red OpenPGP Switchblade",
     copy:
-      "Illuminates an internal LED whenever native DOM inspection detects armored OpenPGP blocks or form fields on the page. One click opens a fresh tab, two clicks open the Sequoia hardware keyring, and sliding the latch upward decrypts or verifies page armor."
+      "Glows when native DOM inspection spots OpenPGP fields or armor: 1 click opens a new tab, 2 clicks open the keyring, upward pull decrypts. Click to open the Sequoia Keyring Compose @Preview."
+  },
+  "crt-address-pod": {
+    heading: "Pewter CRT Address & Directory Monitor",
+    copy:
+      "Shows a tail-preserving green phosphor .onion readout; swipe sideways to switch tabs or pull up for the tab deck. Click to open the expanded CRT bar and 11-site .onion directory Compose @Preview."
   },
   "side-remote-pod": {
     heading: "2×5 LED Hardware Side Remote",
     copy:
-      "Reflects live Tor readiness, stream isolation, loading state, keyring status, and zero-JS protection across ten recessed LEDs. Tapping expands the upright command deck for Onion Sites, Text Search, OpenPGP actions, and the Monero light wallet."
+      "Ten recessed LEDs reflect live Tor, circuit isolation, keyring, and zero-JS state. Click to animate open the upright Hardware Remote Compose @Preview with Monero Wallet and Swap BTC → XMR."
+  },
+  "monero-wallet": {
+    heading: "Monero Tor Light Wallet & HTTP 402",
+    copy:
+      "Pure-Rust ov-xmr Keystore wallet synced over .onion monerod RPC with per-site 8… subaddresses and HTTP 402 XMR402 proofs. Click to open the Monero Light Wallet Compose @Preview."
+  },
+  "btc-xmr-swap": {
+    heading: "Native BTC → XMR Zero-JS Tor Swap",
+    copy:
+      "Fetches live no-KYC .onion quotes over Arti Tor, mints an unlinkable 8… payout subaddress per swap, and tracks BTC deposits via QR and browser HUD. Click to open the Swap Compose @Preview."
   }
 };
 
 const FALLBACK_MANIFEST = {
-  schemaVersion: 1,
-  appVersion: "0.1.44",
+  schemaVersion: 2,
+  appVersion: "0.1.46",
   gitCommit: "synced",
   previewEntrypoint: "dev.onionvault.ui.previews.BrowserChromePreview",
   viewport: {
@@ -60,68 +73,133 @@ const FALLBACK_MANIFEST = {
   homescreenImage: "generated/assets/homescreen-preview.webp",
   states: [
     { id: "resting", previewFn: "BrowserChromePreview", image: "generated/assets/homescreen-preview.webp" },
-    { id: "crt-directory", previewFn: "CrtOnionDirectoryPreview", image: "generated/assets/state-crt-directory.webp" },
-    { id: "side-remote", previewFn: "BrowserMenuPreview", image: "generated/assets/state-side-remote.webp" },
+    { id: "zerojs-page", previewFn: "PgpActionChipsPreview", image: "generated/assets/state-zerojs-page.webp" },
+    { id: "steel-rails-load", previewFn: "SteelRailsLoadPulsePreview", image: "generated/assets/state-steel-rails-load.webp" },
+    { id: "predictive-back", previewFn: "PredictiveBackPreview", image: "generated/assets/state-predictive-back.webp" },
     { id: "tor-circuit", previewFn: "TorBootstrapPreview", image: "generated/assets/state-tor-circuit.webp" },
     { id: "pgp-keyring", previewFn: "NeonGraffitiKeyringPreview", image: "generated/assets/state-pgp-keyring.webp" },
-    { id: "monero-wallet", previewFn: "MoneroWalletHomescreenPreview", image: "generated/assets/state-monero-wallet.webp" }
+    { id: "crt-directory", previewFn: "CrtOnionDirectoryPreview", image: "generated/assets/state-crt-directory.webp" },
+    { id: "side-remote", previewFn: "BrowserMenuPreview", image: "generated/assets/state-side-remote.webp" },
+    { id: "monero-wallet", previewFn: "MoneroWalletHomescreenPreview", image: "generated/assets/state-monero-wallet.webp" },
+    { id: "btc-xmr-swap", previewFn: "BtcXmrSwapHomescreenPreview", image: "generated/assets/state-btc-xmr-swap.webp" }
   ],
   components: [
     {
       id: "start-zine-viewport",
       index: "01",
       side: "left",
-      statePreviewId: "resting",
-      boundsNorm: { left: 0.03, top: 0.015, width: 0.94, height: 0.46 },
-      anchorNorm: { x: 0.48, y: 0.19 }
+      statePreviewId: "zerojs-page",
+      contourDp: { shape: "roundrect", cx: 206, cy: 272, width: 384, height: 520, rx: 14, rotationDeg: 0 },
+      expandedContourDp: { shape: "roundrect", cx: 206, cy: 320, width: 384, height: 612, rx: 16, rotationDeg: 0 },
+      anchorNorm: { x: 0.034, y: 0.2131 },
+      expandedAnchorNorm: { x: 0.034, y: 0.3497 }
     },
     {
       id: "perimeter-steel-rails",
       index: "02",
       side: "left",
-      statePreviewId: "resting",
-      boundsNorm: { left: 0.0, top: 0.0, width: 0.0291, height: 1.0 },
-      anchorNorm: { x: 0.0146, y: 0.43 }
+      statePreviewId: "steel-rails-load",
+      contourDp: { shape: "dual-rails", cx: 206, cy: 457.5, width: 412, height: 915, rx: 4, rotationDeg: 0 },
+      expandedContourDp: {
+        shape: "dual-rails",
+        cx: 206,
+        cy: 457.5,
+        width: 412,
+        height: 915,
+        rx: 4,
+        rotationDeg: 0,
+        subFocus: { cx: 206, cy: 481, r: 34 }
+      },
+      anchorNorm: { x: 0.0291, y: 0.4317 },
+      expandedAnchorNorm: { x: 0.0194, y: 0.5 }
     },
     {
       id: "kpt-back-pod",
       index: "03",
       side: "left",
-      statePreviewId: "resting",
-      boundsNorm: { left: 0.0534, top: 0.7727, width: 0.1505, height: 0.0437 },
-      anchorNorm: { x: 0.1286, y: 0.7945 }
+      statePreviewId: "predictive-back",
+      contourDp: { shape: "roundrect", cx: 53, cy: 727, width: 62, height: 40, rx: 8, rotationDeg: 0 },
+      expandedContourDp: { shape: "roundrect", cx: 206, cy: 320, width: 384, height: 612, rx: 16, rotationDeg: 0 },
+      anchorNorm: { x: 0.0534, y: 0.7945 },
+      expandedAnchorNorm: { x: 0.034, y: 0.3497 }
     },
     {
       id: "tor-orb-pod",
       index: "04",
       side: "left",
       statePreviewId: "tor-circuit",
-      boundsNorm: { left: 0.0194, top: 0.8295, width: 0.2524, height: 0.1137 },
-      anchorNorm: { x: 0.1456, y: 0.8863 }
-    },
-    {
-      id: "crt-address-pod",
-      index: "05",
-      side: "right",
-      statePreviewId: "crt-directory",
-      boundsNorm: { left: 0.301, top: 0.7082, width: 0.3786, height: 0.1475 },
-      anchorNorm: { x: 0.4903, y: 0.782 }
+      contourDp: { shape: "circle", cx: 60, cy: 811, width: 104, height: 104, rx: 52, rotationDeg: 0 },
+      expandedContourDp: { shape: "roundrect", cx: 268, cy: 753, width: 268, height: 288, rx: 24, rotationDeg: 0 },
+      anchorNorm: { x: 0.0194, y: 0.8863 },
+      expandedAnchorNorm: { x: 0.3252, y: 0.823 }
     },
     {
       id: "pgp-rocker-pod",
-      index: "06",
+      index: "05",
       side: "right",
       statePreviewId: "pgp-keyring",
-      boundsNorm: { left: 0.8196, top: 0.6084, width: 0.1804, height: 0.1355 },
-      anchorNorm: { x: 0.89, y: 0.6762 }
+      contourDp: { shape: "roundrect", cx: 355, cy: 629, width: 82, height: 124, rx: 15, rotationDeg: 20 },
+      expandedContourDp: { shape: "roundrect", cx: 206, cy: 457.5, width: 400, height: 903, rx: 22, rotationDeg: 0 },
+      anchorNorm: { x: 0.9552, y: 0.7028 },
+      expandedAnchorNorm: { x: 0.9806, y: 0.5 }
+    },
+    {
+      id: "crt-address-pod",
+      index: "06",
+      side: "right",
+      statePreviewId: "crt-directory",
+      contourDp: { shape: "roundrect", cx: 202, cy: 715.5, width: 156, height: 135, rx: 26, rotationDeg: 0 },
+      expandedContourDp: { shape: "roundrect", cx: 206.25, cy: 459.5, width: 391.5, height: 895, rx: 18, rotationDeg: 0 },
+      anchorNorm: { x: 0.6796, y: 0.782 },
+      expandedAnchorNorm: { x: 0.9757, y: 0.5022 }
     },
     {
       id: "side-remote-pod",
       index: "07",
       side: "right",
       statePreviewId: "side-remote",
-      boundsNorm: { left: 0.8826, top: 0.772, width: 0.1174, height: 0.2033 },
-      anchorNorm: { x: 0.89, y: 0.8736 }
+      contourDp: { shape: "pill", cx: 360, cy: 804, width: 60, height: 186, rx: 30, rotationDeg: 20 },
+      expandedContourDp: { shape: "roundrect", cx: 268, cy: 587, width: 268, height: 620, rx: 24, rotationDeg: 0 },
+      anchorNorm: { x: 0.9787, y: 0.8447 },
+      expandedAnchorNorm: { x: 0.9757, y: 0.6103 }
+    },
+    {
+      id: "monero-wallet",
+      index: "08",
+      side: "right",
+      statePreviewId: "monero-wallet",
+      contourDp: {
+        shape: "pill",
+        cx: 360,
+        cy: 804,
+        width: 60,
+        height: 186,
+        rx: 30,
+        rotationDeg: 20,
+        subFocus: { cx: 372.31, cy: 770.17, r: 19 }
+      },
+      expandedContourDp: { shape: "roundrect", cx: 206, cy: 457.5, width: 400, height: 903, rx: 22, rotationDeg: 0 },
+      anchorNorm: { x: 0.9422, y: 0.8899 },
+      expandedAnchorNorm: { x: 0.9806, y: 0.5 }
+    },
+    {
+      id: "btc-xmr-swap",
+      index: "09",
+      side: "right",
+      statePreviewId: "btc-xmr-swap",
+      contourDp: {
+        shape: "pill",
+        cx: 360,
+        cy: 804,
+        width: 60,
+        height: 186,
+        rx: 30,
+        rotationDeg: 20,
+        subFocus: { cx: 344.95, cy: 845.35, r: 21 }
+      },
+      expandedContourDp: { shape: "roundrect", cx: 206, cy: 457.5, width: 400, height: 903, rx: 22, rotationDeg: 0 },
+      anchorNorm: { x: 0.904, y: 0.9371 },
+      expandedAnchorNorm: { x: 0.9806, y: 0.5327 }
     }
   ]
 };
@@ -130,7 +208,16 @@ const showcaseState = {
   manifest: FALLBACK_MANIFEST,
   hoveredId: null,
   lockedId: null,
-  activePreviewId: "resting"
+  animRaf: null,
+  // Interpolated morph state for smooth 60fps contour & leader animation
+  morphProgress: 0, // 0 = resting contour, 1 = expanded @Preview contour
+  morphComponentId: null,
+  fromContour: null,
+  toContour: null,
+  fromAnchor: null,
+  toAnchor: null,
+  currentContour: null,
+  currentAnchors: {}
 };
 
 async function loadSyncManifest() {
@@ -138,7 +225,7 @@ async function loadSyncManifest() {
     const res = await fetch("./generated/homescreen-sync.json", { cache: "no-cache" });
     if (res.ok) {
       const json = await res.json();
-      if (json && Array.isArray(json.components) && json.components.length > 0) {
+      if (json && Array.isArray(json.components) && json.components.length > 0 && json.components[0].contourDp) {
         showcaseState.manifest = json;
       }
     }
@@ -147,8 +234,11 @@ async function loadSyncManifest() {
   }
 }
 
-function getFocusedCalloutId() {
-  return showcaseState.hoveredId || showcaseState.lockedId;
+function preloadStateImages() {
+  for (const st of showcaseState.manifest.states) {
+    const img = new Image();
+    img.src = `./${st.image}`;
+  }
 }
 
 function getOrderedComponents() {
@@ -158,17 +248,211 @@ function getOrderedComponents() {
   return [...left, ...right];
 }
 
+function getComponentById(id) {
+  return showcaseState.manifest.components.find((c) => c.id === id) || null;
+}
+
+function getActiveHighlightId() {
+  return showcaseState.hoveredId || showcaseState.lockedId;
+}
+
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+function easeOutExpoSnap(t) {
+  return 1 - Math.pow(1 - t, 3.2);
+}
+
+function interpolateContour(c1, c2, t) {
+  if (!c1) return c2;
+  if (!c2) return c1;
+  const shape = t > 0.5 ? c2.shape : c1.shape;
+  return {
+    shape,
+    cx: lerp(c1.cx, c2.cx, t),
+    cy: lerp(c1.cy, c2.cy, t),
+    width: lerp(c1.width, c2.width, t),
+    height: lerp(c1.height, c2.height, t),
+    rx: lerp(c1.rx, c2.rx, t),
+    rotationDeg: lerp(c1.rotationDeg || 0, c2.rotationDeg || 0, t),
+    subFocus: t < 0.35 && c1.subFocus ? c1.subFocus : t > 0.65 && c2.subFocus ? c2.subFocus : null
+  };
+}
+
+function startPreviewTransition(nextLockedId) {
+  const prevLockedId = showcaseState.lockedId;
+  showcaseState.lockedId = nextLockedId;
+
+  const viewportEl = document.getElementById("phone-viewport");
+  const expImgEl = document.getElementById("preview-expanded-image");
+  const rootW = showcaseState.manifest.viewport?.widthDp || 412;
+  const rootH = showcaseState.manifest.viewport?.heightDp || 915;
+
+  if (showcaseState.animRaf) {
+    cancelAnimationFrame(showcaseState.animRaf);
+    showcaseState.animRaf = null;
+  }
+
+  if (nextLockedId) {
+    const comp = getComponentById(nextLockedId);
+    if (!comp) return;
+
+    const stateObj = showcaseState.manifest.states.find((s) => s.id === comp.statePreviewId);
+    const originX = ((comp.contourDp.cx / rootW) * 100).toFixed(1);
+    const originY = ((comp.contourDp.cy / rootH) * 100).toFixed(1);
+
+    if (expImgEl && stateObj) {
+      const nextSrc = `./${stateObj.image}`;
+      // Re-trigger bloom animation cleanly even when switching directly between two callouts
+      expImgEl.classList.remove("is-open");
+      expImgEl.style.transformOrigin = `${originX}% ${originY}%`;
+      if (expImgEl.getAttribute("src") !== nextSrc) {
+        expImgEl.setAttribute("src", nextSrc);
+      }
+      // Force style recalc before applying .is-open so CSS transition animates smoothly
+      void expImgEl.offsetWidth;
+      expImgEl.classList.add("is-open");
+    }
+    viewportEl?.classList.add("has-expanded");
+
+    const startContour =
+      prevLockedId && showcaseState.currentContour ? { ...showcaseState.currentContour } : { ...comp.contourDp };
+    const endContour = { ...(comp.expandedContourDp || comp.contourDp) };
+    const startAnchor = showcaseState.currentAnchors[comp.id] || { ...comp.anchorNorm };
+    const endAnchor = { ...(comp.expandedAnchorNorm || comp.anchorNorm) };
+
+    animateContourMorph(comp.id, startContour, endContour, startAnchor, endAnchor, 330);
+  } else {
+    // Animate closed back into the resting pod!
+    const closingComp = prevLockedId ? getComponentById(prevLockedId) : null;
+    if (expImgEl) {
+      if (closingComp) {
+        const originX = ((closingComp.contourDp.cx / rootW) * 100).toFixed(1);
+        const originY = ((closingComp.contourDp.cy / rootH) * 100).toFixed(1);
+        expImgEl.style.transformOrigin = `${originX}% ${originY}%`;
+      }
+      expImgEl.classList.remove("is-open");
+    }
+    viewportEl?.classList.remove("has-expanded");
+
+    if (closingComp) {
+      const startContour = showcaseState.currentContour || { ...(closingComp.expandedContourDp || closingComp.contourDp) };
+      const endContour = { ...closingComp.contourDp };
+      const startAnchor = showcaseState.currentAnchors[closingComp.id] || {
+        ...(closingComp.expandedAnchorNorm || closingComp.anchorNorm)
+      };
+      const endAnchor = { ...closingComp.anchorNorm };
+      animateContourMorph(closingComp.id, startContour, endContour, startAnchor, endAnchor, 290, () => {
+        if (!showcaseState.lockedId) {
+          showcaseState.morphComponentId = null;
+          showcaseState.currentContour = null;
+          syncShowcaseVisuals();
+        }
+      });
+    } else {
+      showcaseState.morphComponentId = null;
+      showcaseState.currentContour = null;
+      syncShowcaseVisuals();
+    }
+  }
+}
+
+function animateContourMorph(compId, fromContour, toContour, fromAnchor, toAnchor, durationMs, onComplete) {
+  showcaseState.morphComponentId = compId;
+  const startTime = performance.now();
+
+  const step = (now) => {
+    const rawT = Math.min(1, (now - startTime) / durationMs);
+    const t = easeOutExpoSnap(rawT);
+    showcaseState.currentContour = interpolateContour(fromContour, toContour, t);
+    showcaseState.currentAnchors[compId] = {
+      x: lerp(fromAnchor.x, toAnchor.x, t),
+      y: lerp(fromAnchor.y, toAnchor.y, t)
+    };
+    syncShowcaseVisuals();
+
+    if (rawT < 1) {
+      showcaseState.animRaf = requestAnimationFrame(step);
+    } else {
+      showcaseState.animRaf = null;
+      if (onComplete) onComplete();
+    }
+  };
+
+  showcaseState.animRaf = requestAnimationFrame(step);
+}
+
+function appendContourSvgElements(parentGroup, contour, className) {
+  const { shape, cx, cy, width, height, rx, rotationDeg } = contour;
+  const rotTransform =
+    rotationDeg && Math.abs(rotationDeg) > 0.05
+      ? `rotate(${rotationDeg.toFixed(2)} ${cx.toFixed(2)} ${cy.toFixed(2)})`
+      : null;
+
+  if (shape === "dual-rails") {
+    const leftRail = document.createElementNS(SVG_NS, "rect");
+    leftRail.setAttribute("class", className);
+    leftRail.setAttribute("x", "1.5");
+    leftRail.setAttribute("y", "2");
+    leftRail.setAttribute("width", "11");
+    leftRail.setAttribute("height", String((height - 4).toFixed(1)));
+    leftRail.setAttribute("rx", "4");
+    parentGroup.appendChild(leftRail);
+
+    const rightRail = document.createElementNS(SVG_NS, "rect");
+    rightRail.setAttribute("class", className);
+    rightRail.setAttribute("x", String((width - 12.5).toFixed(1)));
+    rightRail.setAttribute("y", "2");
+    rightRail.setAttribute("width", "11");
+    rightRail.setAttribute("height", String((height - 4).toFixed(1)));
+    rightRail.setAttribute("rx", "4");
+    parentGroup.appendChild(rightRail);
+    return;
+  }
+
+  if (shape === "circle" && Math.abs(width - height) < 2) {
+    const circle = document.createElementNS(SVG_NS, "circle");
+    circle.setAttribute("class", className);
+    circle.setAttribute("cx", cx.toFixed(2));
+    circle.setAttribute("cy", cy.toFixed(2));
+    circle.setAttribute("r", (width * 0.5).toFixed(2));
+    parentGroup.appendChild(circle);
+    return;
+  }
+
+  const rect = document.createElementNS(SVG_NS, "rect");
+  rect.setAttribute("class", className);
+  rect.setAttribute("x", (cx - width * 0.5).toFixed(2));
+  rect.setAttribute("y", (cy - height * 0.5).toFixed(2));
+  rect.setAttribute("width", width.toFixed(2));
+  rect.setAttribute("height", height.toFixed(2));
+  rect.setAttribute("rx", Math.min(rx, width * 0.5, height * 0.5).toFixed(2));
+  if (rotTransform) {
+    rect.setAttribute("transform", rotTransform);
+  }
+  parentGroup.appendChild(rect);
+}
+
 function renderPhoneShowcase() {
   const leftCol = document.getElementById("callouts-left");
   const rightCol = document.getElementById("callouts-right");
-  const overlay = document.getElementById("viewport-overlay");
-  if (!leftCol || !rightCol || !overlay) return;
+  const hitLayer = document.getElementById("contour-hit-layer");
+  const svgViewport = document.getElementById("viewport-contour-svg");
+  if (!leftCol || !rightCol || !hitLayer || !svgViewport) return;
+
+  const rootW = showcaseState.manifest.viewport?.widthDp || 412;
+  const rootH = showcaseState.manifest.viewport?.heightDp || 915;
+  svgViewport.setAttribute("viewBox", `0 0 ${rootW} ${rootH}`);
 
   leftCol.innerHTML = "";
   rightCol.innerHTML = "";
-  overlay.innerHTML = "";
+  hitLayer.innerHTML = "";
 
-  for (const comp of getOrderedComponents()) {
+  const ordered = getOrderedComponents();
+
+  for (const comp of ordered) {
+    showcaseState.currentAnchors[comp.id] = { ...comp.anchorNorm };
     const prose = CALLOUT_PROSE[comp.id] || {
       heading: comp.composable || comp.id,
       copy: ""
@@ -179,6 +463,7 @@ function renderPhoneShowcase() {
     card.id = `callout-${comp.id}`;
     card.tabIndex = 0;
     card.setAttribute("role", "button");
+    card.setAttribute("aria-expanded", "false");
     card.innerHTML = `
       <h2 class="callout-heading">${escapeHtml(prose.heading)}</h2>
       <p class="callout-copy">${escapeHtml(prose.copy)}</p>
@@ -186,9 +471,6 @@ function renderPhoneShowcase() {
 
     card.addEventListener("mouseenter", () => {
       showcaseState.hoveredId = comp.id;
-      if (!showcaseState.lockedId) {
-        showcaseState.activePreviewId = "resting";
-      }
       syncShowcaseVisuals();
     });
 
@@ -197,22 +479,16 @@ function renderPhoneShowcase() {
       syncShowcaseVisuals();
     });
 
-    const toggleLock = () => {
-      if (showcaseState.lockedId === comp.id) {
-        showcaseState.lockedId = null;
-        showcaseState.activePreviewId = "resting";
-      } else {
-        showcaseState.lockedId = comp.id;
-        showcaseState.activePreviewId = comp.statePreviewId || "resting";
-      }
-      syncShowcaseVisuals();
+    const toggleExpand = () => {
+      const next = showcaseState.lockedId === comp.id ? null : comp.id;
+      startPreviewTransition(next);
     };
 
-    card.addEventListener("click", toggleLock);
+    card.addEventListener("click", toggleExpand);
     card.addEventListener("keydown", (e) => {
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
-        toggleLock();
+        toggleExpand();
       }
     });
 
@@ -221,51 +497,130 @@ function renderPhoneShowcase() {
     } else {
       rightCol.appendChild(card);
     }
-
-    const rectEl = document.createElement("div");
-    rectEl.className = "bounds-rect";
-    rectEl.id = `bounds-${comp.id}`;
-    rectEl.style.left = `${(comp.boundsNorm.left * 100).toFixed(2)}%`;
-    rectEl.style.top = `${(comp.boundsNorm.top * 100).toFixed(2)}%`;
-    rectEl.style.width = `${(comp.boundsNorm.width * 100).toFixed(2)}%`;
-    rectEl.style.height = `${(comp.boundsNorm.height * 100).toFixed(2)}%`;
-    overlay.appendChild(rectEl);
-
-    const dot = document.createElement("button");
-    dot.type = "button";
-    dot.className = "hotspot-dot";
-    dot.id = `dot-${comp.id}`;
-    dot.style.left = `${(comp.anchorNorm.x * 100).toFixed(2)}%`;
-    dot.style.top = `${(comp.anchorNorm.y * 100).toFixed(2)}%`;
-    dot.setAttribute("aria-label", prose.heading);
-
-    dot.addEventListener("mouseenter", () => {
-      showcaseState.hoveredId = comp.id;
-      syncShowcaseVisuals();
-    });
-    dot.addEventListener("mouseleave", () => {
-      showcaseState.hoveredId = null;
-      syncShowcaseVisuals();
-    });
-    dot.addEventListener("click", (e) => {
-      e.stopPropagation();
-      toggleLock();
-    });
-
-    overlay.appendChild(dot);
   }
 
-  const stageEl = document.getElementById("phone-showcase");
-  if (stageEl) {
-    stageEl.addEventListener("click", (e) => {
-      if (!e.target.closest(".callout-card") && !e.target.closest(".hotspot-dot")) {
-        if (showcaseState.lockedId || showcaseState.activePreviewId !== "resting") {
-          showcaseState.lockedId = null;
-          showcaseState.activePreviewId = "resting";
-          syncShowcaseVisuals();
-        }
+  // Render interactive hit-targets on the phone mock (smaller/specific pods on top of full-bleed viewport)
+  const hitOrder = [
+    "start-zine-viewport",
+    "perimeter-steel-rails",
+    "crt-address-pod",
+    "pgp-rocker-pod",
+    "side-remote-pod",
+    "kpt-back-pod",
+    "tor-orb-pod"
+  ];
+  for (const hitId of hitOrder) {
+    const comp = getComponentById(hitId);
+    if (!comp) continue;
+    const g = document.createElementNS(SVG_NS, "g");
+    g.id = `hit-${comp.id}`;
+    appendContourSvgElements(g, comp.contourDp, "contour-hit");
+    g.addEventListener("mouseenter", () => {
+      if (!showcaseState.lockedId) {
+        showcaseState.hoveredId = comp.id;
+        syncShowcaseVisuals();
       }
     });
+    g.addEventListener("mouseleave", () => {
+      if (showcaseState.hoveredId === comp.id) {
+        showcaseState.hoveredId = null;
+        syncShowcaseVisuals();
+      }
+    });
+    g.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const next = showcaseState.lockedId === comp.id ? null : comp.id;
+      startPreviewTransition(next);
+    });
+    hitLayer.appendChild(g);
+  }
+
+  // Clicking the expanded @Preview phone screen collapses back to resting
+  document.getElementById("phone-viewport")?.addEventListener("click", () => {
+    if (showcaseState.lockedId) {
+      startPreviewTransition(null);
+    }
+  });
+
+  // Clicking outside cards/phone collapses any open @Preview
+  document.getElementById("phone-showcase")?.addEventListener("click", (e) => {
+    if (!e.target.closest(".callout-card") && !e.target.closest("#phone-chassis")) {
+      if (showcaseState.lockedId) {
+        startPreviewTransition(null);
+      }
+    }
+  });
+}
+
+function renderViewportContours() {
+  const highlightLayer = document.getElementById("contour-highlight-layer");
+  const hitLayer = document.getElementById("contour-hit-layer");
+  if (!highlightLayer) return;
+
+  highlightLayer.innerHTML = "";
+  const activeId = getActiveHighlightId();
+  const isExpandedOpen = Boolean(showcaseState.lockedId);
+
+  if (hitLayer) {
+    hitLayer.style.display = isExpandedOpen ? "none" : "block";
+  }
+
+  // Subtle ambient outlines on the 5 resting hardware pods when idle so contours are immediately legible
+  if (!activeId && !showcaseState.morphComponentId) {
+    for (const podId of ["kpt-back-pod", "tor-orb-pod", "crt-address-pod", "pgp-rocker-pod", "side-remote-pod"]) {
+      const comp = getComponentById(podId);
+      if (comp) {
+        appendContourSvgElements(highlightLayer, comp.contourDp, "contour-ambient");
+      }
+    }
+    return;
+  }
+
+  // Determine which component & contour geometry to draw
+  let targetComp = null;
+  let contourToDraw = null;
+  let isOpenSheet = false;
+
+  if (showcaseState.hoveredId && showcaseState.hoveredId !== showcaseState.lockedId && !isExpandedOpen) {
+    targetComp = getComponentById(showcaseState.hoveredId);
+    contourToDraw = targetComp?.contourDp;
+  } else if (showcaseState.morphComponentId && showcaseState.currentContour) {
+    targetComp = getComponentById(showcaseState.morphComponentId);
+    contourToDraw = showcaseState.currentContour;
+    isOpenSheet = Boolean(showcaseState.lockedId === showcaseState.morphComponentId);
+  } else if (activeId) {
+    targetComp = getComponentById(activeId);
+    contourToDraw =
+      showcaseState.lockedId === activeId
+        ? targetComp?.expandedContourDp || targetComp?.contourDp
+        : targetComp?.contourDp;
+    isOpenSheet = showcaseState.lockedId === activeId;
+  }
+
+  if (!targetComp || !contourToDraw) return;
+
+  appendContourSvgElements(highlightLayer, contourToDraw, "contour-active-halo");
+  appendContourSvgElements(
+    highlightLayer,
+    contourToDraw,
+    isOpenSheet ? "contour-active-stroke contour-active-stroke--open" : "contour-active-stroke"
+  );
+
+  if (contourToDraw.subFocus) {
+    const sf = contourToDraw.subFocus;
+    const haloRing = document.createElementNS(SVG_NS, "circle");
+    haloRing.setAttribute("class", "contour-subfocus-halo");
+    haloRing.setAttribute("cx", sf.cx.toFixed(2));
+    haloRing.setAttribute("cy", sf.cy.toFixed(2));
+    haloRing.setAttribute("r", sf.r.toFixed(2));
+    highlightLayer.appendChild(haloRing);
+
+    const ring = document.createElementNS(SVG_NS, "circle");
+    ring.setAttribute("class", "contour-subfocus-ring");
+    ring.setAttribute("cx", sf.cx.toFixed(2));
+    ring.setAttribute("cy", sf.cy.toFixed(2));
+    ring.setAttribute("r", sf.r.toFixed(2));
+    highlightLayer.appendChild(ring);
   }
 }
 
@@ -275,7 +630,7 @@ function drawLeaderLines() {
   const viewport = document.getElementById("phone-viewport");
   if (!svg || !stage || !viewport) return;
 
-  if (window.innerWidth <= 1120 || showcaseState.activePreviewId !== "resting") {
+  if (window.innerWidth <= 1120) {
     svg.innerHTML = "";
     return;
   }
@@ -285,8 +640,7 @@ function drawLeaderLines() {
   if (stageRect.width <= 0 || vpRect.width <= 0) return;
 
   svg.setAttribute("viewBox", `0 0 ${stageRect.width} ${stageRect.height}`);
-  const focusedId = getFocusedCalloutId();
-  const ns = "http://www.w3.org/2000/svg";
+  const focusedId = getActiveHighlightId();
   const fragment = document.createDocumentFragment();
 
   const ordered = getOrderedComponents();
@@ -302,13 +656,21 @@ function drawLeaderLines() {
     const laneList = isLeft ? leftLaneIds : rightLaneIds;
     const laneIdx = Math.max(0, laneList.indexOf(comp.id));
     const laneCount = Math.max(1, laneList.length);
-    const laneFrac = laneCount === 1 ? 0.5 : 0.28 + (laneIdx / (laneCount - 1)) * 0.44;
+    const laneFrac = laneCount === 1 ? 0.5 : 0.22 + (laneIdx / (laneCount - 1)) * 0.56;
 
     const startX = (isLeft ? cardRect.right : cardRect.left) - stageRect.left;
     const startY = cardRect.top + cardRect.height * 0.5 - stageRect.top;
 
-    const targetX = vpRect.left - stageRect.left + comp.anchorNorm.x * vpRect.width;
-    const targetY = vpRect.top - stageRect.top + comp.anchorNorm.y * vpRect.height;
+    // Use live-interpolated anchor when this component is animating open/closed
+    const activeAnchor =
+      showcaseState.morphComponentId === comp.id && showcaseState.currentAnchors[comp.id]
+        ? showcaseState.currentAnchors[comp.id]
+        : showcaseState.lockedId === comp.id
+          ? comp.expandedAnchorNorm || comp.anchorNorm
+          : comp.anchorNorm;
+
+    const targetX = vpRect.left - stageRect.left + activeAnchor.x * vpRect.width;
+    const targetY = vpRect.top - stageRect.top + activeAnchor.y * vpRect.height;
 
     const gutterWidth = isLeft
       ? vpRect.left - stageRect.left - startX
@@ -321,31 +683,43 @@ function drawLeaderLines() {
       1
     )} L ${gutterBendX.toFixed(1)} ${targetY.toFixed(1)} L ${targetX.toFixed(1)} ${targetY.toFixed(1)}`;
 
-    const g = document.createElementNS(ns, "g");
+    const g = document.createElementNS(SVG_NS, "g");
+    const isThisActive = showcaseState.lockedId
+      ? showcaseState.lockedId === comp.id
+      : focusedId === comp.id;
     let cls = "leader-group";
-    if (focusedId === comp.id) {
+    if (isThisActive) {
       cls += " is-active";
-    } else if (focusedId && focusedId !== comp.id) {
+    } else if (showcaseState.lockedId) {
+      cls += " is-hidden-open";
+    } else if (focusedId) {
       cls += " is-dimmed";
     }
     g.setAttribute("class", cls);
 
-    const halo = document.createElementNS(ns, "path");
+    const halo = document.createElementNS(SVG_NS, "path");
     halo.setAttribute("class", "leader-halo");
     halo.setAttribute("d", d);
     g.appendChild(halo);
 
-    const line = document.createElementNS(ns, "path");
+    const line = document.createElementNS(SVG_NS, "path");
     line.setAttribute("class", "leader-line");
     line.setAttribute("d", d);
     g.appendChild(line);
 
-    const port = document.createElementNS(ns, "circle");
+    const port = document.createElementNS(SVG_NS, "circle");
     port.setAttribute("class", "leader-port");
     port.setAttribute("cx", startX.toFixed(1));
     port.setAttribute("cy", startY.toFixed(1));
     port.setAttribute("r", "4");
     g.appendChild(port);
+
+    const rimJoint = document.createElementNS(SVG_NS, "circle");
+    rimJoint.setAttribute("class", "leader-rim-joint");
+    rimJoint.setAttribute("cx", targetX.toFixed(1));
+    rimJoint.setAttribute("cy", targetY.toFixed(1));
+    rimJoint.setAttribute("r", isThisActive ? "4.6" : "3.5");
+    g.appendChild(rimJoint);
 
     fragment.appendChild(g);
   }
@@ -355,43 +729,28 @@ function drawLeaderLines() {
 }
 
 function syncShowcaseVisuals() {
-  const focusedId = getFocusedCalloutId();
-  const previewId = showcaseState.hoveredId ? "resting" : showcaseState.activePreviewId;
-  const isResting = previewId === "resting";
-
-  const stateEntry =
-    showcaseState.manifest.states.find((s) => s.id === previewId) || showcaseState.manifest.states[0];
-  const imgEl = document.getElementById("preview-image");
-  if (imgEl && stateEntry && imgEl.getAttribute("src") !== `./${stateEntry.image}`) {
-    imgEl.setAttribute("src", `./${stateEntry.image}`);
-  }
+  const focusedId = getActiveHighlightId();
 
   for (const comp of showcaseState.manifest.components) {
     const card = document.getElementById(`callout-${comp.id}`);
-    const rectEl = document.getElementById(`bounds-${comp.id}`);
-    const dotEl = document.getElementById(`dot-${comp.id}`);
+    if (!card) continue;
+    const isOpen = showcaseState.lockedId === comp.id;
+    const isFocused = focusedId === comp.id || isOpen;
+    const isDimmed = Boolean((focusedId || showcaseState.lockedId) && !isFocused);
 
-    const isFocused = focusedId === comp.id;
-    const isDimmed = Boolean(focusedId && !isFocused);
-
-    if (card) {
-      card.classList.toggle("is-active", isFocused);
-      card.classList.toggle("is-dimmed", isDimmed);
-    }
-    if (rectEl) {
-      rectEl.classList.toggle("is-visible", isResting && isFocused);
-    }
-    if (dotEl) {
-      dotEl.classList.toggle("is-active", isFocused);
-      dotEl.classList.toggle("is-hidden", !isResting);
-    }
+    card.classList.toggle("is-active", isFocused);
+    card.classList.toggle("is-open", isOpen);
+    card.classList.toggle("is-dimmed", isDimmed);
+    card.setAttribute("aria-expanded", String(isOpen));
   }
 
+  renderViewportContours();
   drawLeaderLines();
 }
 
 /* --------------------------------------------------------------------------
    STAGE 2: 100vw x 100vh Edge-to-Edge Interactive Trap Browser
+            (Full Monero Light Wallet + Native BTC -> XMR Tor Swap + QR + HUD)
    -------------------------------------------------------------------------- */
 
 const TRUSTED_ONION_DIRECTORY = [
@@ -501,6 +860,75 @@ const MIDDLE_RELAYS = [
   "fi-hel-mid03 (95.216.144.89)"
 ];
 
+const SWAP_PROVIDERS = [
+  {
+    id: "exch-onion",
+    provider: "eXch (.onion)",
+    rate: 194.2,
+    chip: ".ONION·NO-KYC",
+    url: "http://hszyoqwrcp7cxlxnqmovp6vjvmnwj33g4wviuxqzq47emieaxjaperyd.onion/order/EXCH-9F42C"
+  },
+  {
+    id: "majestic-onion",
+    provider: "MajesticBank (.onion)",
+    rate: 193.65,
+    chip: ".ONION·NO-KYC",
+    url: "http://majestictfvnfjgo5hqvmuzynak4kjl5tjs3j5zdabawe6n2aaebldad.onion/order/MB-7410A"
+  }
+];
+
+function renderQrSvg(seedText) {
+  const size = 25;
+  const quiet = 3;
+  const total = size + quiet * 2;
+  let hash = 2166136261;
+  for (let i = 0; i < seedText.length; i++) {
+    hash ^= seedText.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  function isFinder(r, c) {
+    const check = (tr, tc) => {
+      const lr = r - tr;
+      const lc = c - tc;
+      if (lr < 0 || lr > 6 || lc < 0 || lc > 6) return null;
+      return lr === 0 || lr === 6 || lc === 0 || lc === 6 || (lr >= 2 && lr <= 4 && lc >= 2 && lc <= 4);
+    };
+    return check(0, 0) ?? check(0, size - 7) ?? check(size - 7, 0);
+  }
+
+  let rects = `<rect x="0" y="0" width="${total}" height="${total}" rx="2" fill="#4ade80" />`;
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) {
+      let dark = false;
+      const f = isFinder(r, c);
+      if (f !== null) {
+        dark = f;
+      } else if ((r < 8 && c < 8) || (r < 8 && c >= size - 8) || (r >= size - 8 && c < 8)) {
+        dark = false;
+      } else if (r === 6 || c === 6) {
+        dark = (r + c) % 2 === 0;
+      } else {
+        hash = Math.imul(hash, 1664525) + 1013904223 + r * 31 + c;
+        dark = ((hash >>> 16) & 1) === 1;
+      }
+      if (dark) {
+        rects += `<rect x="${c + quiet}" y="${r + quiet}" width="1.05" height="1.05" fill="#070a0e" />`;
+      }
+    }
+  }
+  return `<svg viewBox="0 0 ${total} ${total}" aria-hidden="true">${rects}</svg>`;
+}
+
+function mintUnlinkableSubaddress() {
+  const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+  let out = "8";
+  for (let i = 0; i < 94; i++) {
+    out += alphabet[Math.floor(Math.random() * alphabet.length)];
+  }
+  return out;
+}
+
 function createTab(initialUrl = "about:blank", isPrivate = false) {
   return {
     id: `tab-${Math.random().toString(36).slice(2, 8)}`,
@@ -508,7 +936,7 @@ function createTab(initialUrl = "about:blank", isPrivate = false) {
     historyIndex: 0,
     isPrivate,
     zoomPercent: 100,
-    submissionDraft: " Whistleblower report: attach ledger checksums before newsroom handoff.",
+    submissionDraft: "Whistleblower report: attach ledger checksums before newsroom handoff.",
     xmr402Unlocked: false
   };
 }
@@ -544,8 +972,23 @@ const fsBrowser = {
       hasSecret: false
     }
   ],
-  xmrBalance: 1.8425,
-  xmrSyncedHeight: 3389412
+  xmrBalance: 1.482,
+  xmrSyncedHeight: 3845910,
+  xmrActiveSubaddress:
+    "888tNkZrPN6JsEgekjMnABU4TBzc2Dt29EPAvkRxbANsAnjyPbb3iQ1YBRk1UXcdRsiKc9dhwMVgN5S9cQUiyoogDavup3H",
+  swapBtcInput: "0.01",
+  trackedSwap: {
+    swapId: "swap-exch-904",
+    provider: "eXch (.onion)",
+    btcAmount: "0.01",
+    estimatedXmr: "1.9420",
+    btcDepositAddress: "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh",
+    payoutSubaddress:
+      "87cTrapSwapSub9pQ4kL2mN8vR3xW6yZ1bD5fG7hJ9kM2pQ4rS6tU8vW0xY2zA4bC6dE8fG0hJ2kL4mN6pQ8rS0tU2vW4xY",
+    orderUrl: "http://hszyoqwrcp7cxlxnqmovp6vjvmnwj33g4wviuxqzq47emieaxjaperyd.onion/order/EXCH-9F42C",
+    status: "awaiting_btc_deposit",
+    hudDismissed: false
+  }
 };
 
 function currentTab() {
@@ -613,7 +1056,7 @@ function triggerLoadPulse(callback) {
     fsBrowser.isLoading = false;
     if (callback) callback();
     renderFsBrowser();
-  }, 320);
+  }, 300);
 }
 
 function navigateTo(rawTarget, pushHistory = true) {
@@ -703,7 +1146,38 @@ function rotateTorCircuit() {
     fsBrowser.torReady = true;
     fsBrowser.isLoading = false;
     renderFsBrowser();
-  }, 850);
+  }, 820);
+}
+
+function launchSwapQuoteInBrowser(providerObj, btcAmountStr) {
+  const amt = Math.max(0.0005, parseFloat(btcAmountStr) || 0.01);
+  const estXmr = (amt * providerObj.rate).toFixed(4);
+  fsBrowser.trackedSwap = {
+    swapId: `swap-${Date.now().toString(36)}`,
+    provider: providerObj.provider,
+    btcAmount: amt.toFixed(4).replace(/0+$/, "").replace(/\.$/, ""),
+    estimatedXmr: estXmr,
+    btcDepositAddress: "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh",
+    payoutSubaddress: mintUnlinkableSubaddress(),
+    orderUrl: providerObj.url,
+    status: "awaiting_btc_deposit",
+    hudDismissed: false
+  };
+  fsBrowser.modalKind = null;
+  navigateTo(providerObj.url, true);
+}
+
+function settleActiveSwapPayout() {
+  const sw = fsBrowser.trackedSwap;
+  if (!sw) return;
+  if (sw.status !== "completed") {
+    const payout = parseFloat(sw.estimatedXmr) || 1.942;
+    fsBrowser.xmrBalance = Number((fsBrowser.xmrBalance + payout).toFixed(4));
+    fsBrowser.xmrSyncedHeight += 2;
+    sw.status = "completed";
+    sw.receivedXmr = payout.toFixed(4);
+  }
+  renderFsBrowser();
 }
 
 function encryptSubmissionDraft() {
@@ -744,7 +1218,51 @@ function renderHiddenServiceDocument(url) {
   const host = extractHost(url);
   const tab = currentTab();
 
-  if (host.includes("duckduckgogg42xj")) {
+  if (host.includes("hszyoqwrcp7cxlxn") || host.includes("majestictfvnfjgo")) {
+    const sw = fsBrowser.trackedSwap || {
+      provider: host.includes("majestic") ? "MajesticBank (.onion)" : "eXch (.onion)",
+      btcAmount: "0.01",
+      estimatedXmr: "1.9420",
+      btcDepositAddress: "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh",
+      payoutSubaddress: fsBrowser.xmrActiveSubaddress,
+      status: "awaiting_btc_deposit"
+    };
+    const btcUri = `bitcoin:${sw.btcDepositAddress}?amount=${sw.btcAmount}`;
+    container.innerHTML = `
+      <div class="hs-doc">
+        <h2 class="hs-title">${escapeHtml(sw.provider)} — Zero-JS .onion Swap Order</h2>
+        <p class="hs-sub">Auto-bound to fresh Trap unlinkable Monero subaddress <code>${escapeHtml(
+          sw.payoutSubaddress.slice(0, 12)
+        )}…${escapeHtml(sw.payoutSubaddress.slice(-8))}</code> over isolated Tor circuit.</p>
+
+        <div class="hs-card">
+          <div class="fs-offer-head">
+            <h3>Send ${escapeHtml(sw.btcAmount)} BTC → Receive ${escapeHtml(sw.estimatedXmr)} XMR</h3>
+            <span class="fs-status-chip ${sw.status === "completed" ? "" : "fs-status-chip--amber"}">${
+              sw.status === "completed" ? `PAID +${sw.estimatedXmr} XMR` : "AWAITING BTC DEPOSIT"
+            }</span>
+          </div>
+          <div class="fs-qr-wrap">
+            <div class="fs-qr-box">${renderQrSvg(btcUri)}</div>
+          </div>
+          <pre class="fs-mono-block">BTC Deposit: ${escapeHtml(sw.btcDepositAddress)}
+XMR Payout:  ${escapeHtml(sw.payoutSubaddress)}</pre>
+          <div class="hs-action-row">
+            <button type="button" class="fs-well-btn fs-well-btn--go" id="swap-order-settle-btn">${
+              sw.status === "completed" ? "Payout Confirmed in Wallet ✓" : "Simulate BTC Deposit & Sync XMR Payout"
+            }</button>
+            <button type="button" class="fs-well-btn" id="swap-order-open-wallet">Open Monero Wallet</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.getElementById("swap-order-settle-btn")?.addEventListener("click", settleActiveSwapPayout);
+    document.getElementById("swap-order-open-wallet")?.addEventListener("click", () => {
+      fsBrowser.modalKind = "wallet";
+      renderFsBrowser();
+    });
+  } else if (host.includes("duckduckgogg42xj")) {
     let query = "";
     try {
       const parsed = new URL(url);
@@ -786,8 +1304,8 @@ function renderHiddenServiceDocument(url) {
           <button type="submit" class="fs-well-btn fs-well-btn--go" id="ddg-search-submit">Search</button>
         </form>
         <article class="hs-card">
-          <button type="button" class="hs-link-btn" data-nav-url="http://xmr402vault7k9qp2m4n8v3c6x1z5l9r2t4y6u8i0o2p4a6s8d0f2gad.onion/">XMR402 Cryptographic Wire Archive (HTTP 402 .onion Demo)</button>
-          <p style="margin-top:0.3rem;">Zero-account hidden service archive gated by an instant Monero 402 payment proof.</p>
+          <button type="button" class="hs-link-btn" data-nav-url="http://xmr402vault7k9qp2m4n8v3c6x1z5l9r2t4y6u8i0o2p4a6s8d0f2gad.onion/">XMR402 Cryptographic Wire Archive (HTTP 402 .onion Gate)</button>
+          <p style="margin-top:0.3rem;">Zero-account hidden service archive unlocked via instant Monero 402 subaddress proof.</p>
         </article>
         ${resultsHtml || `<article class="hs-card"><p>No matching hidden services for "${escapeHtml(query)}".</p></article>`}
       </div>
@@ -827,16 +1345,6 @@ hQEMA8x3vR9L2kP1AQf/W9d4c7e1a0b382f5c6d9e0f1a2b3c4d5e6f7a8b9c0d1
             <button type="button" class="fs-well-btn" id="sd-decrypt-btn">Verify &amp; Decrypt Block</button>
           </div>
         </div>
-
-        <div class="hs-card">
-          <h3>Newsroom Public Key</h3>
-          <pre class="fs-mono-block">-----BEGIN PGP PUBLIC KEY BLOCK-----
-
-mDMEZ8xK1xYJKwYBBAHaRw8BAQdA7f9e2c4b8a1d6f0e3c5b7a9d2e4f6a8b0c1d
-Newsroom Desk &lt;desk@securedrop.onion&gt;
-=4L9z
------END PGP PUBLIC KEY BLOCK-----</pre>
-        </div>
       </div>
     `;
 
@@ -846,10 +1354,8 @@ Newsroom Desk &lt;desk@securedrop.onion&gt;
         tab.submissionDraft = textarea.value;
       });
     }
-    const encBtn = document.getElementById("sd-encrypt-btn");
-    if (encBtn) encBtn.addEventListener("click", encryptSubmissionDraft);
-    const decBtn = document.getElementById("sd-decrypt-btn");
-    if (decBtn) decBtn.addEventListener("click", quickVerifyOrDecryptPage);
+    document.getElementById("sd-encrypt-btn")?.addEventListener("click", encryptSubmissionDraft);
+    document.getElementById("sd-decrypt-btn")?.addEventListener("click", quickVerifyOrDecryptPage);
   } else if (host.includes("xmr402vault7k9qp")) {
     if (tab.xmr402Unlocked) {
       container.innerHTML = `
@@ -872,20 +1378,22 @@ Newsroom Desk &lt;desk@securedrop.onion&gt;
             <pre class="fs-mono-block">WWW-Authenticate: XMR402 amount="0.0150", recipient="88a9kXmr402Subaddress9vL3pQ7mN2cR5tW8yZ1dF4gH6jK9uV2bN5mQ8xP3w", nonce="9f3c2a7e1b84"</pre>
             <div class="hs-action-row">
               <button type="button" class="fs-well-btn fs-well-btn--go" id="xmr402-pay-btn">Pay 0.0150 XMR &amp; Unlock Archive</button>
+              <button type="button" class="fs-well-btn" id="xmr402-swap-btn">Swap BTC → XMR</button>
             </div>
           </div>
         </div>
       `;
-      const payBtn = document.getElementById("xmr402-pay-btn");
-      if (payBtn) {
-        payBtn.addEventListener("click", () => {
-          if (fsBrowser.xmrBalance >= 0.015) {
-            fsBrowser.xmrBalance = Number((fsBrowser.xmrBalance - 0.015).toFixed(4));
-            tab.xmr402Unlocked = true;
-            triggerLoadPulse();
-          }
-        });
-      }
+      document.getElementById("xmr402-pay-btn")?.addEventListener("click", () => {
+        if (fsBrowser.xmrBalance >= 0.015) {
+          fsBrowser.xmrBalance = Number((fsBrowser.xmrBalance - 0.015).toFixed(4));
+          tab.xmr402Unlocked = true;
+          triggerLoadPulse();
+        }
+      });
+      document.getElementById("xmr402-swap-btn")?.addEventListener("click", () => {
+        fsBrowser.modalKind = "swap";
+        renderFsBrowser();
+      });
     }
   } else {
     const known = TRUSTED_ONION_DIRECTORY.find((e) => extractHost(e.url) === host);
@@ -906,7 +1414,7 @@ Circuit:   ${escapeHtml(GUARD_RELAYS[fsBrowser.circuitGeneration % GUARD_RELAYS.
 Scripts:   Blocked (Blink WebPreferences + V8 jitless + CDP Emulation)</pre>
         </div>
         <div class="hs-card">
-          <h3>Verified Directory Shortcuts</h3>
+          <h3>Verified Hidden Service Shortcuts</h3>
           <div class="hs-action-row">
             <button type="button" class="fs-well-btn" data-nav-url="${escapeHtml(
               TRUSTED_ONION_DIRECTORY[0].url
@@ -963,6 +1471,54 @@ function renderDirectorySheet() {
   });
 }
 
+function renderSwapHud() {
+  const hud = document.getElementById("fs-swap-hud");
+  if (!hud) return;
+
+  const sw = fsBrowser.trackedSwap;
+  const isStart = currentUrl() === "about:blank";
+  const shouldShow =
+    Boolean(sw) && !sw.hudDismissed && !isStart && !fsBrowser.crtOpen && !fsBrowser.modalKind;
+
+  hud.hidden = !shouldShow;
+  if (!shouldShow || !sw) return;
+
+  hud.classList.toggle("is-retracted", fsBrowser.podsRetracted);
+  const done = sw.status === "completed";
+  hud.innerHTML = `
+    <div class="fs-swap-hud-top">
+      <span>${escapeHtml(sw.provider)} · ${escapeHtml(sw.btcAmount)} BTC</span>
+      <span class="fs-status-chip ${done ? "" : "fs-status-chip--amber"}">${
+        done ? `PAID +${escapeHtml(sw.estimatedXmr)} XMR` : "DEPOSIT BTC"
+      }</span>
+    </div>
+    <div class="fs-swap-hud-actions">
+      <button type="button" class="fs-well-btn fs-well-btn--go" id="hud-sync-payout">${
+        done ? "Open Wallet" : "Sync Payout"
+      }</button>
+      <button type="button" class="fs-well-btn" id="hud-open-swap">Swap Sheet</button>
+      <button type="button" class="fs-well-btn" id="hud-dismiss">✕</button>
+    </div>
+  `;
+
+  document.getElementById("hud-sync-payout")?.addEventListener("click", () => {
+    if (done) {
+      fsBrowser.modalKind = "wallet";
+      renderFsBrowser();
+    } else {
+      settleActiveSwapPayout();
+    }
+  });
+  document.getElementById("hud-open-swap")?.addEventListener("click", () => {
+    fsBrowser.modalKind = "swap";
+    renderFsBrowser();
+  });
+  document.getElementById("hud-dismiss")?.addEventListener("click", () => {
+    sw.hudDismissed = true;
+    renderSwapHud();
+  });
+}
+
 function renderRemoteLeds() {
   const container = document.getElementById("fs-remote-leds");
   if (!container) return;
@@ -972,12 +1528,13 @@ function renderRemoteLeds() {
   const host = extractHost(url);
   const isOnion = host.endsWith(".onion");
   const hasPgp = pageHasPgp(url);
+  const hasLiveSwap = fsBrowser.trackedSwap && fsBrowser.trackedSwap.status !== "completed";
 
   const states = [
     fsBrowser.torReady ? "green" : "off",
     !fsBrowser.torReady ? "amber" : "off",
     isOnion || fsBrowser.hiddenServiceOnly ? "green" : "off",
-    !isOnion && !isStart ? "amber" : "off",
+    hasLiveSwap ? "amber" : !isOnion && !isStart ? "amber" : "off",
     deriveIsolationToken(url) || isStart ? "green" : "off",
     fsBrowser.isLoading ? "amber" : "off",
     fsBrowser.keys.length > 0 ? "green" : "off",
@@ -1006,9 +1563,10 @@ function renderRemoteDrawer() {
 
   const tab = currentTab();
   const url = currentUrl();
+  const liveSwap = fsBrowser.trackedSwap && fsBrowser.trackedSwap.status !== "completed";
 
   if (fsBrowser.remoteMode === "circuit") {
-    titleEl.textContent = "Tor Circuit";
+    titleEl.textContent = "TOR CIRCUIT";
     const iso = deriveIsolationToken(url) || "standby (start zine)";
     const guard = GUARD_RELAYS[fsBrowser.circuitGeneration % GUARD_RELAYS.length];
     const middle = MIDDLE_RELAYS[fsBrowser.circuitGeneration % MIDDLE_RELAYS.length];
@@ -1046,35 +1604,39 @@ function renderRemoteDrawer() {
     return;
   }
 
-  titleEl.textContent = "Hardware Remote";
+  titleEl.textContent = "REMOTE";
   bodyEl.innerHTML = `
     <button type="button" class="fs-remote-btn" id="rem-onion-sites">
-      <span>Onion Sites Directory</span>
-      <span class="mono-sub">11 Verified</span>
+      <span>Onion Sites</span>
+      <span class="mono-sub">11</span>
     </button>
-    <button type="button" class="fs-remote-btn" id="rem-tor-circuit">
-      <span>Tor Circuit &amp; .onion Lock</span>
-      <span class="mono-sub">${fsBrowser.torReady ? "Ready" : "Boot"}</span>
+    <button type="button" class="fs-remote-btn" id="rem-wallet">
+      <span>Monero Wallet</span>
+      <span class="mono-sub">${fsBrowser.xmrBalance.toFixed(4)} XMR</span>
+    </button>
+    <button type="button" class="fs-remote-btn" id="rem-swap">
+      <span>Swap BTC → XMR</span>
+      <span class="mono-sub ${liveSwap ? "mono-sub--amber" : ""}">${liveSwap ? "1 LIVE" : ".ONION"}</span>
     </button>
     <div class="fs-remote-grid">
       <button type="button" class="fs-remote-btn" id="rem-new-tab"><span>New Tab</span><span>+</span></button>
       <button type="button" class="fs-remote-btn" id="rem-tabs"><span>Tabs</span><span class="mono-sub">${fsBrowser.tabs.length}</span></button>
       <button type="button" class="fs-remote-btn" id="rem-reload"><span>Reload</span><span>↻</span></button>
-      <button type="button" class="fs-remote-btn" id="rem-home"><span>Start Zine</span><span>⌂</span></button>
+      <button type="button" class="fs-remote-btn" id="rem-home"><span>Home</span><span>⌂</span></button>
       <button type="button" class="fs-remote-btn" id="rem-zoom-out"><span>Zoom −</span><span class="mono-sub">${tab.zoomPercent}%</span></button>
       <button type="button" class="fs-remote-btn" id="rem-zoom-in"><span>Zoom +</span><span class="mono-sub">${tab.zoomPercent}%</span></button>
     </div>
     <button type="button" class="fs-remote-btn" id="rem-find">
-      <span>Text Search in Page</span>
-      <span class="mono-sub">Zero-JS CDP</span>
+      <span>Text Search</span>
+      <span class="mono-sub">Zero-JS</span>
     </button>
     <button type="button" class="fs-remote-btn" id="rem-keyring">
       <span>OpenPGP Keyring</span>
       <span class="mono-sub">${fsBrowser.keys.length} Keys</span>
     </button>
-    <button type="button" class="fs-remote-btn" id="rem-wallet">
-      <span>Monero Light Wallet</span>
-      <span class="mono-sub">${fsBrowser.xmrBalance.toFixed(4)} XMR</span>
+    <button type="button" class="fs-remote-btn" id="rem-tor-circuit">
+      <span>Tor Circuit</span>
+      <span class="mono-sub">${fsBrowser.torReady ? "READY" : "BOOT"}</span>
     </button>
   `;
 
@@ -1083,6 +1645,16 @@ function renderRemoteDrawer() {
     fsBrowser.crtOpen = true;
     renderFsBrowser();
     document.getElementById("fs-crt-input")?.focus();
+  });
+  document.getElementById("rem-wallet")?.addEventListener("click", () => {
+    fsBrowser.remoteOpen = false;
+    fsBrowser.modalKind = "wallet";
+    renderFsBrowser();
+  });
+  document.getElementById("rem-swap")?.addEventListener("click", () => {
+    fsBrowser.remoteOpen = false;
+    fsBrowser.modalKind = "swap";
+    renderFsBrowser();
   });
   document.getElementById("rem-tor-circuit")?.addEventListener("click", () => {
     fsBrowser.remoteMode = "circuit";
@@ -1121,11 +1693,6 @@ function renderRemoteDrawer() {
     fsBrowser.modalKind = "keyring";
     renderFsBrowser();
   });
-  document.getElementById("rem-wallet")?.addEventListener("click", () => {
-    fsBrowser.remoteOpen = false;
-    fsBrowser.modalKind = "wallet";
-    renderFsBrowser();
-  });
 }
 
 function renderModalSheet() {
@@ -1136,7 +1703,155 @@ function renderModalSheet() {
   layer.hidden = !fsBrowser.modalKind;
   if (!fsBrowser.modalKind) return;
 
-  if (fsBrowser.modalKind === "tabs") {
+  if (fsBrowser.modalKind === "wallet") {
+    const xmrUri = `monero:${fsBrowser.xmrActiveSubaddress}`;
+    sheet.innerHTML = `
+      <div class="fs-modal-head">
+        <h3>MONERO LIGHT WALLET</h3>
+        <div style="display:flex;gap:0.45rem;align-items:center;">
+          <button type="button" class="fs-well-btn fs-well-btn--go" id="xmr-sync-btn">Sync Tor</button>
+          <button type="button" class="fs-drawer-close" id="modal-close-btn">✕</button>
+        </div>
+      </div>
+      <div class="fs-modal-stack">
+        <div class="fs-list-card">
+          <div>
+            <strong style="font-size:1.22rem;font-family:var(--font-mono);color:var(--phosphor);">${fsBrowser.xmrBalance.toFixed(
+              4
+            )} XMR</strong>
+            <div style="font-family:var(--font-mono);font-size:0.74rem;color:var(--ink-body);">Synced ${
+              fsBrowser.xmrSyncedHeight
+            } / ${fsBrowser.xmrSyncedHeight} (.onion)</div>
+          </div>
+          <button type="button" class="fs-well-btn" id="xmr-to-swap-btn">Swap BTC → XMR</button>
+        </div>
+        <div class="fs-qr-wrap">
+          <div class="fs-qr-box" id="fs-wallet-qr">${renderQrSvg(xmrUri)}</div>
+        </div>
+        <pre class="fs-mono-block">${escapeHtml(fsBrowser.xmrActiveSubaddress)}</pre>
+        <div class="hs-action-row" style="margin-top:0;">
+          <button type="button" class="fs-well-btn fs-well-btn--go" id="xmr-new-subaddr">+ New 8… Subaddress</button>
+          <button type="button" class="fs-well-btn" id="xmr-open-402-demo">Test HTTP 402 XMR402 Gate</button>
+        </div>
+      </div>
+    `;
+
+    document.getElementById("xmr-sync-btn")?.addEventListener("click", () => {
+      fsBrowser.xmrSyncedHeight += Math.floor(1 + Math.random() * 4);
+      renderModalSheet();
+    });
+    document.getElementById("xmr-to-swap-btn")?.addEventListener("click", () => {
+      fsBrowser.modalKind = "swap";
+      renderModalSheet();
+    });
+    document.getElementById("xmr-new-subaddr")?.addEventListener("click", () => {
+      fsBrowser.xmrActiveSubaddress = mintUnlinkableSubaddress();
+      renderModalSheet();
+    });
+    document.getElementById("xmr-open-402-demo")?.addEventListener("click", () => {
+      fsBrowser.modalKind = null;
+      navigateTo("http://xmr402vault7k9qp2m4n8v3c6x1z5l9r2t4y6u8i0o2p4a6s8d0f2gad.onion/", true);
+    });
+  } else if (fsBrowser.modalKind === "swap") {
+    const btcAmt = Math.max(0.0005, parseFloat(fsBrowser.swapBtcInput) || 0.01);
+    const offersHtml = SWAP_PROVIDERS.map((p) => {
+      const est = (btcAmt * p.rate).toFixed(4);
+      return `
+        <div class="fs-offer-card">
+          <div class="fs-offer-head">
+            <div>
+              <strong style="font-size:0.96rem;">${escapeHtml(p.provider)}</strong>
+              <div style="font-family:var(--font-mono);font-size:0.76rem;color:var(--phosphor);">${est} XMR · 1 BTC ≈ ${p.rate.toFixed(
+                2
+              )} XMR</div>
+            </div>
+            <span class="fs-status-chip">${escapeHtml(p.chip)}</span>
+          </div>
+          <button type="button" class="fs-well-btn fs-well-btn--go" data-launch-swap="${escapeHtml(
+            p.id
+          )}">Swap in Browser</button>
+        </div>
+      `;
+    }).join("");
+
+    const sw = fsBrowser.trackedSwap;
+    const trackedHtml = sw
+      ? `
+        <div class="fs-offer-card">
+          <div class="fs-offer-head">
+            <div>
+              <strong>${escapeHtml(sw.provider)} · ${escapeHtml(sw.btcAmount)} BTC</strong>
+              <div style="font-family:var(--font-mono);font-size:0.73rem;color:var(--ink-muted);">BTC In: ${escapeHtml(
+                sw.btcDepositAddress.slice(0, 12)
+              )}…${escapeHtml(sw.btcDepositAddress.slice(-8))}</div>
+            </div>
+            <span class="fs-status-chip ${sw.status === "completed" ? "" : "fs-status-chip--amber"}">${
+              sw.status === "completed" ? `COMPLETED (+${sw.estimatedXmr} XMR)` : "DEPOSIT BTC"
+            }</span>
+          </div>
+          <div class="fs-qr-wrap">
+            <div class="fs-qr-box" id="fs-swap-qr">${renderQrSvg(
+              `bitcoin:${sw.btcDepositAddress}?amount=${sw.btcAmount}`
+            )}</div>
+          </div>
+          <div class="hs-action-row" style="margin-top:0;">
+            <button type="button" class="fs-well-btn" id="swap-open-order">Open Order Page</button>
+            <button type="button" class="fs-well-btn fs-well-btn--go" id="swap-sync-payout">Sync Payout</button>
+          </div>
+        </div>
+      `
+      : "";
+
+    sheet.innerHTML = `
+      <div class="fs-modal-head">
+        <h3>SWAP BTC → XMR (TOR)</h3>
+        <div style="display:flex;gap:0.45rem;align-items:center;">
+          <button type="button" class="fs-well-btn" id="swap-to-wallet-btn">Wallet</button>
+          <button type="button" class="fs-drawer-close" id="modal-close-btn">✕</button>
+        </div>
+      </div>
+      <div class="fs-modal-stack">
+        <p style="margin:0;font-size:0.82rem;color:var(--ink-muted);">
+          Live zero-JS aggregator quotes via OrangeFren .onion over Arti Tor. Each swap mints a fresh unlinkable 8… subaddress.
+        </p>
+        <form class="hs-search-form" id="swap-quote-form" style="margin:0;">
+          <input type="text" class="hs-input" id="swap-btc-input" value="${escapeHtml(
+            fsBrowser.swapBtcInput
+          )}" style="font-family:var(--font-mono);color:var(--phosphor);" />
+          <button type="submit" class="fs-well-btn fs-well-btn--go" id="swap-fetch-btn">Fetch Live Tor Quotes</button>
+        </form>
+        ${offersHtml}
+        ${trackedHtml}
+      </div>
+    `;
+
+    document.getElementById("swap-to-wallet-btn")?.addEventListener("click", () => {
+      fsBrowser.modalKind = "wallet";
+      renderModalSheet();
+    });
+    document.getElementById("swap-quote-form")?.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const val = document.getElementById("swap-btc-input")?.value || "0.01";
+      fsBrowser.swapBtcInput = val.trim() || "0.01";
+      renderModalSheet();
+    });
+    sheet.querySelectorAll("[data-launch-swap]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const pid = btn.getAttribute("data-launch-swap");
+        const prov = SWAP_PROVIDERS.find((p) => p.id === pid) || SWAP_PROVIDERS[0];
+        const amt = document.getElementById("swap-btc-input")?.value || fsBrowser.swapBtcInput;
+        fsBrowser.swapBtcInput = amt;
+        launchSwapQuoteInBrowser(prov, amt);
+      });
+    });
+    document.getElementById("swap-open-order")?.addEventListener("click", () => {
+      if (fsBrowser.trackedSwap) {
+        fsBrowser.modalKind = null;
+        navigateTo(fsBrowser.trackedSwap.orderUrl, true);
+      }
+    });
+    document.getElementById("swap-sync-payout")?.addEventListener("click", settleActiveSwapPayout);
+  } else if (fsBrowser.modalKind === "tabs") {
     const rows = fsBrowser.tabs
       .map((t, idx) => {
         const u = t.history[t.historyIndex];
@@ -1164,7 +1879,7 @@ function renderModalSheet() {
 
     sheet.innerHTML = `
       <div class="fs-modal-head">
-        <h3>Spatial Tab Switcher (${fsBrowser.tabs.length})</h3>
+        <h3>SPATIAL TAB SWITCHER (${fsBrowser.tabs.length})</h3>
         <button type="button" class="fs-drawer-close" id="modal-close-btn">✕</button>
       </div>
       <div class="fs-modal-stack">
@@ -1216,7 +1931,7 @@ function renderModalSheet() {
 
     sheet.innerHTML = `
       <div class="fs-modal-head">
-        <h3>Sequoia OpenPGP Keyring</h3>
+        <h3>SEQUOIA OPENPGP KEYRING</h3>
         <button type="button" class="fs-drawer-close" id="modal-close-btn">✕</button>
       </div>
       <div class="fs-modal-stack">
@@ -1259,7 +1974,7 @@ function renderModalSheet() {
   } else if (fsBrowser.modalKind === "pgp-decrypted" && fsBrowser.decryptedMessage) {
     sheet.innerHTML = `
       <div class="fs-modal-head">
-        <h3>Verified OpenPGP Plaintext</h3>
+        <h3>VERIFIED OPENPGP PLAINTEXT</h3>
         <button type="button" class="fs-drawer-close" id="modal-close-btn">✕</button>
       </div>
       <div class="fs-modal-stack">
@@ -1273,52 +1988,22 @@ function renderModalSheet() {
             )}</div>
           </div>
         </div>
-        <pre class="fs-mono-block">${escapeHtml(fsBrowser.decryptedMessage.body)}</pre>
+        <pre class="fs-mono-block" style="color:var(--ink-bright);">${escapeHtml(
+          fsBrowser.decryptedMessage.body
+        )}</pre>
       </div>
     `;
-  } else if (fsBrowser.modalKind === "wallet") {
-    sheet.innerHTML = `
-      <div class="fs-modal-head">
-        <h3>Monero Tor Light Wallet (ov-xmr)</h3>
-        <button type="button" class="fs-drawer-close" id="modal-close-btn">✕</button>
-      </div>
-      <div class="fs-modal-stack">
-        <div class="fs-list-card">
-          <div>
-            <strong style="font-size:1.2rem;font-family:var(--font-mono);color:var(--amber);">${fsBrowser.xmrBalance.toFixed(
-              4
-            )} XMR</strong>
-            <div style="font-family:var(--font-mono);font-size:0.74rem;color:var(--phosphor);">Synced over .onion monerod RPC · Height #${
-              fsBrowser.xmrSyncedHeight
-            }</div>
-          </div>
-          <button type="button" class="fs-well-btn" id="xmr-sync-btn">Sync</button>
-        </div>
-        <pre class="fs-mono-block">Site-Isolated Subaddress:
-87tTrapSubaddr9mK2vL8pQ4xR7nC1wZ5yB3dF6gH8jK2mN4pQ6rS8tU0vW2xY4z</pre>
-        <button type="button" class="fs-well-btn fs-well-btn--go" id="xmr-open-402-demo">Test HTTP 402 XMR402 Hidden Service Gate</button>
-      </div>
-    `;
-
-    document.getElementById("xmr-sync-btn")?.addEventListener("click", () => {
-      fsBrowser.xmrSyncedHeight += Math.floor(1 + Math.random() * 4);
-      renderModalSheet();
-    });
-    document.getElementById("xmr-open-402-demo")?.addEventListener("click", () => {
-      fsBrowser.modalKind = null;
-      navigateTo("http://xmr402vault7k9qp2m4n8v3c6x1z5l9r2t4y6u8i0o2p4a6s8d0f2gad.onion/", true);
-    });
   } else if (fsBrowser.modalKind === "clearnet-consent" && fsBrowser.pendingClearnetUrl) {
     const host = extractHost(fsBrowser.pendingClearnetUrl);
     const rootDomain = host.split(".").slice(-2).join(".");
     sheet.innerHTML = `
       <div class="fs-modal-head">
-        <h3>Clearnet Destination Held at SOCKS5h Gate</h3>
+        <h3>CLEARNET STREAM HELD AT SOCKS5H GATE</h3>
         <button type="button" class="fs-drawer-close" id="modal-close-btn">✕</button>
       </div>
       <div class="fs-modal-stack">
         <p style="margin:0;color:var(--ink-body);font-size:0.92rem;">
-          <code>${escapeHtml(host)}</code> is a non-.onion clearnet origin. Trap holds unrecognized clearnet streams until you authorize routing over Tor exit relays.
+          <code>${escapeHtml(host)}</code> is a clearnet origin. Authorize routing over Tor exit relays?
         </p>
         <div class="hs-action-row">
           <button type="button" class="fs-well-btn fs-well-btn--go" id="cn-allow-3d">Allow 3 Days (*.${escapeHtml(
@@ -1352,14 +2037,14 @@ function renderModalSheet() {
   } else if (fsBrowser.modalKind === "clearnet-blocked") {
     sheet.innerHTML = `
       <div class="fs-modal-head">
-        <h3>Blocked by .onion-Only Lock</h3>
+        <h3>BLOCKED BY .ONION-ONLY LOCK</h3>
         <button type="button" class="fs-drawer-close" id="modal-close-btn">✕</button>
       </div>
       <div class="fs-modal-stack">
         <p style="margin:0;color:var(--ink-body);font-size:0.92rem;">
           <code>${escapeHtml(
             extractHost(fsBrowser.pendingClearnetUrl || "")
-          )}</code> was refused because <strong>.onion-Only Lock</strong> is enabled in the Tor Circuit inspector.
+          )}</code> was refused because <strong>.onion-Only Lock</strong> is enabled in Tor Circuit.
         </p>
       </div>
     `;
@@ -1376,7 +2061,6 @@ function applyFindHighlights() {
   const countEl = document.getElementById("fs-find-count");
   if (!content || !countEl) return;
 
-  // Clear previous highlights cleanly
   content.querySelectorAll("mark.trap-find-hit").forEach((m) => {
     const parent = m.parentNode;
     if (parent) {
@@ -1498,6 +2182,7 @@ function renderFsChrome() {
   }
 
   renderRemoteLeds();
+  renderSwapHud();
 }
 
 function renderFsBrowser() {
@@ -1660,7 +2345,6 @@ function bindFullScreenBrowserInteractions() {
     });
   }
 
-  // CRT Form & Scrim
   document.getElementById("fs-crt-scrim")?.addEventListener("click", () => {
     fsBrowser.crtOpen = false;
     renderFsChrome();
@@ -1763,13 +2447,11 @@ function bindFullScreenBrowserInteractions() {
     renderFsBrowser();
   });
 
-  // Modal scrim
   document.getElementById("fs-modal-scrim")?.addEventListener("click", () => {
     fsBrowser.modalKind = null;
     renderFsBrowser();
   });
 
-  // Find in Page controls
   const findInput = document.getElementById("fs-find-input");
   if (findInput) {
     findInput.addEventListener("input", () => {
@@ -1792,7 +2474,6 @@ function bindFullScreenBrowserInteractions() {
     renderFsBrowser();
   });
 
-  // 110ms Mechanical Scroll Retraction on active hidden-service scroll
   const pageScroll = document.getElementById("fs-page-scroll");
   if (pageScroll) {
     let lastTop = 0;
@@ -1816,15 +2497,12 @@ function bindFullScreenBrowserInteractions() {
     );
   }
 
-  // Escape closes active overlays
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
-      let changed = false;
-      if (showcaseState.lockedId || showcaseState.activePreviewId !== "resting") {
-        showcaseState.lockedId = null;
-        showcaseState.activePreviewId = "resting";
-        syncShowcaseVisuals();
+      if (showcaseState.lockedId) {
+        startPreviewTransition(null);
       }
+      let changed = false;
       if (fsBrowser.modalKind) {
         fsBrowser.modalKind = null;
         changed = true;
@@ -1853,13 +2531,14 @@ function escapeHtml(raw) {
 
 async function init() {
   await loadSyncManifest();
+  preloadStateImages();
   renderPhoneShowcase();
   syncShowcaseVisuals();
 
   bindFullScreenBrowserInteractions();
   renderFsBrowser();
 
-  const imgEl = document.getElementById("preview-image");
+  const imgEl = document.getElementById("preview-base-image");
   if (imgEl) {
     imgEl.addEventListener("load", () => {
       window.requestAnimationFrame(drawLeaderLines);

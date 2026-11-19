@@ -7,6 +7,7 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -18,12 +19,20 @@ import androidx.compose.ui.unit.width
 import androidx.core.view.WindowCompat
 import dev.onionvault.ui.previews.BrowserChromePreview
 import dev.onionvault.ui.previews.BrowserMenuPreview
+import dev.onionvault.ui.previews.BtcXmrSwapHomescreenPreview
 import dev.onionvault.ui.previews.CrtOnionDirectoryPreview
 import dev.onionvault.ui.previews.MoneroWalletHomescreenPreview
 import dev.onionvault.ui.previews.NeonGraffitiKeyringPreview
+import dev.onionvault.ui.previews.PgpActionChipsPreview
+import dev.onionvault.ui.previews.PredictiveBackPreview
+import dev.onionvault.ui.previews.SteelRailsLoadPulsePreview
 import dev.onionvault.ui.previews.TorBootstrapPreview
 import java.io.File
 import java.util.Locale
+import kotlin.math.cos
+import kotlin.math.min
+import kotlin.math.max
+import kotlin.math.sin
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -40,10 +49,10 @@ import org.robolectric.shadows.ShadowDialog
  * Live Jetpack Compose `@Preview` -> GitHub Pages synchronization suite.
  *
  * Renders the canonical `@Preview` composables in [dev.onionvault.ui.previews] using
- * Robolectric's native Skia renderer (`@GraphicsMode(GraphicsMode.Mode.NATIVE)`) and
- * extracts exact component bounding boxes directly from the live Compose Semantics tree
- * (`getUnclippedBoundsInRoot()`) so the GitHub Pages interactive callout diagram always
- * stays 1:1 geometry-synced with the Android Kotlin source code.
+ * Robolectric's native Skia renderer (`@GraphicsMode(GraphicsMode.Mode.NATIVE)`), recovers
+ * exact rotated component contours (`contourDp`) and expanded sheet contours (`expandedContourDp`)
+ * directly from live Compose Semantics (`getUnclippedBoundsInRoot()`), and writes
+ * `site/generated/homescreen-sync.json` + `site/generated/assets/<state>.webp`.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w412dp-h915dp-xhdpi")
@@ -53,6 +62,52 @@ class HomescreenPagesSyncTest {
     @get:Rule
     val compose = createAndroidComposeRule<ComponentActivity>()
 
+    private data class ContourGeometry(
+        val shape: String,
+        val cx: Float,
+        val cy: Float,
+        val width: Float,
+        val height: Float,
+        val rx: Float,
+        val rotationDeg: Float = 0f,
+        val focusOffsetLocalY: Float? = null,
+        val focusRadiusDp: Float? = null,
+    ) {
+        fun toJson(): JSONObject = JSONObject().apply {
+            put("shape", shape)
+            put("cx", round2(cx))
+            put("cy", round2(cy))
+            put("width", round2(width))
+            put("height", round2(height))
+            put("rx", round2(rx))
+            put("rotationDeg", round2(rotationDeg))
+            if (focusOffsetLocalY != null && focusRadiusDp != null) {
+                val rad = Math.toRadians(rotationDeg.toDouble())
+                val fx = cx - focusOffsetLocalY * sin(rad).toFloat()
+                val fy = cy + focusOffsetLocalY * cos(rad).toFloat()
+                put(
+                    "subFocus",
+                    JSONObject().apply {
+                        put("cx", round2(fx))
+                        put("cy", round2(fy))
+                        put("r", round2(focusRadiusDp))
+                    },
+                )
+            }
+        }
+    }
+
+    private data class StatePreviewSpec(
+        val id: String,
+        val previewFn: String,
+        val fileName: String,
+        val expandedPrimaryTag: String,
+        val expandedSecondaryTag: String? = null,
+        val expandedShape: String = "roundrect",
+        val expandedRxDp: Float = 22f,
+        val content: @Composable () -> Unit,
+    )
+
     private data class ComponentTarget(
         val id: String,
         val indexLabel: String,
@@ -61,9 +116,14 @@ class HomescreenPagesSyncTest {
         val composableName: String,
         val sourcePath: String,
         val statePreviewId: String,
-        val customAnchorNormX: Float? = null,
-        val customAnchorNormY: Float? = null,
-        val highlightBoundsOverrideNorm: FloatArray? = null,
+        val shape: String,
+        val rxDp: Float,
+        val rotationDeg: Float = 0f,
+        val anchorLocalOffsetY: Float = 0f,
+        val focusOffsetLocalY: Float? = null,
+        val focusRadiusDp: Float? = null,
+        val customRestingContour: ContourGeometry? = null,
+        val customRestingAnchorDp: Pair<Float, Float>? = null,
     )
 
     @Test
@@ -75,7 +135,7 @@ class HomescreenPagesSyncTest {
             WindowCompat.setDecorFitsSystemWindows(compose.activity.window, false)
         }
 
-        var activePreview = androidx.compose.runtime.mutableStateOf<@Composable () -> Unit>({
+        val activePreview = mutableStateOf<@Composable () -> Unit>({
             BrowserChromePreview()
         })
         compose.setContent {
@@ -100,165 +160,104 @@ class HomescreenPagesSyncTest {
         assertEquals(0.dp, viewportBounds.top)
         assertEquals(0.dp, railsBounds.top)
 
-        val targets = listOf(
-            ComponentTarget(
-                id = "start-zine-viewport",
-                indexLabel = "01",
-                side = "left",
-                testTag = "webpage_viewport_host",
-                composableName = "StartPage / BrowserScreen",
-                sourcePath = "android/app/src/main/kotlin/dev/onionvault/ui/StartPage.kt",
-                statePreviewId = "resting",
-                customAnchorNormX = 0.48f,
-                customAnchorNormY = 0.19f,
-                highlightBoundsOverrideNorm = floatArrayOf(0.03f, 0.015f, 0.94f, 0.46f),
-            ),
-            ComponentTarget(
-                id = "perimeter-steel-rails",
-                indexLabel = "02",
-                side = "left",
-                testTag = "perimeter_steel_rails",
-                composableName = "PerimeterSteelRails",
-                sourcePath = "android/app/src/main/kotlin/dev/onionvault/ui/pods/PerimeterSteelRails.kt",
-                statePreviewId = "tor-circuit",
-                customAnchorNormX = (6f / rootWidthDp).coerceIn(0.01f, 0.05f),
-                customAnchorNormY = 0.43f,
-                highlightBoundsOverrideNorm = floatArrayOf(0.0f, 0.0f, 12f / rootWidthDp, 1.0f),
-            ),
-            ComponentTarget(
-                id = "kpt-back-pod",
-                indexLabel = "03",
-                side = "left",
-                testTag = "kpt_back_pod",
-                composableName = "KptBackButtonPod",
-                sourcePath = "android/app/src/main/kotlin/dev/onionvault/ui/pods/KptBackButtonPod.kt",
-                statePreviewId = "resting",
-            ),
-            ComponentTarget(
-                id = "tor-orb-pod",
-                indexLabel = "04",
-                side = "left",
-                testTag = "tor_orb_pod",
-                composableName = "TorKnurledOrbPod",
-                sourcePath = "android/app/src/main/kotlin/dev/onionvault/ui/pods/TorKnurledOrbPod.kt",
-                statePreviewId = "tor-circuit",
-            ),
-            ComponentTarget(
-                id = "crt-address-pod",
-                indexLabel = "05",
-                side = "right",
-                testTag = "crt_address_pod",
-                composableName = "RecessedCrtAddressPod",
-                sourcePath = "android/app/src/main/kotlin/dev/onionvault/ui/pods/RecessedCrtAddressPod.kt",
-                statePreviewId = "crt-directory",
-            ),
-            ComponentTarget(
-                id = "pgp-rocker-pod",
-                indexLabel = "06",
-                side = "right",
-                testTag = "pgp_rocker_pod",
-                composableName = "OpenPgpRockerPod",
-                sourcePath = "android/app/src/main/kotlin/dev/onionvault/ui/pods/OpenPgpRockerPod.kt",
-                statePreviewId = "pgp-keyring",
-            ),
-            ComponentTarget(
-                id = "side-remote-pod",
-                indexLabel = "07",
-                side = "right",
-                testTag = "side_remote_pod",
-                composableName = "PhotoSoapSideRemote",
-                sourcePath = "android/app/src/main/kotlin/dev/onionvault/ui/pods/PhotoSoapSideRemote.kt",
-                statePreviewId = "side-remote",
-            ),
+        // Snapshot all resting tag bounds while `BrowserChromePreview()` is composed
+        val restingTags = listOf(
+            "webpage_viewport_host",
+            "perimeter_steel_rails",
+            "kpt_back_pod",
+            "tor_orb_pod",
+            "crt_address_pod",
+            "pgp_rocker_pod",
+            "side_remote_pod",
         )
-
-        val componentsJson = JSONArray()
-        for (target in targets) {
-            val rect: DpRect = compose.onNodeWithTag(target.testTag).getUnclippedBoundsInRoot()
-            val wDp = rect.width.value
-            val hDp = rect.height.value
-            assertTrue("Component ${target.testTag} must have positive width", wDp > 0f)
-            assertTrue("Component ${target.testTag} must have positive height", hDp > 0f)
-
-            val normLeft = (rect.left.value / rootWidthDp).coerceIn(0f, 1f)
-            val normTop = (rect.top.value / rootHeightDp).coerceIn(0f, 1f)
-            val normWidth = (wDp / rootWidthDp).coerceIn(0f, 1f - normLeft)
-            val normHeight = (hDp / rootHeightDp).coerceIn(0f, 1f - normTop)
-
-            val anchorX = target.customAnchorNormX
-                ?: (normLeft + normWidth * 0.5f).coerceIn(0.035f, 0.89f)
-            val anchorY = target.customAnchorNormY
-                ?: (normTop + normHeight * 0.5f).coerceIn(0.035f, 0.96f)
-
-            val highlight = target.highlightBoundsOverrideNorm
-            val hlLeft = highlight?.get(0) ?: normLeft
-            val hlTop = highlight?.get(1) ?: normTop
-            val hlWidth = highlight?.get(2) ?: normWidth
-            val hlHeight = highlight?.get(3) ?: normHeight
-
-            componentsJson.put(
-                JSONObject().apply {
-                    put("id", target.id)
-                    put("index", target.indexLabel)
-                    put("side", target.side)
-                    put("testTag", target.testTag)
-                    put("composable", target.composableName)
-                    put("sourcePath", target.sourcePath)
-                    put("statePreviewId", target.statePreviewId)
-                    put(
-                        "boundsDp",
-                        JSONObject().apply {
-                            put("left", round2(rect.left.value))
-                            put("top", round2(rect.top.value))
-                            put("right", round2(rect.right.value))
-                            put("bottom", round2(rect.bottom.value))
-                            put("width", round2(wDp))
-                            put("height", round2(hDp))
-                        },
-                    )
-                    put(
-                        "boundsNorm",
-                        JSONObject().apply {
-                            put("left", round4(hlLeft))
-                            put("top", round4(hlTop))
-                            put("width", round4(hlWidth))
-                            put("height", round4(hlHeight))
-                        },
-                    )
-                    put(
-                        "anchorNorm",
-                        JSONObject().apply {
-                            put("x", round4(anchorX))
-                            put("y", round4(anchorY))
-                        },
-                    )
-                },
-            )
+        val restingRects = restingTags.associateWith { tag ->
+            compose.onNodeWithTag(tag).getUnclippedBoundsInRoot()
         }
 
-        // 2. Render synced interactive state `@Preview` composables from `OnionVaultPreviews.kt`
-        data class StatePreviewSpec(
-            val id: String,
-            val previewFn: String,
-            val fileName: String,
-            val content: @Composable () -> Unit,
-        )
-
+        // 2. Render every interactive expanded `@Preview` and measure its live expanded bounds
         val stateSpecs = listOf(
-            StatePreviewSpec("crt-directory", "CrtOnionDirectoryPreview", "state-crt-directory.webp") {
-                CrtOnionDirectoryPreview()
+            StatePreviewSpec(
+                id = "zerojs-page",
+                previewFn = "PgpActionChipsPreview",
+                fileName = "state-zerojs-page.webp",
+                expandedPrimaryTag = "webpage_viewport_host",
+                expandedRxDp = 16f,
+            ) {
+                PgpActionChipsPreview()
             },
-            StatePreviewSpec("side-remote", "BrowserMenuPreview", "state-side-remote.webp") {
-                BrowserMenuPreview()
+            StatePreviewSpec(
+                id = "steel-rails-load",
+                previewFn = "SteelRailsLoadPulsePreview",
+                fileName = "state-steel-rails-load.webp",
+                expandedPrimaryTag = "active_swap_hud",
+                expandedShape = "dual-rails",
+                expandedRxDp = 14f,
+            ) {
+                SteelRailsLoadPulsePreview()
             },
-            StatePreviewSpec("tor-circuit", "TorBootstrapPreview", "state-tor-circuit.webp") {
+            StatePreviewSpec(
+                id = "predictive-back",
+                previewFn = "PredictiveBackPreview",
+                fileName = "state-predictive-back.webp",
+                expandedPrimaryTag = "webpage_viewport_host",
+                expandedRxDp = 16f,
+            ) {
+                PredictiveBackPreview()
+            },
+            StatePreviewSpec(
+                id = "tor-circuit",
+                previewFn = "TorBootstrapPreview",
+                fileName = "state-tor-circuit.webp",
+                expandedPrimaryTag = "side_remote_pod",
+                expandedRxDp = 24f,
+            ) {
                 TorBootstrapPreview()
             },
-            StatePreviewSpec("pgp-keyring", "NeonGraffitiKeyringPreview", "state-pgp-keyring.webp") {
+            StatePreviewSpec(
+                id = "pgp-keyring",
+                previewFn = "NeonGraffitiKeyringPreview",
+                fileName = "state-pgp-keyring.webp",
+                expandedPrimaryTag = "keyring_sheet",
+                expandedRxDp = 22f,
+            ) {
                 NeonGraffitiKeyringPreview()
             },
-            StatePreviewSpec("monero-wallet", "MoneroWalletHomescreenPreview", "state-monero-wallet.webp") {
+            StatePreviewSpec(
+                id = "crt-directory",
+                previewFn = "CrtOnionDirectoryPreview",
+                fileName = "state-crt-directory.webp",
+                expandedPrimaryTag = "trusted_onion_directory",
+                expandedSecondaryTag = "crt_address_pod",
+                expandedRxDp = 18f,
+            ) {
+                CrtOnionDirectoryPreview()
+            },
+            StatePreviewSpec(
+                id = "side-remote",
+                previewFn = "BrowserMenuPreview",
+                fileName = "state-side-remote.webp",
+                expandedPrimaryTag = "side_remote_pod",
+                expandedRxDp = 24f,
+            ) {
+                BrowserMenuPreview()
+            },
+            StatePreviewSpec(
+                id = "monero-wallet",
+                previewFn = "MoneroWalletHomescreenPreview",
+                fileName = "state-monero-wallet.webp",
+                expandedPrimaryTag = "xmr_wallet_sheet",
+                expandedRxDp = 22f,
+            ) {
                 MoneroWalletHomescreenPreview()
+            },
+            StatePreviewSpec(
+                id = "btc-xmr-swap",
+                previewFn = "BtcXmrSwapHomescreenPreview",
+                fileName = "state-btc-xmr-swap.webp",
+                expandedPrimaryTag = "btc_xmr_swap_sheet",
+                expandedRxDp = 22f,
+            ) {
+                BtcXmrSwapHomescreenPreview()
             },
         )
 
@@ -272,6 +271,7 @@ class HomescreenPagesSyncTest {
             )
         }
 
+        val expandedContoursByState = mutableMapOf<String, ContourGeometry>()
         for (spec in stateSpecs) {
             compose.runOnUiThread {
                 activePreview.value = spec.content
@@ -279,6 +279,50 @@ class HomescreenPagesSyncTest {
             val outFile = File(assetsDir, spec.fileName)
             captureCurrentPreviewToWebp(outFile)
             assertTrue("State preview ${spec.fileName} must be non-empty", outFile.length() > 4_096L)
+
+            val primaryRect = compose.onNodeWithTag(spec.expandedPrimaryTag).getUnclippedBoundsInRoot()
+            val mergedRect = if (spec.expandedSecondaryTag != null) {
+                val secRect = compose.onNodeWithTag(spec.expandedSecondaryTag).getUnclippedBoundsInRoot()
+                DpRect(
+                    left = min(primaryRect.left.value, secRect.left.value).dp,
+                    top = min(primaryRect.top.value, secRect.top.value).dp,
+                    right = max(primaryRect.right.value, secRect.right.value).dp,
+                    bottom = max(primaryRect.bottom.value, secRect.bottom.value).dp,
+                )
+            } else {
+                primaryRect
+            }
+
+            val expContour = when (spec.id) {
+                "zerojs-page", "predictive-back" -> ContourGeometry(
+                    shape = "roundrect",
+                    cx = rootWidthDp * 0.5f,
+                    cy = 320f,
+                    width = rootWidthDp - 28f,
+                    height = 612f,
+                    rx = 16f,
+                )
+                "steel-rails-load" -> ContourGeometry(
+                    shape = "dual-rails",
+                    cx = rootWidthDp * 0.5f,
+                    cy = rootHeightDp * 0.5f,
+                    width = rootWidthDp,
+                    height = rootHeightDp,
+                    rx = 4f,
+                    focusOffsetLocalY = (mergedRect.top.value + mergedRect.height.value * 0.5f) - rootHeightDp * 0.5f,
+                    focusRadiusDp = 34f,
+                )
+                else -> ContourGeometry(
+                    shape = spec.expandedShape,
+                    cx = (mergedRect.left.value + mergedRect.width.value * 0.5f).coerceIn(20f, rootWidthDp - 20f),
+                    cy = (mergedRect.top.value + mergedRect.height.value * 0.5f).coerceIn(20f, rootHeightDp - 20f),
+                    width = mergedRect.width.value.coerceAtMost(rootWidthDp - 12f),
+                    height = mergedRect.height.value.coerceAtMost(rootHeightDp - 12f),
+                    rx = spec.expandedRxDp,
+                )
+            }
+            expandedContoursByState[spec.id] = expContour
+
             statesJson.put(
                 JSONObject().apply {
                     put("id", spec.id)
@@ -288,9 +332,215 @@ class HomescreenPagesSyncTest {
             )
         }
 
+        // 3. Build geometry-accurate component descriptors for all 9 homescreen & XMR/Swap callouts
+        val targets = listOf(
+            ComponentTarget(
+                id = "start-zine-viewport",
+                indexLabel = "01",
+                side = "left",
+                testTag = "webpage_viewport_host",
+                composableName = "StartPage / BrowserScreen",
+                sourcePath = "android/app/src/main/kotlin/dev/onionvault/ui/StartPage.kt",
+                statePreviewId = "zerojs-page",
+                shape = "roundrect",
+                rxDp = 14f,
+                customRestingContour = ContourGeometry(
+                    shape = "roundrect",
+                    cx = rootWidthDp * 0.5f,
+                    cy = 272f,
+                    width = rootWidthDp - 28f,
+                    height = 520f,
+                    rx = 14f,
+                ),
+                customRestingAnchorDp = 14f to 195f,
+            ),
+            ComponentTarget(
+                id = "perimeter-steel-rails",
+                indexLabel = "02",
+                side = "left",
+                testTag = "perimeter_steel_rails",
+                composableName = "PerimeterSteelRails",
+                sourcePath = "android/app/src/main/kotlin/dev/onionvault/ui/pods/PerimeterSteelRails.kt",
+                statePreviewId = "steel-rails-load",
+                shape = "dual-rails",
+                rxDp = 4f,
+                customRestingContour = ContourGeometry(
+                    shape = "dual-rails",
+                    cx = rootWidthDp * 0.5f,
+                    cy = rootHeightDp * 0.5f,
+                    width = rootWidthDp,
+                    height = rootHeightDp,
+                    rx = 4f,
+                ),
+                customRestingAnchorDp = 12f to 395f,
+            ),
+            ComponentTarget(
+                id = "kpt-back-pod",
+                indexLabel = "03",
+                side = "left",
+                testTag = "kpt_back_pod",
+                composableName = "KptBackButtonPod",
+                sourcePath = "android/app/src/main/kotlin/dev/onionvault/ui/pods/KptBackButtonPod.kt",
+                statePreviewId = "predictive-back",
+                shape = "roundrect",
+                rxDp = 8f,
+            ),
+            ComponentTarget(
+                id = "tor-orb-pod",
+                indexLabel = "04",
+                side = "left",
+                testTag = "tor_orb_pod",
+                composableName = "TorKnurledOrbPod",
+                sourcePath = "android/app/src/main/kotlin/dev/onionvault/ui/pods/TorKnurledOrbPod.kt",
+                statePreviewId = "tor-circuit",
+                shape = "circle",
+                rxDp = 52f,
+            ),
+            ComponentTarget(
+                id = "pgp-rocker-pod",
+                indexLabel = "05",
+                side = "right",
+                testTag = "pgp_rocker_pod",
+                composableName = "OpenPgpRockerPod",
+                sourcePath = "android/app/src/main/kotlin/dev/onionvault/ui/pods/OpenPgpRockerPod.kt",
+                statePreviewId = "pgp-keyring",
+                shape = "roundrect",
+                rxDp = 15f,
+                rotationDeg = 20f,
+            ),
+            ComponentTarget(
+                id = "crt-address-pod",
+                indexLabel = "06",
+                side = "right",
+                testTag = "crt_address_pod",
+                composableName = "RecessedCrtAddressPod",
+                sourcePath = "android/app/src/main/kotlin/dev/onionvault/ui/pods/RecessedCrtAddressPod.kt",
+                statePreviewId = "crt-directory",
+                shape = "roundrect",
+                rxDp = 26f,
+            ),
+            ComponentTarget(
+                id = "side-remote-pod",
+                indexLabel = "07",
+                side = "right",
+                testTag = "side_remote_pod",
+                composableName = "PhotoSoapSideRemote",
+                sourcePath = "android/app/src/main/kotlin/dev/onionvault/ui/pods/PhotoSoapSideRemote.kt",
+                statePreviewId = "side-remote",
+                shape = "pill",
+                rxDp = 30f,
+                rotationDeg = 20f,
+                anchorLocalOffsetY = -44f,
+            ),
+            ComponentTarget(
+                id = "monero-wallet",
+                indexLabel = "08",
+                side = "right",
+                testTag = "side_remote_pod",
+                composableName = "MoneroWalletHardwarePod",
+                sourcePath = "android/app/src/main/kotlin/dev/onionvault/ui/pods/HardwareModalPods.kt",
+                statePreviewId = "monero-wallet",
+                shape = "pill",
+                rxDp = 30f,
+                rotationDeg = 20f,
+                anchorLocalOffsetY = 0f,
+                focusOffsetLocalY = -36f,
+                focusRadiusDp = 19f,
+            ),
+            ComponentTarget(
+                id = "btc-xmr-swap",
+                indexLabel = "09",
+                side = "right",
+                testTag = "side_remote_pod",
+                composableName = "BtcToXmrSwapHardwarePod",
+                sourcePath = "android/app/src/main/kotlin/dev/onionvault/ui/pods/HardwareModalPods.kt",
+                statePreviewId = "btc-xmr-swap",
+                shape = "pill",
+                rxDp = 30f,
+                rotationDeg = 20f,
+                anchorLocalOffsetY = 46f,
+                focusOffsetLocalY = 44f,
+                focusRadiusDp = 21f,
+            ),
+        )
+
+        val componentsJson = JSONArray()
+        for (target in targets) {
+            val rect: DpRect = restingRects.getValue(target.testTag)
+            val wDp = rect.width.value
+            val hDp = rect.height.value
+            assertTrue("Component ${target.testTag} must have positive width", wDp > 0f)
+            assertTrue("Component ${target.testTag} must have positive height", hDp > 0f)
+
+            val rad = Math.toRadians(target.rotationDeg.toDouble())
+            val cosR = cos(rad).toFloat()
+            val sinR = sin(rad).toFloat()
+
+            // Recover exact unrotated pivot center from Compose's rotated top-left origin
+            val recoveredCx = rect.left.value + (wDp * 0.5f) * cosR - (hDp * 0.5f) * sinR
+            val recoveredCy = rect.top.value + (wDp * 0.5f) * sinR + (hDp * 0.5f) * cosR
+
+            val restingContour = target.customRestingContour ?: ContourGeometry(
+                shape = target.shape,
+                cx = recoveredCx,
+                cy = recoveredCy,
+                width = wDp,
+                height = hDp,
+                rx = target.rxDp,
+                rotationDeg = target.rotationDeg,
+                focusOffsetLocalY = target.focusOffsetLocalY,
+                focusRadiusDp = target.focusRadiusDp,
+            )
+
+            // Compute outer-rim perimeter anchor point so leader lines touch the encircling contour cleanly
+            val (anchorDpX, anchorDpY) = target.customRestingAnchorDp ?: run {
+                val localX = if (target.side == "left") -restingContour.width * 0.5f else restingContour.width * 0.5f
+                val localY = target.anchorLocalOffsetY
+                val ax = (restingContour.cx + localX * cosR - localY * sinR).coerceIn(6f, rootWidthDp - 6f)
+                val ay = (restingContour.cy + localX * sinR + localY * cosR).coerceIn(12f, rootHeightDp - 12f)
+                ax to ay
+            }
+
+            val expandedContour = expandedContoursByState[target.statePreviewId] ?: restingContour
+            val expAnchorDpX = if (target.side == "left") {
+                (expandedContour.cx - expandedContour.width * 0.5f).coerceIn(8f, rootWidthDp - 8f)
+            } else {
+                (expandedContour.cx + expandedContour.width * 0.5f).coerceIn(8f, rootWidthDp - 8f)
+            }
+            val expAnchorDpY = (expandedContour.cy + target.anchorLocalOffsetY * 0.65f).coerceIn(36f, rootHeightDp - 36f)
+
+            componentsJson.put(
+                JSONObject().apply {
+                    put("id", target.id)
+                    put("index", target.indexLabel)
+                    put("side", target.side)
+                    put("testTag", target.testTag)
+                    put("composable", target.composableName)
+                    put("sourcePath", target.sourcePath)
+                    put("statePreviewId", target.statePreviewId)
+                    put("contourDp", restingContour.toJson())
+                    put("expandedContourDp", expandedContour.toJson())
+                    put(
+                        "anchorNorm",
+                        JSONObject().apply {
+                            put("x", round4(anchorDpX / rootWidthDp))
+                            put("y", round4(anchorDpY / rootHeightDp))
+                        },
+                    )
+                    put(
+                        "expandedAnchorNorm",
+                        JSONObject().apply {
+                            put("x", round4(expAnchorDpX / rootWidthDp))
+                            put("y", round4(expAnchorDpY / rootHeightDp))
+                        },
+                    )
+                },
+            )
+        }
+
         val density = compose.activity.resources.displayMetrics.density
         val manifest = JSONObject().apply {
-            put("schemaVersion", 1)
+            put("schemaVersion", 2)
             put("appVersion", resolveRepoVersion())
             put("gitCommit", resolveGitCommit())
             put("previewEntrypoint", "dev.onionvault.ui.previews.BrowserChromePreview")
@@ -393,7 +643,7 @@ class HomescreenPagesSyncTest {
             ?.readText(Charsets.UTF_8)
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
-            ?: "0.1.43"
+            ?: "0.1.46"
     }
 
     private fun resolveGitCommit(): String {
@@ -403,10 +653,10 @@ class HomescreenPagesSyncTest {
             ?.take(12)
             ?: "synced"
     }
-
-    private fun round2(v: Float): Double =
-        String.format(Locale.US, "%.2f", v).toDouble()
-
-    private fun round4(v: Float): Double =
-        String.format(Locale.US, "%.4f", v).toDouble()
 }
+
+private fun round2(v: Float): Double =
+    String.format(Locale.US, "%.2f", v).toDouble()
+
+private fun round4(v: Float): Double =
+    String.format(Locale.US, "%.4f", v).toDouble()

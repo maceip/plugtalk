@@ -6,7 +6,7 @@
   <title>Trap — Android Homescreen &amp; Full-Screen Browser</title>
   <meta
     name="description"
-    content="Synced Jetpack Compose @Preview Android homescreen with high-contrast component callouts, followed by the full-screen edge-to-edge Trap Tor and OpenPGP browser."
+    content="Synced Jetpack Compose @Preview Android homescreen with encircling component callouts, animated Compose @Preview expansion, Monero light wallet, native BTC to XMR Tor swap, and full-screen interactive browser."
   />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -20,7 +20,7 @@
   <h1 class="sr-only">Trap Android Homescreen and Full-Screen Browser</h1>
 
   <main id="trap-page">
-    <!-- Stage 1: Synced Compose @Preview Phone Mock + High-Contrast Prose Callouts -->
+    <!-- Stage 1: Synced Compose @Preview Phone Mock + Encircling Callouts & Animated @Preview Expansion -->
     <section class="phone-showcase" id="phone-showcase" aria-label="Android homescreen component callouts">
       <div class="diagram-stage" id="diagram-stage">
         <svg class="leader-svg" id="leader-svg" aria-hidden="true"></svg>
@@ -31,14 +31,31 @@
           <div class="phone-chassis" id="phone-chassis">
             <div class="phone-viewport" id="phone-viewport">
               <img
-                class="phone-image"
-                id="preview-image"
+                class="phone-image phone-image--base"
+                id="preview-base-image"
                 src="./generated/assets/homescreen-preview.webp"
                 alt="Synced Jetpack Compose Preview of the Trap Android homescreen"
                 width="824"
                 height="1830"
               />
-              <div class="viewport-overlay" id="viewport-overlay"></div>
+              <img
+                class="phone-image phone-image--expanded"
+                id="preview-expanded-image"
+                src="./generated/assets/state-side-remote.webp"
+                alt="Expanded Jetpack Compose Preview of selected component"
+                width="824"
+                height="1830"
+              />
+              <svg
+                class="viewport-contour-svg"
+                id="viewport-contour-svg"
+                viewBox="0 0 412 915"
+                preserveAspectRatio="none"
+                aria-label="Interactive component contours"
+              >
+                <g id="contour-hit-layer"></g>
+                <g id="contour-highlight-layer"></g>
+              </svg>
             </div>
           </div>
         </div>
@@ -79,6 +96,9 @@
         </div>
         <div class="fs-load-pulse" id="fs-load-pulse"></div>
       </div>
+
+      <!-- Bottom-Docked Active BTC -> XMR Swap Browser HUD -->
+      <div class="fs-swap-hud" id="fs-swap-hud" hidden></div>
 
       <!-- Floating Hardware Pod Cluster -->
       <div class="fs-pods-layer" id="fs-pods-layer">
@@ -208,7 +228,7 @@
         <button type="button" class="fs-well-btn" id="fs-find-close" aria-label="Close text search">✕</button>
       </div>
 
-      <!-- Hardware Modal Host (Tabs, OpenPGP Keyring, Monero Wallet, Clearnet Consent, Plaintext Result) -->
+      <!-- Hardware Modal Host (Tabs, OpenPGP Keyring, Monero Wallet, BTC->XMR Swap, Clearnet Consent, Plaintext Result) -->
       <div class="fs-modal-layer" id="fs-modal-layer" hidden>
         <div class="fs-scrim" id="fs-modal-scrim"></div>
         <div class="fs-modal-sheet" id="fs-modal-sheet" role="dialog" aria-modal="true"></div>

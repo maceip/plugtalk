@@ -346,7 +346,9 @@ fun TorTaxiPreview() {
 @Composable
 fun BrowserMenuPreview() {
     BrowserScreen(
-        state = chromeState(TrapThemeFamily.NeonGraffiti, TrapThemeMode.Dark),
+        state = chromeState(TrapThemeFamily.NeonGraffiti, TrapThemeMode.Dark).copy(
+            xmr = previewRichMoneroState(),
+        ),
         showMenu = true,
     )
 }
@@ -500,29 +502,154 @@ fun CrtOnionDirectoryPreview() {
     )
 }
 
+private fun previewQrMatrix(
+    seedText: String,
+    size: Int = 25,
+): OvNative.QrMatrixResult {
+    val grid = Array(size) { BooleanArray(size) }
+
+    fun drawFinder(top: Int, left: Int) {
+        for (r in 0 until 7) {
+            for (c in 0 until 7) {
+                val isOuter = r == 0 || r == 6 || c == 0 || c == 6
+                val isInner = r in 2..4 && c in 2..4
+                grid[top + r][left + c] = isOuter || isInner
+            }
+        }
+    }
+
+    drawFinder(0, 0)
+    drawFinder(0, size - 7)
+    drawFinder(size - 7, 0)
+
+    for (i in 8 until size - 8) {
+        grid[6][i] = i % 2 == 0
+        grid[i][6] = i % 2 == 0
+    }
+
+    var hash = seedText.hashCode()
+    for (r in 0 until size) {
+        for (c in 0 until size) {
+            val inFinderZone = (r < 8 && c < 8) ||
+                (r < 8 && c >= size - 8) ||
+                (r >= size - 8 && c < 8) ||
+                r == 6 || c == 6
+            if (!inFinderZone) {
+                hash = hash * 1_664_525 + 1_013_904_223 + (r * 31 + c)
+                grid[r][c] = ((hash ushr 16) and 1) == 1
+            }
+        }
+    }
+
+    val rows = grid.map { row ->
+        buildString(size) {
+            for (bit in row) append(if (bit) '1' else '0')
+        }
+    }
+    return OvNative.QrMatrixResult(ok = true, size = size, rows = rows)
+}
+
+internal fun previewRichMoneroState(): dev.onionvault.ui.MoneroUiState {
+    val subaddress = "888tNkZrPN6JsEgekjMnABU4TBzc2Dt29EPAvkRxbANsAnjyPbb3iQ1YBRk1UXcdRsiKc9dhwMVgN5S9cQUiyoogDavup3H"
+    val swapSubaddr = "87cTrapSwapSub9pQ4kL2mN8vR3xW6yZ1bD5fG7hJ9kM2pQ4rS6tU8vW0xY2zA4bC6dE8fG0hJ2kL4mN6pQ8rS0tU2vW4xY"
+    val btcDepAddr = "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh"
+    val btcUri = "bitcoin:$btcDepAddr?amount=0.01"
+    val xmrUri = "monero:$subaddress"
+
+    val trackedSwap = OvNative.TrackedBtcXmrSwap(
+        swapId = "swap-exch-904",
+        provider = "eXch (.onion)",
+        btcAmount = "0.01",
+        quotedXmr = "1.9420",
+        launchUrl = "http://hszyoqwrcp7cxlxnqmovp6vjvmnwj33g4wviuxqzq47emieaxjaperyd.onion/",
+        subaddressIndex = 2,
+        subaddress = swapSubaddr,
+        btcDepositAddress = btcDepAddr,
+        btcDepositAmount = "0.01",
+        providerOrderId = "EXCH-9F42C",
+        orderUrl = "http://hszyoqwrcp7cxlxnqmovp6vjvmnwj33g4wviuxqzq47emieaxjaperyd.onion/order/EXCH-9F42C",
+        status = "awaiting_btc_deposit",
+    )
+
+    return dev.onionvault.ui.MoneroUiState(
+        status = OvNative.XmrStatusSnapshot(
+            ok = true,
+            hasWallet = true,
+            walletLabel = "Trap Ephemeral Vault",
+            primaryAddress = "44Affq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A",
+            activeSubaddress = subaddress,
+            activeSubaddressIndex = 1,
+            balanceXmr = "1.4820",
+            unlockedBalanceXmr = "1.4820",
+            restoreHeight = 3_812_000L,
+            syncedHeight = 3_845_910L,
+            daemonHeight = 3_845_910L,
+            syncEndpoint = "http://monerod7x2...onion:18089",
+            syncMode = "monerod_onion",
+            swaps = listOf(trackedSwap),
+        ),
+        quotesBtcAmount = "0.01",
+        quotesHasFetched = true,
+        quotes = listOf(
+            OvNative.BtcSwapQuoteItem(
+                id = "exch-onion",
+                provider = "eXch (.onion)",
+                estimatedXmr = "1.9420",
+                rateXmrPerBtc = "194.20",
+                neverKyc = true,
+                isOnionUrl = true,
+                launchUrl = "http://hszyoqwrcp7cxlxnqmovp6vjvmnwj33g4wviuxqzq47emieaxjaperyd.onion/",
+            ),
+            OvNative.BtcSwapQuoteItem(
+                id = "majestic-onion",
+                provider = "MajesticBank (.onion)",
+                estimatedXmr = "1.9365",
+                rateXmrPerBtc = "193.65",
+                neverKyc = true,
+                isOnionUrl = true,
+                launchUrl = "http://majestictfvnfjgo5hqvmuzynak4kjl5tjs3j5zdabawe6n2aaebldad.onion/",
+            ),
+        ),
+        qrMatrices = mapOf(
+            xmrUri to previewQrMatrix(xmrUri),
+            subaddress to previewQrMatrix(subaddress),
+            btcUri to previewQrMatrix(btcUri),
+            btcDepAddr to previewQrMatrix(btcDepAddr),
+        ),
+    )
+}
+
 @Preview(name = "16. Monero Light Wallet & Tor XMR402 Pod", heightDp = 760)
 @Composable
 fun MoneroWalletHomescreenPreview() {
     BrowserScreen(
         state = chromeState(TrapThemeFamily.SecureDrop, TrapThemeMode.Dark).copy(
-            xmr = dev.onionvault.ui.MoneroUiState(
-                status = OvNative.XmrStatusSnapshot(
-                    ok = true,
-                    hasWallet = true,
-                    walletLabel = "Trap Ephemeral Vault",
-                    primaryAddress = "44Affq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A",
-                    activeSubaddress = "888tNkZrPN6JsEgekjMnABU4TBzc2Dt29EPAvkRxbANsAnjyPbb3iQ1YBRk1UXcdRsiKc9dhwMVgN5S9cQUiyoogDavup3H",
-                    activeSubaddressIndex = 1,
-                    balanceXmr = "1.4820",
-                    unlockedBalanceXmr = "1.4820",
-                    restoreHeight = 3_812_000L,
-                    syncedHeight = 3_845_910L,
-                    daemonHeight = 3_845_910L,
-                    syncEndpoint = "http://monerod7x2...onion:18089",
-                    syncMode = "monerod_onion",
-                ),
-            ),
+            xmr = previewRichMoneroState(),
         ),
         showMoneroWallet = true,
+    )
+}
+
+@Preview(name = "17. Native BTC -> XMR Zero-JS Tor Swap Pod", heightDp = 760)
+@Composable
+fun BtcXmrSwapHomescreenPreview() {
+    BrowserScreen(
+        state = chromeState(TrapThemeFamily.SecureDrop, TrapThemeMode.Dark).copy(
+            xmr = previewRichMoneroState(),
+        ),
+        showBtcXmrSwap = true,
+    )
+}
+
+@Preview(name = "18. Perimeter Steel Rails Load Pulse & Active Swap HUD", heightDp = 760)
+@Composable
+fun SteelRailsLoadPulsePreview() {
+    BrowserScreen(
+        state = torTaxiState().copy(
+            isLoading = true,
+            loadProgress = 72,
+            xmr = previewRichMoneroState(),
+        ),
+        surface = { PreviewDuckDuckGoOnionSurface() },
     )
 }
