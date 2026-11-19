@@ -10,6 +10,7 @@ description = "JNI entry points, Tor transport coordinator, CDP DOM classifier b
 ov-cef = { workspace = true }
 ov-tor = { workspace = true }
 ov-pgp = { workspace = true }
+ov-xmr = { workspace = true }
 anyhow = { workspace = true }
 log = { workspace = true }
 serde = { workspace = true }

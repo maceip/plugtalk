@@ -8,6 +8,7 @@ use std::{
 use ov_cef::{OvConfig, SnapshotCollector};
 use ov_pgp::Keyring;
 use ov_tor::TorService;
+use ov_xmr::XmrService;
 
 use crate::surface::SurfaceRenderer;
 
@@ -19,6 +20,8 @@ pub struct EngineState {
     pub cache_dir: PathBuf,
     /// Hardware-wrapped Sequoia OpenPGP key manager.
     pub keyring: Arc<Keyring>,
+    /// Hardware-wrapped pure-Rust Monero light wallet & Tor swap manager.
+    pub xmr: Arc<XmrService>,
     /// Embedded Arti Tor service + loopback SOCKS5 listener + isolation registry.
     pub tor: Arc<TorService>,
     /// Viewport tracker.

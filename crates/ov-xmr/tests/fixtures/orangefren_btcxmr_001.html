@@ -1,0 +1,803 @@
+<!DOCTYPE html><html><body>
+<monolith class="search_monolith">
+<form method="POST" action="/" data-known_amount="FROM">
+    <div class="search_inputs">
+        <div class="si_label"><label for="from_currency">From:</label></div>
+        <div class="si_amount"><input id="from_amount" name="from_amount" step="any" type="number" value="0.01"></div>
+        <div class="si_select"><select class="from_currency" id="swap_from_currency" name="from_currency" required><optgroup label="Popular"><option selected value="BTC">BTC</option><option value="BTC@LN">BTC on LN</option><option value="XMR">XMR</option><option value="LTC">LTC</option><option value="ETH">ETH</option><option value="USDC@ETH">USDC on ETH</option><option value="USDT@TRX">USDT on TRX</option><option value="USDT@ETH">USDT on ETH</option><option value="SOL">SOL</option></optgroup><optgroup label="All"><option value="1INCH@ETH">1INCH on ETH</option><option value="2Z@SOL">2Z on SOL</option><option value="AAVE@ETH">AAVE on ETH</option><option value="ADA@ADA">ADA</option><option value="ADA@BSC">ADA on BSC</option><option value="ADI@ADI">ADI</option><option value="ALGO@ALGO">ALGO</option><option value="ALICE@BSC">ALICE on BSC</option><option value="AMZNX@SOL">AMZNX on SOL</option><option value="ANKR@ETH">ANKR on ETH</option><option value="APE@ETH">APE on ETH</option><option value="APT@APT">APT</option><option value="ARB@ARB">ARB</option><option value="ARB@ETH">ARB on ETH</option><option value="ARKM@ETH">ARKM on ETH</option><option value="ARPA@ETH">ARPA on ETH</option><option value="ASTER@BSC">ASTER on BSC</option><option value="ATOM@ATOM">ATOM</option><option value="AVA@ETH">AVA on ETH</option><option value="AVAX@ARC">AVAX on ARC</option><option value="AVAX@AVAXC">AVAX on AVAXC</option><option value="AVAX@AVAX">AVAX</option><option value="AVNT@BASE">AVNT on BASE</option><option value="AXS@ETH">AXS on ETH</option><option value="B@BSC">B on BSC</option><option value="BANK@BSC">BANK on BSC</option><option value="BAT@ETH">BAT on ETH</option><option value="BAT@BAT">BAT</option><option value="BCH@BCH">BCH</option><option value="BEAT@BSC">BEAT on BSC</option><option value="BENJI@BASE">BENJI on BASE</option><option value="BIO@ETH">BIO on ETH</option><option value="BLESS@BSC">BLESS on BSC</option><option value="BLUR@ETH">BLUR on ETH</option><option value="BNB@BNB">BNB</option><option value="BNB@BSC">BNB on BSC</option><option value="BNB@OPBNB">BNB on OPBNB</option><option value="BNKR@BASE">BNKR on BASE</option><option value="BNT@ETH">BNT on ETH</option><option value="BOME@SOL">BOME on SOL</option><option value="BONK@SOL">BONK on SOL</option><option value="BRETT@BASE">BRETT on BASE</option><option value="BSV@BSV">BSV</option><option value="BTC@LN">BTC on LN</option><option value="BTC@LIQUID">BTC on LIQUID</option><option value="BTC@BSC">BTC on BSC</option><option value="BTC@BTC">BTC</option><option value="BTT@TRX">BTT on TRX</option><option value="BTT@BTT">BTT</option><option value="CAKE@CAKE">CAKE</option><option value="CAKE@BSC">CAKE on BSC</option><option value="CARDS@SOL">CARDS on SOL</option><option value="CFG@ETH">CFG on ETH</option><option value="CHR@ETH">CHR on ETH</option><option value="CHZ@ETH">CHZ on ETH</option><option value="CNPY@BSC">CNPY on BSC</option><option value="COMP@ETH">COMP on ETH</option><option value="CRO@ETH">CRO on ETH</option><option value="CRV@ETH">CRV on ETH</option><option value="DAI@BSC">DAI on BSC</option><option value="DAI@ETH">DAI on ETH</option><option value="DAI@MATIC">DAI on MATIC</option><option value="DASH@DASH">DASH</option><option value="DCR@DCR">DCR</option><option value="DEXE@ETH">DEXE on ETH</option><option value="DGAI@BSC">DGAI on BSC</option><option value="DGB@DGB">DGB</option><option value="DNA@BSC">DNA on BSC</option><option value="DODO@BSC">DODO on BSC</option><option value="DODO@ETH">DODO on ETH</option><option value="DOGE@BSC">DOGE on BSC</option><option value="DOGE@DOGE">DOGE</option><option value="DOGS@TON">DOGS on TON</option><option value="DOOD@SOL">DOOD on SOL</option><option value="DOS@ETH">DOS on ETH</option><option value="DOT@DOT">DOT</option><option value="DOT@DOTAH">DOT on DOTAH</option><option value="DRIFT@SOL">DRIFT on SOL</option><option value="DRV@ETH">DRV on ETH</option><option value="DUSK@ETH">DUSK on ETH</option><option value="EDGE@ETH">EDGE on ETH</option><option value="EGLD@EGLD">EGLD</option><option value="ELSA@BASE">ELSA on BASE</option><option value="ENA@ETH">ENA on ETH</option><option value="ENS@ETH">ENS on ETH</option><option value="ETC@ETC">ETC</option><option value="ETH@INK">ETH on INK</option><option value="ETH@ROBINHOOD">ETH on ROBINHOOD</option><option value="ETH@BASE">ETH on BASE</option><option value="ETH@ARB">ETH on ARB</option><option value="ETH@OP">ETH on OP</option><option value="ETH@ETH">ETH</option><option value="ETH@BSC">ETH on BSC</option><option value="ETH@ZKSYNC">ETH on ZKSYNC</option><option value="ETH@HOOD">ETH on HOOD</option><option value="ETH@OPTIMISM">ETH on OPTIMISM</option><option value="ETHFI@ETH">ETHFI on ETH</option><option value="EURC@SOL">EURC on SOL</option><option value="FAI@BASE">FAI on BASE</option><option value="FARTCOIN@SOL">FARTCOIN on SOL</option><option value="FDUSD@SOL">FDUSD on SOL</option><option value="FDUSD@ETH">FDUSD on ETH</option><option value="FDUSD@BSC">FDUSD on BSC</option><option value="FET@ETH">FET on ETH</option><option value="FIDA@SOL">FIDA on SOL</option><option value="FIL@FIL">FIL</option><option value="FIRO@FIRO">FIRO</option><option value="FLARE@FLR">FLARE on FLR</option><option value="FLOCK@BASE">FLOCK on BASE</option><option value="FLOKI@BSC">FLOKI on BSC</option><option value="FLOKI@ETH">FLOKI on ETH</option><option value="FLUID@ETH">FLUID on ETH</option><option value="FLUX@ETH">FLUX on ETH</option><option value="FLUX@FLUX">FLUX</option><option value="FLUX@BSC">FLUX on BSC</option><option value="FOLD@ETH">FOLD on ETH</option><option value="FTT@ETH">FTT on ETH</option><option value="GEOD@SOL">GEOD on SOL</option><option value="GIGA@SOL">GIGA on SOL</option><option value="GLM@ETH">GLM on ETH</option><option value="GMT@SOL">GMT on SOL</option><option value="GNO@ETH">GNO on ETH</option><option value="GRAM@TON">GRAM on TON</option><option value="GRAM@GRAM">GRAM</option><option value="GRASS@SOL">GRASS on SOL</option><option value="GRT@ETH">GRT on ETH</option><option value="GT@ETH">GT on ETH</option><option value="HBAR@HBAR">HBAR</option><option value="HNT@SOL">HNT on SOL</option><option value="HYPE@HYPEEVM">HYPE on HYPEEVM</option><option value="HYPE@HYPE">HYPE</option><option value="ICP@ICP">ICP</option><option value="ID@ETH">ID on ETH</option><option value="ID@BSC">ID on BSC</option><option value="IMX@ETH">IMX on ETH</option><option value="IOTA@BSC">IOTA on BSC</option><option value="IRYS@ETH">IRYS on ETH</option><option value="JASMY@ETH">JASMY on ETH</option><option value="JITOSOL@SOL">JITOSOL on SOL</option><option value="JST@TRX">JST on TRX</option><option value="JTO@SOL">JTO on SOL</option><option value="JUP@JUP">JUP</option><option value="JUP@SOL">JUP on SOL</option><option value="KAITO@BASE">KAITO on BASE</option><option value="KAS@KAS">KAS</option><option value="KASPA@KASPA">KASPA</option><option value="KAVA@KAVA">KAVA</option><option value="KCS@KCC">KCS on KCC</option><option value="KNC@ETH">KNC on ETH</option><option value="LAB@BSC">LAB on BSC</option><option value="LDO@ETH">LDO on ETH</option><option value="LIKE@SOL">LIKE on SOL</option><option value="LIME@BSC">LIME on BSC</option><option value="LINEA@LINEA">LINEA</option><option value="LINK@LINK">LINK</option><option value="LINK@ETH">LINK on ETH</option><option value="LIT@ETH">LIT on ETH</option><option value="LRC@ETH">LRC on ETH</option><option value="LTC@MWEB">LTC on MWEB</option><option value="LTC@LTC">LTC</option><option value="MAGIC@ARB">MAGIC on ARB</option><option value="MANA@MANA">MANA</option><option value="MANA@ETH">MANA on ETH</option><option value="MARSCOIN@BSC">MARSCOIN on BSC</option><option value="MASK@ETH">MASK on ETH</option><option value="MATIC@ETH">MATIC on ETH</option><option value="MATIC@MATIC">MATIC</option><option value="ME@SOL">ME on SOL</option><option value="MELANIA@SOL">MELANIA on SOL</option><option value="MET@SOL">MET on SOL</option><option value="METIS@ETH">METIS on ETH</option><option value="MEW@SOL">MEW on SOL</option><option value="MNT@ETH">MNT on ETH</option><option value="MON@MONAD">MON on MONAD</option><option value="MORPHO@ETH">MORPHO on ETH</option><option value="NANO@NANO">NANO</option><option value="NATIX@SOL">NATIX on SOL</option><option value="NEAR@BSC">NEAR on BSC</option><option value="NEAR@NEAR">NEAR</option><option value="NEXO@ETH">NEXO on ETH</option><option value="NIM@NIM">NIM</option><option value="NOS@SOL">NOS on SOL</option><option value="NOT@TON">NOT on TON</option><option value="NVDAX@SOL">NVDAX on SOL</option><option value="OKB@OKB">OKB</option><option value="ONDO@ETH">ONDO on ETH</option><option value="OP@OPTIMISM">OP on OPTIMISM</option><option value="OP@OP">OP</option><option value="OPEN@BSC">OPEN on BSC</option><option value="ORDER@ETH">ORDER on ETH</option><option value="PART@PART">PART</option><option value="PAXG@ETH">PAXG on ETH</option><option value="PEIPEI@ETH">PEIPEI on ETH</option><option value="PENDLE@ETH">PENDLE on ETH</option><option value="PENGU@SOL">PENGU on SOL</option><option value="PEPE@PEPE">PEPE</option><option value="PEPE@ETH">PEPE on ETH</option><option value="PIPPIN@SOL">PIPPIN on SOL</option><option value="PIVX@PIVX">PIVX</option><option value="PLUME@ETH">PLUME on ETH</option><option value="PNUT@SOL">PNUT on SOL</option><option value="POL@ETH">POL on ETH</option><option value="POL@POL">POL</option><option value="POL@MATIC">POL on MATIC</option><option value="PONKE@SOL">PONKE on SOL</option><option value="POWR@ETH">POWR on ETH</option><option value="PUMP@SOL">PUMP on SOL</option><option value="PYTH@SOL">PYTH on SOL</option><option value="PYUSD@ETH">PYUSD on ETH</option><option value="PYUSD@SOL">PYUSD on SOL</option><option value="QNT@ETH">QNT on ETH</option><option value="QTUM@QTUM">QTUM</option><option value="QUAI@QUAI">QUAI</option><option value="RACA@BSC">RACA on BSC</option><option value="RAIN@ARB">RAIN on ARB</option><option value="RARE@ETH">RARE on ETH</option><option value="RAY@SOL">RAY on SOL</option><option value="RBC@ETH">RBC on ETH</option><option value="RDNT@ETH">RDNT on ETH</option><option value="RENDER@SOL">RENDER on SOL</option><option value="REZ@ETH">REZ on ETH</option><option value="RLUSD@ETH">RLUSD on ETH</option><option value="RLUSD@XRP">RLUSD on XRP</option><option value="ROAM@SOL">ROAM on SOL</option><option value="RSR@ETH">RSR on ETH</option><option value="RVN@RVN">RVN</option><option value="S@S">S</option><option value="SAHARA@ETH">SAHARA on ETH</option><option value="SAND@ETH">SAND on ETH</option><option value="SANTOS@BSC">SANTOS on BSC</option><option value="SENT@ETH">SENT on ETH</option><option value="SFP@BSC">SFP on BSC</option><option value="SHIB@BSC">SHIB on BSC</option><option value="SHIB@ETH">SHIB on ETH</option><option value="SHIRO@ETH">SHIRO on ETH</option><option value="SHX@ETH">SHX on ETH</option><option value="SIGN@BSC">SIGN on BSC</option><option value="SKY@ETH">SKY on ETH</option><option value="SLVON@ETH">SLVON on ETH</option><option value="SNT@ETH">SNT on ETH</option><option value="SNX@ETH">SNX on ETH</option><option value="SOL@SOL">SOL</option><option value="SOS@SOL">SOS on SOL</option><option value="SPCXX@SOL">SPCXX on SOL</option><option value="SPX@ETH">SPX on ETH</option><option value="STONK@SOL">STONK on SOL</option><option value="STRK@ETH">STRK on ETH</option><option value="SUI@SUI">SUI</option><option value="SUN@TRX">SUN on TRX</option><option value="SUPER@ETH">SUPER on ETH</option><option value="TAG@BSC">TAG on BSC</option><option value="TAO@TAO">TAO</option><option value="TAO@BITTENSOR">TAO on BITTENSOR</option><option value="TET@ETH">TET on ETH</option><option value="TIA@TIA">TIA</option><option value="TON@TON">TON</option><option value="TOSHI@BASE">TOSHI on BASE</option><option value="TREAT@ETH">TREAT on ETH</option><option value="TROLL@SOL">TROLL on SOL</option><option value="TRUMP@TRUMP">TRUMP</option><option value="TRUMP@SOL">TRUMP on SOL</option><option value="TRX@TRX">TRX</option><option value="TSLAX@SOL">TSLAX on SOL</option><option value="TURBO@ETH">TURBO on ETH</option><option value="TUSD@ETH">TUSD on ETH</option><option value="TUSD@TRX">TUSD on TRX</option><option value="TWT@BSC">TWT on BSC</option><option value="U@BSC">U on BSC</option><option value="UB@BSC">UB on BSC</option><option value="UMA@ETH">UMA on ETH</option><option value="UNI@ETH">UNI on ETH</option><option value="UNI@UNI">UNI</option><option value="USD1@ETH">USD1 on ETH</option><option value="USD1@TRX">USD1 on TRX</option><option value="USD1@BSC">USD1 on BSC</option><option value="USD1@SOL">USD1 on SOL</option><option value="USDC@XLAYER">USDC on XLAYER</option><option value="USDC@INK">USDC on INK</option><option value="USDC@MATIC">USDC on MATIC</option><option value="USDC@SOL">USDC on SOL</option><option value="USDC@BASE">USDC on BASE</option><option value="USDC@ARB">USDC on ARB</option><option value="USDC@ETH">USDC on ETH</option><option value="USDC@OP">USDC on OP</option><option value="USDC@XLM">USDC on XLM</option><option value="USDC@MONAD">USDC on MONAD</option><option value="USDC@AVAXC">USDC on AVAXC</option><option value="USDC@BSC">USDC on BSC</option><option value="USDC@ALGO">USDC on ALGO</option><option value="USDC@ARC">USDC on ARC</option><option value="USDC@OPTIMISM">USDC on OPTIMISM</option><option value="USDD@TRX">USDD on TRX</option><option value="USDD@ETH">USDD on ETH</option><option value="USDE@ETH">USDE on ETH</option><option value="USDG@SOL">USDG on SOL</option><option value="USDP@ETH">USDP on ETH</option><option value="USDS@ETH">USDS on ETH</option><option value="USDS@SOL">USDS on SOL</option><option value="USDS@USDS">USDS</option><option value="USDT@ETH">USDT on ETH</option><option value="USDT@AVAX">USDT on AVAX</option><option value="USDT@PLASMA">USDT on PLASMA</option><option value="USDT@ARB">USDT on ARB</option><option value="USDT@OP">USDT on OP</option><option value="USDT@SOL">USDT on SOL</option><option value="USDT@TON">USDT on TON</option><option value="USDT@TRX">USDT on TRX</option><option value="USDT@CELO">USDT on CELO</option><option value="USDT@MATIC">USDT on MATIC</option><option value="USDT@OPTIMISM">USDT on OPTIMISM</option><option value="USDT@ARC">USDT on ARC</option><option value="USDT@BSC">USDT on BSC</option><option value="USDT@AVAXC">USDT on AVAXC</option><option value="USDY@ETH">USDY on ETH</option><option value="USELESS@SOL">USELESS on SOL</option><option value="USX@SOL">USX on SOL</option><option value="VDR@SOL">VDR on SOL</option><option value="VET@VET">VET</option><option value="VINU@BSC">VINU on BSC</option><option value="VIRTUAL@BASE">VIRTUAL on BASE</option><option value="VSN@ETH">VSN on ETH</option><option value="VVV@BASE">VVV on BASE</option><option value="WBT@ETH">WBT on ETH</option><option value="WBTC@WBTC">WBTC</option><option value="WBTC@ETH">WBTC on ETH</option><option value="WCT@OP">WCT on OP</option><option value="WETH@WETH">WETH</option><option value="WIF@SOL">WIF on SOL</option><option value="WLD@ETH">WLD on ETH</option><option value="WLD@OP">WLD on OP</option><option value="WLFI@ETH">WLFI on ETH</option><option value="WLFI@BSC">WLFI on BSC</option><option value="WLFI@SOL">WLFI on SOL</option><option value="WOJAK@ETH">WOJAK on ETH</option><option value="WOO@ETH">WOO on ETH</option><option value="XAUT@ETH">XAUT on ETH</option><option value="XCN@BSC">XCN on BSC</option><option value="XCN@ETH">XCN on ETH</option><option value="XDC@XDC">XDC</option><option value="XLM@XLM">XLM</option><option value="XMR@XMR">XMR</option><option value="XNO@XNO">XNO</option><option value="XPL@XPL">XPL</option><option value="XPL@PLASMA">XPL on PLASMA</option><option value="XPR@ETH">XPR on ETH</option><option value="XRP@XRP">XRP</option><option value="XRP@BSC">XRP on BSC</option><option value="XTZ@XTZ">XTZ</option><option value="YFI@ETH">YFI on ETH</option><option value="YFI@YFI">YFI</option><option value="ZAMA@ETH">ZAMA on ETH</option><option value="ZANO@ZANO">ZANO</option><option value="ZBCN@SOL">ZBCN on SOL</option><option value="ZEC@ZEC">ZEC</option><option value="ZEC@SHIELDED">ZEC on SHIELDED</option><option value="ZKC@ETH">ZKC on ETH</option><option value="ZKJ@ETH">ZKJ on ETH</option><option value="ZORA@BASE">ZORA on BASE</option><option value="ZRO@ARB">ZRO on ARB</option><option value="ZRO@ETH">ZRO on ETH</option><option value="ZRX@ZRX">ZRX</option><option value="ZRX@ETH">ZRX on ETH</option></optgroup></select></div>
+        <div class="si_label"><label for="to_currency">To:</label></div>
+        <div class="si_amount"></div>
+        <div class="si_select"><select class="to_currency" id="swap_to_currency" name="to_currency" required><optgroup label="Popular"><option value="BTC">BTC</option><option value="BTC@LN">BTC on LN</option><option selected value="XMR">XMR</option><option value="LTC">LTC</option><option value="ETH">ETH</option><option value="USDC@ETH">USDC on ETH</option><option value="USDT@TRX">USDT on TRX</option><option value="USDT@ETH">USDT on ETH</option><option value="SOL">SOL</option></optgroup><optgroup label="All"><option value="1INCH@ETH">1INCH on ETH</option><option value="2Z@SOL">2Z on SOL</option><option value="AAVE@ETH">AAVE on ETH</option><option value="ADA@ADA">ADA</option><option value="ADA@BSC">ADA on BSC</option><option value="ADI@ADI">ADI</option><option value="ALGO@ALGO">ALGO</option><option value="ALICE@BSC">ALICE on BSC</option><option value="AMZNX@SOL">AMZNX on SOL</option><option value="ANKR@ETH">ANKR on ETH</option><option value="APE@ETH">APE on ETH</option><option value="APT@APT">APT</option><option value="ARB@ARB">ARB</option><option value="ARB@ETH">ARB on ETH</option><option value="ARKM@ETH">ARKM on ETH</option><option value="ARPA@ETH">ARPA on ETH</option><option value="ASTER@BSC">ASTER on BSC</option><option value="ATOM@ATOM">ATOM</option><option value="AVA@ETH">AVA on ETH</option><option value="AVAX@ARC">AVAX on ARC</option><option value="AVAX@AVAXC">AVAX on AVAXC</option><option value="AVAX@AVAX">AVAX</option><option value="AVNT@BASE">AVNT on BASE</option><option value="AXS@ETH">AXS on ETH</option><option value="B@BSC">B on BSC</option><option value="BANK@BSC">BANK on BSC</option><option value="BAT@ETH">BAT on ETH</option><option value="BAT@BAT">BAT</option><option value="BCH@BCH">BCH</option><option value="BEAT@BSC">BEAT on BSC</option><option value="BENJI@BASE">BENJI on BASE</option><option value="BIO@ETH">BIO on ETH</option><option value="BLESS@BSC">BLESS on BSC</option><option value="BLUR@ETH">BLUR on ETH</option><option value="BNB@BNB">BNB</option><option value="BNB@BSC">BNB on BSC</option><option value="BNB@OPBNB">BNB on OPBNB</option><option value="BNKR@BASE">BNKR on BASE</option><option value="BNT@ETH">BNT on ETH</option><option value="BOME@SOL">BOME on SOL</option><option value="BONK@SOL">BONK on SOL</option><option value="BRETT@BASE">BRETT on BASE</option><option value="BSV@BSV">BSV</option><option value="BTC@LN">BTC on LN</option><option value="BTC@LIQUID">BTC on LIQUID</option><option value="BTC@BSC">BTC on BSC</option><option value="BTC@BTC">BTC</option><option value="BTT@TRX">BTT on TRX</option><option value="BTT@BTT">BTT</option><option value="CAKE@CAKE">CAKE</option><option value="CAKE@BSC">CAKE on BSC</option><option value="CARDS@SOL">CARDS on SOL</option><option value="CFG@ETH">CFG on ETH</option><option value="CHR@ETH">CHR on ETH</option><option value="CHZ@ETH">CHZ on ETH</option><option value="CNPY@BSC">CNPY on BSC</option><option value="COMP@ETH">COMP on ETH</option><option value="CRO@ETH">CRO on ETH</option><option value="CRV@ETH">CRV on ETH</option><option value="DAI@BSC">DAI on BSC</option><option value="DAI@ETH">DAI on ETH</option><option value="DAI@MATIC">DAI on MATIC</option><option value="DASH@DASH">DASH</option><option value="DCR@DCR">DCR</option><option value="DEXE@ETH">DEXE on ETH</option><option value="DGAI@BSC">DGAI on BSC</option><option value="DGB@DGB">DGB</option><option value="DNA@BSC">DNA on BSC</option><option value="DODO@BSC">DODO on BSC</option><option value="DODO@ETH">DODO on ETH</option><option value="DOGE@BSC">DOGE on BSC</option><option value="DOGE@DOGE">DOGE</option><option value="DOGS@TON">DOGS on TON</option><option value="DOOD@SOL">DOOD on SOL</option><option value="DOS@ETH">DOS on ETH</option><option value="DOT@DOT">DOT</option><option value="DOT@DOTAH">DOT on DOTAH</option><option value="DRIFT@SOL">DRIFT on SOL</option><option value="DRV@ETH">DRV on ETH</option><option value="DUSK@ETH">DUSK on ETH</option><option value="EDGE@ETH">EDGE on ETH</option><option value="EGLD@EGLD">EGLD</option><option value="ELSA@BASE">ELSA on BASE</option><option value="ENA@ETH">ENA on ETH</option><option value="ENS@ETH">ENS on ETH</option><option value="ETC@ETC">ETC</option><option value="ETH@INK">ETH on INK</option><option value="ETH@MATIC">ETH on MATIC</option><option value="ETH@ROBINHOOD">ETH on ROBINHOOD</option><option value="ETH@BASE">ETH on BASE</option><option value="ETH@ARB">ETH on ARB</option><option value="ETH@OP">ETH on OP</option><option value="ETH@ETH">ETH</option><option value="ETH@BSC">ETH on BSC</option><option value="ETH@ZKSYNC">ETH on ZKSYNC</option><option value="ETH@HOOD">ETH on HOOD</option><option value="ETH@OPTIMISM">ETH on OPTIMISM</option><option value="ETHFI@ETH">ETHFI on ETH</option><option value="EURC@SOL">EURC on SOL</option><option value="FAI@BASE">FAI on BASE</option><option value="FARTCOIN@SOL">FARTCOIN on SOL</option><option value="FDUSD@SOL">FDUSD on SOL</option><option value="FDUSD@ETH">FDUSD on ETH</option><option value="FDUSD@BSC">FDUSD on BSC</option><option value="FET@ETH">FET on ETH</option><option value="FIDA@SOL">FIDA on SOL</option><option value="FIL@FIL">FIL</option><option value="FLARE@FLR">FLARE on FLR</option><option value="FLOCK@BASE">FLOCK on BASE</option><option value="FLOKI@BSC">FLOKI on BSC</option><option value="FLOKI@ETH">FLOKI on ETH</option><option value="FLUID@ETH">FLUID on ETH</option><option value="FLUX@ETH">FLUX on ETH</option><option value="FLUX@FLUX">FLUX</option><option value="FOLD@ETH">FOLD on ETH</option><option value="FTT@ETH">FTT on ETH</option><option value="GEOD@SOL">GEOD on SOL</option><option value="GIGA@SOL">GIGA on SOL</option><option value="GLM@ETH">GLM on ETH</option><option value="GMT@SOL">GMT on SOL</option><option value="GNO@ETH">GNO on ETH</option><option value="GRAM@TON">GRAM on TON</option><option value="GRAM@GRAM">GRAM</option><option value="GRASS@SOL">GRASS on SOL</option><option value="GRT@ETH">GRT on ETH</option><option value="GT@ETH">GT on ETH</option><option value="HBAR@HBAR">HBAR</option><option value="HNT@SOL">HNT on SOL</option><option value="HYPE@HYPEEVM">HYPE on HYPEEVM</option><option value="HYPE@HYPE">HYPE</option><option value="ICP@ICP">ICP</option><option value="ID@ETH">ID on ETH</option><option value="ID@BSC">ID on BSC</option><option value="IMX@ETH">IMX on ETH</option><option value="IOTA@BSC">IOTA on BSC</option><option value="IRYS@ETH">IRYS on ETH</option><option value="JASMY@ETH">JASMY on ETH</option><option value="JITOSOL@SOL">JITOSOL on SOL</option><option value="JST@TRX">JST on TRX</option><option value="JTO@SOL">JTO on SOL</option><option value="JUP@JUP">JUP</option><option value="JUP@SOL">JUP on SOL</option><option value="KAITO@BASE">KAITO on BASE</option><option value="KAS@KAS">KAS</option><option value="KASPA@KASPA">KASPA</option><option value="KAVA@KAVA">KAVA</option><option value="KCS@KCC">KCS on KCC</option><option value="KNC@ETH">KNC on ETH</option><option value="LAB@BSC">LAB on BSC</option><option value="LDO@ETH">LDO on ETH</option><option value="LIKE@SOL">LIKE on SOL</option><option value="LIME@BSC">LIME on BSC</option><option value="LINEA@LINEA">LINEA</option><option value="LINK@LINK">LINK</option><option value="LINK@ETH">LINK on ETH</option><option value="LIT@ETH">LIT on ETH</option><option value="LRC@ETH">LRC on ETH</option><option value="LTC@MWEB">LTC on MWEB</option><option value="LTC@LTC">LTC</option><option value="MAGIC@ARB">MAGIC on ARB</option><option value="MANA@MANA">MANA</option><option value="MANA@ETH">MANA on ETH</option><option value="MARSCOIN@BSC">MARSCOIN on BSC</option><option value="MASK@ETH">MASK on ETH</option><option value="MATIC@ETH">MATIC on ETH</option><option value="MATIC@MATIC">MATIC</option><option value="ME@SOL">ME on SOL</option><option value="MELANIA@SOL">MELANIA on SOL</option><option value="MET@SOL">MET on SOL</option><option value="METIS@ETH">METIS on ETH</option><option value="MEW@SOL">MEW on SOL</option><option value="MNT@ETH">MNT on ETH</option><option value="MON@MONAD">MON on MONAD</option><option value="MORPHO@ETH">MORPHO on ETH</option><option value="NANO@NANO">NANO</option><option value="NATIX@SOL">NATIX on SOL</option><option value="NEAR@BSC">NEAR on BSC</option><option value="NEAR@NEAR">NEAR</option><option value="NEXO@ETH">NEXO on ETH</option><option value="NIM@NIM">NIM</option><option value="NOS@SOL">NOS on SOL</option><option value="NVDAX@SOL">NVDAX on SOL</option><option value="OKB@OKB">OKB</option><option value="ONDO@ETH">ONDO on ETH</option><option value="OP@OPTIMISM">OP on OPTIMISM</option><option value="OP@OP">OP</option><option value="OPEN@BSC">OPEN on BSC</option><option value="ORDER@ETH">ORDER on ETH</option><option value="PART@PART">PART</option><option value="PAXG@ETH">PAXG on ETH</option><option value="PEIPEI@ETH">PEIPEI on ETH</option><option value="PENDLE@ETH">PENDLE on ETH</option><option value="PENGU@SOL">PENGU on SOL</option><option value="PEPE@PEPE">PEPE</option><option value="PEPE@ETH">PEPE on ETH</option><option value="PIPPIN@SOL">PIPPIN on SOL</option><option value="PIVX@PIVX">PIVX</option><option value="PLUME@ETH">PLUME on ETH</option><option value="PNUT@SOL">PNUT on SOL</option><option value="POL@ETH">POL on ETH</option><option value="POL@POL">POL</option><option value="POL@MATIC">POL on MATIC</option><option value="PONKE@SOL">PONKE on SOL</option><option value="POWR@ETH">POWR on ETH</option><option value="PUMP@SOL">PUMP on SOL</option><option value="PYTH@SOL">PYTH on SOL</option><option value="PYUSD@ETH">PYUSD on ETH</option><option value="PYUSD@SOL">PYUSD on SOL</option><option value="QNT@ETH">QNT on ETH</option><option value="QTUM@QTUM">QTUM</option><option value="QUAI@QUAI">QUAI</option><option value="RACA@BSC">RACA on BSC</option><option value="RAIN@ARB">RAIN on ARB</option><option value="RARE@ETH">RARE on ETH</option><option value="RAY@SOL">RAY on SOL</option><option value="RBC@ETH">RBC on ETH</option><option value="RDNT@ETH">RDNT on ETH</option><option value="RENDER@SOL">RENDER on SOL</option><option value="REZ@ETH">REZ on ETH</option><option value="RLUSD@ETH">RLUSD on ETH</option><option value="RLUSD@XRP">RLUSD on XRP</option><option value="ROAM@SOL">ROAM on SOL</option><option value="RSR@ETH">RSR on ETH</option><option value="RVN@RVN">RVN</option><option value="S@S">S</option><option value="SAHARA@ETH">SAHARA on ETH</option><option value="SAND@ETH">SAND on ETH</option><option value="SANTOS@BSC">SANTOS on BSC</option><option value="SENT@ETH">SENT on ETH</option><option value="SFP@BSC">SFP on BSC</option><option value="SHIB@ETH">SHIB on ETH</option><option value="SHIRO@ETH">SHIRO on ETH</option><option value="SHX@ETH">SHX on ETH</option><option value="SIGN@BSC">SIGN on BSC</option><option value="SIREN@BSC">SIREN on BSC</option><option value="SKY@ETH">SKY on ETH</option><option value="SLVON@ETH">SLVON on ETH</option><option value="SNT@ETH">SNT on ETH</option><option value="SNX@ETH">SNX on ETH</option><option value="SOL@SOL">SOL</option><option value="SOS@SOL">SOS on SOL</option><option value="SPCXX@SOL">SPCXX on SOL</option><option value="SPX@ETH">SPX on ETH</option><option value="STONK@SOL">STONK on SOL</option><option value="STRK@ETH">STRK on ETH</option><option value="SUI@SUI">SUI</option><option value="SUN@TRX">SUN on TRX</option><option value="SUPER@ETH">SUPER on ETH</option><option value="TAG@BSC">TAG on BSC</option><option value="TAO@TAO">TAO</option><option value="TAO@BITTENSOR">TAO on BITTENSOR</option><option value="TET@ETH">TET on ETH</option><option value="TIA@TIA">TIA</option><option value="TON@TON">TON</option><option value="TOSHI@BASE">TOSHI on BASE</option><option value="TREAT@ETH">TREAT on ETH</option><option value="TROLL@SOL">TROLL on SOL</option><option value="TRUMP@TRUMP">TRUMP</option><option value="TRUMP@SOL">TRUMP on SOL</option><option value="TRX@TRX">TRX</option><option value="TSLAX@SOL">TSLAX on SOL</option><option value="TURBO@ETH">TURBO on ETH</option><option value="TUSD@ETH">TUSD on ETH</option><option value="TUSD@TRX">TUSD on TRX</option><option value="TWT@BSC">TWT on BSC</option><option value="U@BSC">U on BSC</option><option value="UB@BSC">UB on BSC</option><option value="UMA@ETH">UMA on ETH</option><option value="UNI@ETH">UNI on ETH</option><option value="UNI@UNI">UNI</option><option value="USD1@ETH">USD1 on ETH</option><option value="USD1@TRX">USD1 on TRX</option><option value="USD1@BSC">USD1 on BSC</option><option value="USD1@SOL">USD1 on SOL</option><option value="USDC@XLAYER">USDC on XLAYER</option><option value="USDC@INK">USDC on INK</option><option value="USDC@MATIC">USDC on MATIC</option><option value="USDC@SOL">USDC on SOL</option><option value="USDC@BASE">USDC on BASE</option><option value="USDC@ARB">USDC on ARB</option><option value="USDC@ETH">USDC on ETH</option><option value="USDC@OP">USDC on OP</option><option value="USDC@XLM">USDC on XLM</option><option value="USDC@MONAD">USDC on MONAD</option><option value="USDC@AVAXC">USDC on AVAXC</option><option value="USDC@BSC">USDC on BSC</option><option value="USDC@ALGO">USDC on ALGO</option><option value="USDC@ARC">USDC on ARC</option><option value="USDC@OPTIMISM">USDC on OPTIMISM</option><option value="USDD@TRX">USDD on TRX</option><option value="USDD@ETH">USDD on ETH</option><option value="USDE@ETH">USDE on ETH</option><option value="USDG@SOL">USDG on SOL</option><option value="USDP@ETH">USDP on ETH</option><option value="USDS@ETH">USDS on ETH</option><option value="USDS@SOL">USDS on SOL</option><option value="USDT@ETH">USDT on ETH</option><option value="USDT@AVAX">USDT on AVAX</option><option value="USDT@PLASMA">USDT on PLASMA</option><option value="USDT@ARB">USDT on ARB</option><option value="USDT@OP">USDT on OP</option><option value="USDT@SOL">USDT on SOL</option><option value="USDT@TON">USDT on TON</option><option value="USDT@TRX">USDT on TRX</option><option value="USDT@CELO">USDT on CELO</option><option value="USDT@MATIC">USDT on MATIC</option><option value="USDT@OPTIMISM">USDT on OPTIMISM</option><option value="USDT@ARC">USDT on ARC</option><option value="USDT@BSC">USDT on BSC</option><option value="USDT@AVAXC">USDT on AVAXC</option><option value="USDY@ETH">USDY on ETH</option><option value="USELESS@SOL">USELESS on SOL</option><option value="USX@SOL">USX on SOL</option><option value="VDR@SOL">VDR on SOL</option><option value="VET@VET">VET</option><option value="VINU@BSC">VINU on BSC</option><option value="VIRTUAL@BASE">VIRTUAL on BASE</option><option value="VSN@ETH">VSN on ETH</option><option value="VVV@BASE">VVV on BASE</option><option value="WBT@ETH">WBT on ETH</option><option value="WBTC@WBTC">WBTC</option><option value="WBTC@ETH">WBTC on ETH</option><option value="WCT@OP">WCT on OP</option><option value="WETH@WETH">WETH</option><option value="WIF@SOL">WIF on SOL</option><option value="WLD@ETH">WLD on ETH</option><option value="WLFI@ETH">WLFI on ETH</option><option value="WLFI@BSC">WLFI on BSC</option><option value="WLFI@SOL">WLFI on SOL</option><option value="WOJAK@ETH">WOJAK on ETH</option><option value="WOO@ETH">WOO on ETH</option><option value="XAUT@ETH">XAUT on ETH</option><option value="XCN@BSC">XCN on BSC</option><option value="XCN@ETH">XCN on ETH</option><option value="XDC@XDC">XDC</option><option value="XLM@XLM">XLM</option><option value="XMR@XMR">XMR</option><option value="XNO@XNO">XNO</option><option value="XPL@XPL">XPL</option><option value="XPL@PLASMA">XPL on PLASMA</option><option value="XPR@ETH">XPR on ETH</option><option value="XRP@XRP">XRP</option><option value="XRP@BSC">XRP on BSC</option><option value="XTZ@XTZ">XTZ</option><option value="YFI@ETH">YFI on ETH</option><option value="YFI@YFI">YFI</option><option value="ZAMA@ETH">ZAMA on ETH</option><option value="ZANO@ZANO">ZANO</option><option value="ZBCN@SOL">ZBCN on SOL</option><option value="ZEC@ZEC">ZEC</option><option value="ZEC@SHIELDED">ZEC on SHIELDED</option><option value="ZKC@ETH">ZKC on ETH</option><option value="ZKJ@ETH">ZKJ on ETH</option><option value="ZORA@BASE">ZORA on BASE</option><option value="ZRO@ARB">ZRO on ARB</option><option value="ZRO@ETH">ZRO on ETH</option><option value="ZRX@ZRX">ZRX</option><option value="ZRX@ETH">ZRX on ETH</option></optgroup></select></div>
+        <div class="si_search">
+            
+            <input id="search" name="search" type="submit" value="Search">
+            
+        </div>
+    </div>
+</form>
+</monolith>
+<monolith class="rate " data-json="eyJmaWx0ZXJfYXR0cmlidXRlcyI6IHsibm9qcyI6IHRydWUsICJuZXZlcl9reWMiOiB0cnVlLCAiZ3VhcmFudGVlIjogMC42OTA0NjAyNywgImxldHRlcl9vZl9ndWFyYW50ZWUiOiB0cnVlLCAibWF0dXJlIjogZmFsc2UsICJwcmVzY3JlZW5pbmciOiBmYWxzZSwgIm93bl9saXF1aWRpdHkiOiBmYWxzZSwgIm5vX3JhdGVfZGlzY3JpbWluYXRpb24iOiB0cnVlLCAiaW50ZXJjYW1iaW8iOiBmYWxzZSwgImtubV83IjogZmFsc2UsICJtZWV0dXAiOiBmYWxzZSwgInByaXZhdGVfc3dhcHMiOiB0cnVlLCAibm9fcmVjZW50X3N3YXBzX3B1Ymxpc2giOiB0cnVlLCAiZmFzdF90cmFjayI6IGZhbHNlfX0=">
+    <div class="rate_flex">
+    <div class="logo_container">
+        <a href="http://pablocashyjghnx5yzrd2a73eau47zx5eyc7peomtuldnumdicg3doyd.onion/?ref=7" rel="sponsored" class="logo_a" target="_blank">
+            
+            
+            <img loading="lazy" class="" src="/static/logos/pablocash.webp">
+        </a>
+        <a class="service_review_link" href="/service/pablocash/">Service page</a>
+    </div>
+
+    <div class="properties_container">
+        <header>
+            <div class="name">
+                <a class="name_a" href="http://pablocashyjghnx5yzrd2a73eau47zx5eyc7peomtuldnumdicg3doyd.onion/?ref=7" rel="sponsored" target="_blank">Pablo Cash</a>
+            </div>
+            <div class="grade_container">
+                <span class="grade_text"><a href="/user/new?service_name=pablocash" target="_blank">Write review</a></span>
+                <span class="grade_text_narrow"><a href="/user/new?service_name=pablocash" target="_blank">Write review</a></span>
+
+                
+                    <a href="/user/new?service_name=pablocash" class="grade_a" target="_blank">
+                        <div class="grade green" title="Review score on OrangeFren.com">10</div>
+                    </a>
+
+                
+            </div>
+        </header>
+
+        <main>
+            <div class="properties">
+                <div class="badges_container">
+                    
+                        <div class="since_listed_badge" title="Pablo Cash has been listed on OrangeFren.com since Oct 2026">Since Oct 2026</div>
+                    
+                    
+                        
+                        <div class="liquidity_sponsor_badge_external" title="Pablo Cash uses 3rd party liquidity to process trades.">Resold liquidity</div>
+                        
+                    
+                    
+                    
+                    
+                </div>
+
+                <div class="service_type_container rate_texts_wide">
+                    <div class="type">Instant Exchange</div>
+                </div>
+
+                
+                <div class="description_container rate_texts_wide ">
+                    <span class="material-symbols-outlined glyph glyph-info" aria-hidden="true"></span>
+                    <p class="description">Generally pays out from <b>NEAR Intents</b> and CEXes.</p>
+                </div>
+                
+
+                
+                
+
+                
+
+                <div class="payment_method_container">
+                    
+                </div>
+
+                
+
+                
+                <div class="guarantee_container rate_texts_wide">
+                    <span class="material-symbols-outlined glyph glyph-shield" aria-hidden="true"></span>
+                    <div>
+                        <div class="guarantee">OrangeFren Guarantee</div>
+                        
+                            <p>Your trade is <b>fully</b> protected against this service scamming you when using <b>our link</b>.</p>
+                        
+                    </div>
+                </div>
+                
+
+                
+
+                
+
+                
+
+            </div>
+            <div class="summary_container ">
+                
+                    <div class="summary">
+                        
+                            0.01 BTC to XMR<br>
+                             1 BTC ≈ 123.90779123 XMR
+                        
+                    </div>
+                    <div class="to_amount">
+                        
+                            
+                            <div class="comparative_tag_container">
+                            
+                                <div class="comparative_tag_intermediate comparative_tag" title="This service has a rate -0.93% worse than the best result">-0.93%</div>
+                            
+                            </div>
+                            <div class="amount_currency"><div class="amount">1.23907791</div> <div>XMR</div></div>
+                        
+                    </div>
+                
+                <div class="button_narrow_picked_by_container">
+                    
+                    <a href="http://pablocashyjghnx5yzrd2a73eau47zx5eyc7peomtuldnumdicg3doyd.onion/?ref=7" rel="sponsored" class="offer_button " target="_blank">Trade</a>
+                </div>
+
+                
+            </div>
+        </main>
+
+    </div>
+    
+    </div>
+    <div class="rate_texts_narrow">
+        
+        <div class="description_container ">
+            <span class="material-symbols-outlined glyph glyph-info" aria-hidden="true"></span>
+            <p class="description">Generally pays out from <b>NEAR Intents</b> and CEXes.</p>
+        </div>
+        
+
+        
+
+        
+
+        
+        <div class="guarantee_container">
+            <span class="material-symbols-outlined glyph glyph-shield" aria-hidden="true"></span>
+            <div>
+                <div class="guarantee">OrangeFren Guarantee</div>
+                
+                <p>Your trade is <b>fully</b> protected against this service scamming you.</p>
+                
+            </div>
+        </div>
+        
+
+        
+
+        
+
+        
+    </div>
+    <div class="reviews_container">
+        
+    </div>
+</monolith>
+<monolith class="rate " data-json="eyJmaWx0ZXJfYXR0cmlidXRlcyI6IHsibm9qcyI6IHRydWUsICJuZXZlcl9reWMiOiB0cnVlLCAiZ3VhcmFudGVlIjogZmFsc2UsICJsZXR0ZXJfb2ZfZ3VhcmFudGVlIjogdHJ1ZSwgIm1hdHVyZSI6IHRydWUsICJwcmVzY3JlZW5pbmciOiBmYWxzZSwgIm93bl9saXF1aWRpdHkiOiB0cnVlLCAibm9fcmF0ZV9kaXNjcmltaW5hdGlvbiI6IHRydWUsICJpbnRlcmNhbWJpbyI6IHRydWUsICJrbm1fNyI6IHRydWUsICJtZWV0dXAiOiB0cnVlLCAicHJpdmF0ZV9zd2FwcyI6IGZhbHNlLCAibm9fcmVjZW50X3N3YXBzX3B1Ymxpc2giOiB0cnVlLCAiZmFzdF90cmFjayI6IGZhbHNlfX0=">
+    <div class="rate_flex">
+    <div class="logo_container">
+        <a href="https://xchange.me/?invite=013c8aa2-9873-4d78-a9fb-3f0b947e01ca" rel="sponsored" class="logo_a" target="_blank">
+            
+            
+            <img loading="lazy" class="" src="/static/logos/xchange.webp">
+        </a>
+        <a class="service_review_link" href="/service/xchange/">Service page</a>
+    </div>
+
+    <div class="properties_container">
+        <header>
+            <div class="name">
+                <a class="name_a" href="https://xchange.me/?invite=013c8aa2-9873-4d78-a9fb-3f0b947e01ca" rel="sponsored" target="_blank">Xchange</a>
+            </div>
+            <div class="grade_container">
+                <span class="grade_text"><a href="/user/new?service_name=xchange" target="_blank">Write review</a></span>
+                <span class="grade_text_narrow"><a href="/user/new?service_name=xchange" target="_blank">Write review</a></span>
+
+                
+                    <a href="/user/new?service_name=xchange" class="grade_a" target="_blank">
+                        <div class="grade green" title="Review score on OrangeFren.com">10</div>
+                    </a>
+
+                
+            </div>
+        </header>
+
+        <main>
+            <div class="properties">
+                <div class="badges_container">
+                    
+                        <div class="since_listed_badge" title="Xchange has been listed on OrangeFren.com since Jan 2022">Since Jan 2022</div>
+                    
+                    
+                        
+                        <div class="liquidity_sponsor_badge_own" title="Xchange uses their own liquidity to process trades between the most popular cryptos.">Own liquidity</div>
+                        
+                    
+                    
+                    
+                        <div class="meetup_sponsor_badge" title="Xchange sponsored meet-ups organized by OrangeFren.com">Meet-up sponsor</div>
+                    
+                    
+                </div>
+
+                <div class="service_type_container rate_texts_wide">
+                    <div class="type">Instant Exchange</div>
+                </div>
+
+                
+
+                
+                
+
+                
+                <div class="confirmations_container rate_texts_wide ">
+                    <span class="material-symbols-outlined glyph glyph-timer" aria-hidden="true"></span>
+                    <p class="confirmations">1-3 block confirmation(s).</p>
+                </div>
+                
+
+                <div class="payment_method_container">
+                    
+                </div>
+
+                
+                <div class="warning_container rate_texts_wide">
+                    <span class="material-symbols-outlined glyph glyph-warning" aria-hidden="true"></span>
+                    <div class="warning">Tainted coins may be refunded. Refunds processed without KYC.</div>
+                </div>
+                
+
+                
+
+                
+
+                
+
+                
+
+            </div>
+            <div class="summary_container ">
+                
+                    <div class="summary">
+                        
+                            0.01 BTC to XMR<br>
+                             1 BTC ≈ 122.28328566 XMR
+                        
+                    </div>
+                    <div class="to_amount">
+                        
+                            
+                            <div class="comparative_tag_container">
+                            
+                                <div class="comparative_tag_intermediate comparative_tag" title="This service has a rate -2.23% worse than the best result">-2.23%</div>
+                            
+                            </div>
+                            <div class="amount_currency"><div class="amount">1.22283286</div> <div>XMR</div></div>
+                        
+                    </div>
+                
+                <div class="button_narrow_picked_by_container">
+                    
+                    <a href="https://xchange.me/?invite=013c8aa2-9873-4d78-a9fb-3f0b947e01ca" rel="sponsored" class="offer_button " target="_blank">Trade</a>
+                </div>
+
+                
+            </div>
+        </main>
+
+    </div>
+    
+    </div>
+    <div class="rate_texts_narrow">
+        
+
+        
+        <div class="confirmations_container ">
+            <span class="material-symbols-outlined glyph glyph-timer" aria-hidden="true"></span>
+            <p class="confirmations">1-3 block confirmation(s).</p>
+        </div>
+        
+
+        
+        <div class="warning_container">
+            <span class="material-symbols-outlined glyph glyph-warning" aria-hidden="true"></span>
+            <div class="warning">Tainted coins may be refunded. Refunds processed without KYC.</div>
+        </div>
+        
+
+        
+
+        
+
+        
+
+        
+    </div>
+    <div class="reviews_container">
+        
+    </div>
+</monolith>
+<monolith class="rate " data-json="eyJmaWx0ZXJfYXR0cmlidXRlcyI6IHsibm9qcyI6IHRydWUsICJuZXZlcl9reWMiOiB0cnVlLCAiZ3VhcmFudGVlIjogMC4wMjQ2NzQ3NSwgImxldHRlcl9vZl9ndWFyYW50ZWUiOiB0cnVlLCAibWF0dXJlIjogZmFsc2UsICJwcmVzY3JlZW5pbmciOiBmYWxzZSwgIm93bl9saXF1aWRpdHkiOiB0cnVlLCAibm9fcmF0ZV9kaXNjcmltaW5hdGlvbiI6IHRydWUsICJpbnRlcmNhbWJpbyI6IGZhbHNlLCAia25tXzciOiBmYWxzZSwgIm1lZXR1cCI6IGZhbHNlLCAicHJpdmF0ZV9zd2FwcyI6IGZhbHNlLCAibm9fcmVjZW50X3N3YXBzX3B1Ymxpc2giOiB0cnVlLCAiZmFzdF90cmFjayI6IGZhbHNlfX0=">
+    <div class="rate_flex">
+    <div class="logo_container">
+        <a href="https://hiddenswap.com/exchange/btc-to-xmr?amount=0.01&amp;rateType=float&amp;ref=orangefren" rel="sponsored" class="logo_a" target="_blank">
+            
+            
+            <img loading="lazy" class="" src="/static/logos/hiddenswap.webp">
+        </a>
+        <a class="service_review_link" href="/service/hiddenswap/">Service page</a>
+    </div>
+
+    <div class="properties_container">
+        <header>
+            <div class="name">
+                <a class="name_a" href="https://hiddenswap.com/exchange/btc-to-xmr?amount=0.01&amp;rateType=float&amp;ref=orangefren" rel="sponsored" target="_blank">HiddenSwap</a>
+            </div>
+            <div class="grade_container">
+                <span class="grade_text"><a href="/user/new?service_name=hiddenswap" target="_blank">Write review</a></span>
+                <span class="grade_text_narrow"><a href="/user/new?service_name=hiddenswap" target="_blank">Write review</a></span>
+
+                
+                    <a href="/user/new?service_name=hiddenswap" class="grade_a" target="_blank">
+                        <div class="grade yellow" title="Review score on OrangeFren.com">5</div>
+                    </a>
+
+                
+            </div>
+        </header>
+
+        <main>
+            <div class="properties">
+                <div class="badges_container">
+                    
+                        <div class="since_listed_badge" title="HiddenSwap has been listed on OrangeFren.com since Oct 2026">Since Oct 2026</div>
+                    
+                    
+                        
+                        <div class="liquidity_sponsor_badge_own" title="HiddenSwap uses their own liquidity to process trades between the most popular cryptos.">Own liquidity</div>
+                        
+                    
+                    
+                    
+                    
+                </div>
+
+                <div class="service_type_container rate_texts_wide">
+                    <div class="type">Instant Exchange</div>
+                </div>
+
+                
+
+                
+                
+
+                
+
+                <div class="payment_method_container">
+                    
+                </div>
+
+                
+                <div class="warning_container rate_texts_wide">
+                    <span class="material-symbols-outlined glyph glyph-warning" aria-hidden="true"></span>
+                    <div class="warning">Tainted coins may be refunded. Refunds processed without KYC.</div>
+                </div>
+                
+
+                
+                <div class="guarantee_container rate_texts_wide">
+                    <span class="material-symbols-outlined glyph glyph-shield" aria-hidden="true"></span>
+                    <div>
+                        <div class="guarantee">OrangeFren Guarantee</div>
+                        
+                            <p>Your trade is <b>fully</b> protected against this service scamming you when using <b>our link</b>.</p>
+                        
+                    </div>
+                </div>
+                
+
+                
+
+                
+
+                
+
+            </div>
+            <div class="summary_container ">
+                
+                    <div class="summary">
+                        
+                            0.01 BTC to XMR<br>
+                             1 BTC ≈ 121.96486884 XMR
+                        
+                    </div>
+                    <div class="to_amount">
+                        
+                            
+                            <div class="comparative_tag_container">
+                            
+                                <div class="comparative_tag_intermediate comparative_tag" title="This service has a rate -3.2% worse than the best result">-3.2%</div>
+                            
+                            </div>
+                            <div class="amount_currency"><div class="amount">1.21064869</div> <div>XMR</div></div>
+                        
+                    </div>
+                
+                <div class="button_narrow_picked_by_container">
+                    
+                    <a href="https://hiddenswap.com/exchange/btc-to-xmr?amount=0.01&amp;rateType=float&amp;ref=orangefren" rel="sponsored" class="offer_button " target="_blank">Trade</a>
+                </div>
+
+                
+            </div>
+        </main>
+
+    </div>
+    
+    </div>
+    <div class="rate_texts_narrow">
+        
+
+        
+
+        
+        <div class="warning_container">
+            <span class="material-symbols-outlined glyph glyph-warning" aria-hidden="true"></span>
+            <div class="warning">Tainted coins may be refunded. Refunds processed without KYC.</div>
+        </div>
+        
+
+        
+        <div class="guarantee_container">
+            <span class="material-symbols-outlined glyph glyph-shield" aria-hidden="true"></span>
+            <div>
+                <div class="guarantee">OrangeFren Guarantee</div>
+                
+                <p>Your trade is <b>fully</b> protected against this service scamming you.</p>
+                
+            </div>
+        </div>
+        
+
+        
+
+        
+
+        
+    </div>
+    <div class="reviews_container">
+        
+    </div>
+</monolith>
+<monolith class="rate " data-json="eyJmaWx0ZXJfYXR0cmlidXRlcyI6IHsibm9qcyI6IHRydWUsICJuZXZlcl9reWMiOiB0cnVlLCAiZ3VhcmFudGVlIjogMC4wMTU0NTAxNiwgImxldHRlcl9vZl9ndWFyYW50ZWUiOiB0cnVlLCAibWF0dXJlIjogZmFsc2UsICJwcmVzY3JlZW5pbmciOiB0cnVlLCAib3duX2xpcXVpZGl0eSI6IHRydWUsICJub19yYXRlX2Rpc2NyaW1pbmF0aW9uIjogdHJ1ZSwgImludGVyY2FtYmlvIjogZmFsc2UsICJrbm1fNyI6IHRydWUsICJtZWV0dXAiOiBmYWxzZSwgInByaXZhdGVfc3dhcHMiOiB0cnVlLCAibm9fcmVjZW50X3N3YXBzX3B1Ymxpc2giOiB0cnVlLCAiZmFzdF90cmFjayI6IGZhbHNlfX0=">
+    <div class="rate_flex">
+    <div class="logo_container">
+        <a href="https://smp8.simplex.im/a#cpCZQ5js7b8u5K1-l4-ORo6160agnEuZQARmNmBjNp4" rel="sponsored" class="logo_a" target="_blank">
+            
+            
+            <img loading="lazy" class="" src="/static/logos/trevoid.webp">
+        </a>
+        <a class="service_review_link" href="/service/trevoid/">Service page</a>
+    </div>
+
+    <div class="properties_container">
+        <header>
+            <div class="name">
+                <a class="name_a" href="https://smp8.simplex.im/a#cpCZQ5js7b8u5K1-l4-ORo6160agnEuZQARmNmBjNp4" rel="sponsored" target="_blank">Trêvoid</a>
+            </div>
+            <div class="grade_container">
+                <span class="grade_text"><a href="/user/new?service_name=trevoid" target="_blank">Write review</a></span>
+                <span class="grade_text_narrow"><a href="/user/new?service_name=trevoid" target="_blank">Write review</a></span>
+
+                
+                    <a href="/user/new?service_name=trevoid" class="grade_a" target="_blank">
+                        <div class="grade green" title="Review score on OrangeFren.com">10</div>
+                    </a>
+
+                
+            </div>
+        </header>
+
+        <main>
+            <div class="properties">
+                <div class="badges_container">
+                    
+                        <div class="since_listed_badge" title="Trêvoid has been listed on OrangeFren.com since Aug 2026">Since Aug 2026</div>
+                    
+                    
+                        
+                        <div class="liquidity_sponsor_badge_own" title="Trêvoid uses their own liquidity to process trades between the most popular cryptos.">Own liquidity</div>
+                        
+                    
+                    
+                    
+                    
+                </div>
+
+                <div class="service_type_container rate_texts_wide">
+                    <div class="type">OTC Trader</div>
+                </div>
+
+                
+                <div class="description_container rate_texts_wide ">
+                    <span class="material-symbols-outlined glyph glyph-info" aria-hidden="true"></span>
+                    <p class="description">Trêvoid does OTC swaps over SimpleX. He can provide a <b>free <abbr title='Anti-Money Laundering'>AML</abbr> score check</b>. Guaranteed never-<abbr title='Know Your Customer'>KYC</abbr> regardless.</p>
+                </div>
+                
+
+                
+                
+
+                
+                <div class="confirmations_container rate_texts_wide ">
+                    <span class="material-symbols-outlined glyph glyph-timer" aria-hidden="true"></span>
+                    <p class="confirmations">1 block confirmation(s).</p>
+                </div>
+                
+
+                <div class="payment_method_container">
+                    
+                </div>
+
+                
+
+                
+                <div class="guarantee_container rate_texts_wide">
+                    <span class="material-symbols-outlined glyph glyph-shield" aria-hidden="true"></span>
+                    <div>
+                        <div class="guarantee">OrangeFren Guarantee</div>
+                        
+                            <p>Your trade is <b>fully</b> protected against this service scamming you when using <b>our link</b>.</p>
+                        
+                    </div>
+                </div>
+                
+
+                
+
+                
+
+                
+
+            </div>
+            <div class="summary_container ">
+                
+                    <div class="summary">
+                        
+                            0.01 BTC to XMR<br>
+                             1 BTC ≈ 118.78143458 XMR
+                        
+                    </div>
+                    <div class="to_amount">
+                        
+                            <span class="promo_code_slot" data-service-name="trevoid" data-service-display="Trêvoid"></span>
+                            <div class="comparative_tag_container">
+                            
+                                <div class="comparative_tag_intermediate comparative_tag" title="This service has a rate -5.03% worse than the best result">-5.03%</div>
+                            
+                            </div>
+                            <div class="amount_currency"><div class="amount">1.18781435</div> <div>XMR</div></div>
+                        
+                    </div>
+                
+                <div class="button_narrow_picked_by_container">
+                    
+                    <a href="https://smp8.simplex.im/a#cpCZQ5js7b8u5K1-l4-ORo6160agnEuZQARmNmBjNp4" rel="sponsored" class="offer_button " target="_blank">Trade</a>
+                </div>
+
+                
+            </div>
+        </main>
+
+    </div>
+    
+    </div>
+    <div class="rate_texts_narrow">
+        
+        <div class="description_container ">
+            <span class="material-symbols-outlined glyph glyph-info" aria-hidden="true"></span>
+            <p class="description">Trêvoid does OTC swaps over SimpleX. He can provide a <b>free <abbr title='Anti-Money Laundering'>AML</abbr> score check</b>. Guaranteed never-<abbr title='Know Your Customer'>KYC</abbr> regardless.</p>
+        </div>
+        
+
+        
+        <div class="confirmations_container ">
+            <span class="material-symbols-outlined glyph glyph-timer" aria-hidden="true"></span>
+            <p class="confirmations">1 block confirmation(s).</p>
+        </div>
+        
+
+        
+
+        
+        <div class="guarantee_container">
+            <span class="material-symbols-outlined glyph glyph-shield" aria-hidden="true"></span>
+            <div>
+                <div class="guarantee">OrangeFren Guarantee</div>
+                
+                <p>Your trade is <b>fully</b> protected against this service scamming you.</p>
+                
+            </div>
+        </div>
+        
+
+        
+
+        
+
+        
+    </div>
+    <div class="reviews_container">
+        
+    </div>
+</monolith>
+<monolith class="rate " data-json="eyJmaWx0ZXJfYXR0cmlidXRlcyI6IHsibm9qcyI6IHRydWUsICJuZXZlcl9reWMiOiBmYWxzZSwgImd1YXJhbnRlZSI6IDAuMTQxMDc4NzU1LCAibGV0dGVyX29mX2d1YXJhbnRlZSI6IGZhbHNlLCAibWF0dXJlIjogdHJ1ZSwgInByZXNjcmVlbmluZyI6IGZhbHNlLCAib3duX2xpcXVpZGl0eSI6IHRydWUsICJub19yYXRlX2Rpc2NyaW1pbmF0aW9uIjogdHJ1ZSwgImludGVyY2FtYmlvIjogdHJ1ZSwgImtubV83IjogdHJ1ZSwgIm1lZXR1cCI6IHRydWUsICJwcml2YXRlX3N3YXBzIjogZmFsc2UsICJub19yZWNlbnRfc3dhcHNfcHVibGlzaCI6IHRydWUsICJmYXN0X3RyYWNrIjogWyJjcmVhdGVfZnJvbV9mbG9hdF90cmFkZSJdfX0=">
+    <div class="rate_flex">
+    <div class="logo_container">
+        <a href="http://wizardswgtu2ovor7r2esg3cxdpt7tv4nrugi32lldv53zmtonbz6sid.onion/?from=&amp;to=&amp;amount=0.01&amp;ref=820391743d" rel="sponsored" class="logo_a" target="_blank">
+            
+            
+            <img loading="lazy" class="" src="/static/logos/wizardswap.webp">
+        </a>
+        <a class="service_review_link" href="/service/wizardswap/">Service page</a>
+    </div>
+
+    <div class="properties_container">
+        <header>
+            <div class="name">
+                <a class="name_a" href="http://wizardswgtu2ovor7r2esg3cxdpt7tv4nrugi32lldv53zmtonbz6sid.onion/?from=&amp;to=&amp;amount=0.01&amp;ref=820391743d" rel="sponsored" target="_blank">WizardSwap</a>
+            </div>
+            <div class="grade_container">
+                <span class="grade_text"><a href="/user/new?service_name=wizardswap" target="_blank">Write review</a></span>
+                <span class="grade_text_narrow"><a href="/user/new?service_name=wizardswap" target="_blank">Write review</a></span>
+
+                
+                    <a href="/user/new?service_name=wizardswap" class="grade_a" target="_blank">
+                        <div class="grade green" title="Review score on OrangeFren.com">10</div>
+                    </a>
+
+                
+            </div>
+        </header>
+
+        <main>
+            <div class="properties">
+                <div class="badges_container">
+                    
+                        <div class="since_listed_badge" title="WizardSwap has been listed on OrangeFren.com since Nov 2023">Since Nov 2023</div>
+                    
+                    
+                        
+                        <div class="liquidity_sponsor_badge_own" title="WizardSwap uses their own liquidity to process trades between the most popular cryptos.">Own liquidity</div>
+                        
+                    
+                    
+                    
+                        <div class="meetup_sponsor_badge" title="WizardSwap sponsored meet-ups organized by OrangeFren.com">Meet-up sponsor</div>
+                    
+                    
+                </div>
+
+                <div class="service_type_container rate_texts_wide">
+                    <div class="type">Instant Exchange</div>
+                </div>
+
+                
+                <div class="description_container rate_texts_wide ">
+                    <span class="material-symbols-outlined glyph glyph-info" aria-hidden="true"></span>
+                    <p class="description">All swaps use a fixed rate.</p>
+                </div>
+                
+
+                
+                
+
+                
+                <div class="confirmations_container rate_texts_wide ">
+                    <span class="material-symbols-outlined glyph glyph-timer" aria-hidden="true"></span>
+                    <p class="confirmations">1 block confirmation(s).</p>
+                </div>
+                
+
+                <div class="payment_method_container">
+                    
+                </div>
+
+                
+                <div class="warning_container rate_texts_wide">
+                    <span class="material-symbols-outlined glyph glyph-warning" aria-hidden="true"></span>
+                    <div class="warning">Won't accept stolen coins, but otherwise never-KYC.</div>
+                </div>
+                
+
+                
+                <div class="guarantee_container rate_texts_wide">
+                    <span class="material-symbols-outlined glyph glyph-shield" aria-hidden="true"></span>
+                    <div>
+                        <div class="guarantee">OrangeFren Guarantee</div>
+                        
+                            <p>Your trade is <b>fully</b> protected against this service scamming you when using <b>our link</b>.</p>
+                        
+                    </div>
+                </div>
+                
+
+                
+
+                
+
+                
+
+            </div>
+            <div class="summary_container ">
+                
+                    <div class="summary">
+                        
+                            0.01 BTC to XMR<br>
+                             1 BTC ≈ 118.25666000 XMR
+                        
+                    </div>
+                    <div class="to_amount">
+                        
+                            
+                            <div class="comparative_tag_container">
+                            
+                                <div class="comparative_tag_intermediate comparative_tag" title="This service has a rate -5.45% worse than the best result">-5.45%</div>
+                            
+                            </div>
+                            <div class="amount_currency"><div class="amount">1.1825666</div> <div>XMR</div></div>
+                        
+                    </div>
+                
+                <div class="button_narrow_picked_by_container">
+                    
+                    <a href="http://wizardswgtu2ovor7r2esg3cxdpt7tv4nrugi32lldv53zmtonbz6sid.onion/?from=&amp;to=&amp;amount=0.01&amp;ref=820391743d" rel="sponsored" class="offer_button " target="_blank">Trade</a>
+                </div>
+
+                
+            </div>
+        </main>
+
+    </div>
+    
+    </div>
+    <div class="rate_texts_narrow">
+        
+        <div class="description_container ">
+            <span class="material-symbols-outlined glyph glyph-info" aria-hidden="true"></span>
+            <p class="description">All swaps use a fixed rate.</p>
+        </div>
+        
+
+        
+        <div class="confirmations_container ">
+            <span class="material-symbols-outlined glyph glyph-timer" aria-hidden="true"></span>
+            <p class="confirmations">1 block confirmation(s).</p>
+        </div>
+        
+
+        
+        <div class="warning_container">
+            <span class="material-symbols-outlined glyph glyph-warning" aria-hidden="true"></span>
+            <div class="warning">Won't accept stolen coins, but otherwise never-KYC.</div>
+        </div>
+        
+
+        
+        <div class="guarantee_container">
+            <span class="material-symbols-outlined glyph glyph-shield" aria-hidden="true"></span>
+            <div>
+                <div class="guarantee">OrangeFren Guarantee</div>
+                
+                <p>Your trade is <b>fully</b> protected against this service scamming you.</p>
+                
+            </div>
+        </div>
+        
+
+        
+
+        
+
+        
+    </div>
+    <div class="reviews_container">
+        
+    </div>
+</monolith>
+</body></html>

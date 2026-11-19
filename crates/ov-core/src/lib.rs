@@ -171,6 +171,12 @@ impl Engine {
             .context("cannot open or create persistent software master key")?;
 
         log::info!("OpenPGP master key active: {}", master.describe());
+        let xmr_dir = data_dir.join("xmr");
+        restrict_dir_permissions(&xmr_dir)?;
+        let xmr = Arc::new(
+            ov_xmr::XmrService::open(&xmr_dir.join("wallet.db"), master.clone())
+                .context("cannot open Monero light wallet database")?,
+        );
         let keyring = Arc::new(Keyring::open(store, master));
 
         // --- Embedded Arti Tor Client + Loopback SOCKS5 ----------------------
@@ -223,6 +229,7 @@ impl Engine {
             data_dir: data_dir.to_path_buf(),
             cache_dir: effective_cache_base,
             keyring,
+            xmr,
             tor,
             surface,
             config,
@@ -381,7 +388,7 @@ pub fn check_url_policy_json(url: &str, hidden_service_only: bool) -> String {
 pub fn classify_cdp_dom_json(cdp_dom_json: &str) -> String {
     let active = engine();
     match ov_cef::classify_cdp_dom_with_hints(cdp_dom_json, |kind, payload| {
-        if kind == "pgp_textarea" || payload.trim().is_empty() {
+        if !matches!(kind, "pgp_message" | "pgp_public_key") || payload.trim().is_empty() {
             return (None, None);
         }
         let hint = active
@@ -703,6 +710,10 @@ pub fn set_require_biometric(required: bool) -> bool {
                 return false;
             }
         };
+        if let Err(err) = state.xmr.rotate_master_key(new_master.clone()) {
+            log::error!("failed to re-wrap Monero spend key for biometric={required}: {err:#}");
+            return false;
+        }
         if let Err(err) = state.keyring.rotate_master_key(new_master, required) {
             log::error!("failed to re-wrap secret keys for biometric={required}: {err:#}");
             return false;
@@ -775,6 +786,167 @@ pub fn revoke_clearnet_rule_json(pattern: &str) -> String {
 /// Clear all clearnet consent rules and session denials (`nativeClearClearnetRules`).
 pub fn clear_clearnet_rules() -> bool {
     active_clearnet().clear_all()
+}
+
+// ============================================================================
+// Pure-Rust Monero Light Wallet & Tor BTC -> XMR Swap Entry Points (`OvNative`)
+// ============================================================================
+
+/// Read current wallet status, subaddresses, recent transactions, and tracked swaps (`nativeXmrStatusJson`).
+pub fn xmr_status_json() -> String {
+    let snap = match engine() {
+        Some(state) => state.xmr.status_snapshot(),
+        None => ov_xmr::XmrStatusSnapshot::uninitialized("Engine is not initialized"),
+    };
+    serde_json::to_string(&snap).unwrap_or_else(|_| {
+        r#"{"ok":false,"hasWallet":false,"walletLabel":"","primaryAddress":"","activeSubaddress":"","activeSubaddressIndex":0,"balanceAtomic":"0","unlockedBalanceAtomic":"0","balanceXmr":"0","unlockedBalanceXmr":"0","restoreHeight":0,"syncedHeight":0,"daemonHeight":0,"birthdayPending":false,"syncEndpoint":"","syncMode":"monerod_onion","lastSyncEpochSecs":0,"subaddresses":[],"recentTxs":[],"swaps":[],"error":"serialization error"}"#.to_string()
+    })
+}
+
+/// Create a new 25-word Monero light wallet (`nativeXmrCreateWalletJson`).
+pub fn xmr_create_wallet_json(label: &str) -> String {
+    let res = match engine() {
+        None => ov_xmr::XmrSeedResult::err("Engine is not initialized"),
+        Some(state) => {
+            let socks = Some(state.tor.socks_endpoint());
+            let ready = state.tor.is_ready();
+            let hso = state.hidden_service_only();
+            let lbl = label.to_string();
+            block_on_runtime(async move { state.xmr.create_wallet(&lbl, socks, ready, hso).await })
+        }
+    };
+    serde_json::to_string(&res).unwrap_or_else(|_| {
+        r#"{"ok":false,"mnemonic":"","primaryAddress":"","activeSubaddress":"","activeSubaddressIndex":0,"viewKeyHex":"","restoreHeight":0,"error":"serialization error"}"#.to_string()
+    })
+}
+
+/// Restore a 25-word Monero light wallet (`nativeXmrRestoreWalletJson`).
+pub fn xmr_restore_wallet_json(mnemonic: &str, restore_height: i64) -> String {
+    let res = match engine() {
+        None => ov_xmr::XmrSeedResult::err("Engine is not initialized"),
+        Some(state) => state.xmr.restore_wallet(mnemonic, restore_height),
+    };
+    serde_json::to_string(&res).unwrap_or_else(|_| {
+        r#"{"ok":false,"mnemonic":"","primaryAddress":"","activeSubaddress":"","activeSubaddressIndex":0,"viewKeyHex":"","restoreHeight":0,"error":"serialization error"}"#.to_string()
+    })
+}
+
+/// Export the 25-word mnemonic of the active Monero wallet (`nativeXmrExportSeedJson`).
+pub fn xmr_export_seed_json() -> String {
+    let res = match engine() {
+        None => ov_xmr::XmrSeedResult::err("Engine is not initialized"),
+        Some(state) => state.xmr.export_seed(),
+    };
+    serde_json::to_string(&res).unwrap_or_else(|_| {
+        r#"{"ok":false,"mnemonic":"","primaryAddress":"","activeSubaddress":"","activeSubaddressIndex":0,"viewKeyHex":"","restoreHeight":0,"error":"serialization error"}"#.to_string()
+    })
+}
+
+/// Delete the active Monero wallet and its SQLite records (`nativeXmrDeleteWallet`).
+pub fn xmr_delete_wallet() -> bool {
+    engine().map(|s| s.xmr.delete_wallet()).unwrap_or(false)
+}
+
+/// Mint a fresh `(0, minor)` `8...` Monero subaddress (`nativeXmrNewSubaddressJson`).
+pub fn xmr_new_subaddress_json(label: &str) -> String {
+    let res = match engine() {
+        None => ov_xmr::XmrNewSubaddressResult::err("Engine is not initialized"),
+        Some(state) => state.xmr.new_subaddress(label),
+    };
+    serde_json::to_string(&res).unwrap_or_else(|_| {
+        r#"{"ok":false,"index":0,"label":"","address":"","error":"serialization error"}"#
+            .to_string()
+    })
+}
+
+/// Configure `.onion` `monerod` or `monero-lws` sync endpoint (`nativeXmrSetDaemonEndpointJson`).
+pub fn xmr_set_daemon_endpoint_json(endpoint_url: &str, mode: &str) -> String {
+    let snap = match engine() {
+        None => ov_xmr::XmrStatusSnapshot::uninitialized("Engine is not initialized"),
+        Some(state) => {
+            let hso = state.hidden_service_only();
+            state.xmr.set_daemon_endpoint(endpoint_url, mode, hso)
+        }
+    };
+    serde_json::to_string(&snap).unwrap_or_else(|_| {
+        r#"{"ok":false,"hasWallet":false,"walletLabel":"","primaryAddress":"","activeSubaddress":"","activeSubaddressIndex":0,"balanceAtomic":"0","unlockedBalanceAtomic":"0","balanceXmr":"0","unlockedBalanceXmr":"0","restoreHeight":0,"syncedHeight":0,"daemonHeight":0,"birthdayPending":false,"syncEndpoint":"","syncMode":"monerod_onion","lastSyncEpochSecs":0,"subaddresses":[],"recentTxs":[],"swaps":[],"error":"serialization error"}"#.to_string()
+    })
+}
+
+/// Synchronize wallet outputs and key images over Trap's Arti SOCKS5h proxy (`nativeXmrSyncJson`).
+pub fn xmr_sync_json() -> String {
+    let snap = match engine() {
+        None => ov_xmr::XmrStatusSnapshot::uninitialized("Engine is not initialized"),
+        Some(state) => {
+            let socks = Some(state.tor.socks_endpoint());
+            let ready = state.tor.is_ready();
+            let hso = state.hidden_service_only();
+            block_on_runtime(async move { state.xmr.sync(socks, ready, hso).await })
+        }
+    };
+    serde_json::to_string(&snap).unwrap_or_else(|_| {
+        r#"{"ok":false,"hasWallet":false,"walletLabel":"","primaryAddress":"","activeSubaddress":"","activeSubaddressIndex":0,"balanceAtomic":"0","unlockedBalanceAtomic":"0","balanceXmr":"0","unlockedBalanceXmr":"0","restoreHeight":0,"syncedHeight":0,"daemonHeight":0,"birthdayPending":false,"syncEndpoint":"","syncMode":"monerod_onion","lastSyncEpochSecs":0,"subaddresses":[],"recentTxs":[],"swaps":[],"error":"serialization error"}"#.to_string()
+    })
+}
+
+/// Build, sign (Ring-16 CLSAG + Bulletproof+), and broadcast an outgoing XMR tx (`nativeXmrSendJson`).
+pub fn xmr_send_json(
+    destination_address: &str,
+    amount_decimal_or_atomic: &str,
+    sweep_all: bool,
+) -> String {
+    let res = match engine() {
+        None => ov_xmr::XmrSendResult::err("Engine is not initialized"),
+        Some(state) => {
+            let socks = Some(state.tor.socks_endpoint());
+            let ready = state.tor.is_ready();
+            let hso = state.hidden_service_only();
+            let dest = destination_address.to_string();
+            let amt = amount_decimal_or_atomic.to_string();
+            block_on_runtime(async move {
+                state
+                    .xmr
+                    .send(socks, ready, hso, &dest, &amt, sweep_all)
+                    .await
+            })
+        }
+    };
+    serde_json::to_string(&res).unwrap_or_else(|_| {
+        r#"{"ok":false,"txid":"","feeAtomic":"0","feeXmr":"0","amountAtomic":"0","amountXmr":"0","rawTxBytes":0,"error":"serialization error"}"#.to_string()
+    })
+}
+
+/// Fetch live zero-JS BTC -> XMR swap quotes from OrangeFren `.onion` over Tor (`nativeXmrFetchBtcSwapQuotesJson`).
+pub fn xmr_fetch_btc_swap_quotes_json(btc_amount_decimal: &str) -> String {
+    let res = match engine() {
+        None => ov_xmr::BtcSwapQuotesResult::err(btc_amount_decimal, "Engine is not initialized"),
+        Some(state) => {
+            let socks = Some(state.tor.socks_endpoint());
+            let ready = state.tor.is_ready();
+            let hso = state.hidden_service_only();
+            let amt = btc_amount_decimal.to_string();
+            block_on_runtime(async move {
+                state
+                    .xmr
+                    .fetch_btc_swap_quotes(socks, ready, hso, &amt)
+                    .await
+            })
+        }
+    };
+    serde_json::to_string(&res).unwrap_or_else(|_| {
+        r#"{"ok":false,"btcAmount":"","sourceOnion":"","fetchedAtEpochSecs":0,"quotes":[],"error":"serialization error"}"#.to_string()
+    })
+}
+
+/// Manage tracked BTC -> XMR swaps (`nativeXmrSwapsActionJson`).
+pub fn xmr_swaps_action_json(action_json: &str) -> String {
+    let res = match engine() {
+        None => ov_xmr::XmrSwapsActionResult::err(Vec::new(), "Engine is not initialized"),
+        Some(state) => state.xmr.swaps_action(action_json),
+    };
+    serde_json::to_string(&res).unwrap_or_else(|_| {
+        r#"{"ok":false,"swap":null,"swaps":[],"error":"serialization error"}"#.to_string()
+    })
 }
 
 /// Stateless OpenPGP packet fingerprint/KeyID extractor used when `classify_cdp_dom_json`
@@ -1122,6 +1294,113 @@ pub mod jni_api {
     ) -> jboolean {
         u8::from(clear_clearnet_rules())
     }
+
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeXmrCreateWalletJson(
+        mut env: JNIEnv,
+        _this: JObject,
+        label: jstring,
+    ) -> jstring {
+        let lbl = read_jstring(&mut env, label);
+        let json = xmr_create_wallet_json(&lbl);
+        into_jstring(env, &json)
+    }
+
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeXmrDeleteWallet(
+        _env: JNIEnv,
+        _this: JObject,
+    ) -> jboolean {
+        u8::from(xmr_delete_wallet())
+    }
+
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeXmrExportSeedJson(
+        env: JNIEnv,
+        _this: JObject,
+    ) -> jstring {
+        let json = xmr_export_seed_json();
+        into_jstring(env, &json)
+    }
+
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeXmrFetchBtcSwapQuotesJson(
+        mut env: JNIEnv,
+        _this: JObject,
+        btc_amount_decimal: jstring,
+    ) -> jstring {
+        let amt = read_jstring(&mut env, btc_amount_decimal);
+        let json = xmr_fetch_btc_swap_quotes_json(&amt);
+        into_jstring(env, &json)
+    }
+
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeXmrNewSubaddressJson(
+        mut env: JNIEnv,
+        _this: JObject,
+        label: jstring,
+    ) -> jstring {
+        let lbl = read_jstring(&mut env, label);
+        let json = xmr_new_subaddress_json(&lbl);
+        into_jstring(env, &json)
+    }
+
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeXmrRestoreWalletJson(
+        mut env: JNIEnv,
+        _this: JObject,
+        mnemonic: jstring,
+        restore_height: jlong,
+    ) -> jstring {
+        let seed = read_jstring(&mut env, mnemonic);
+        let json = xmr_restore_wallet_json(&seed, restore_height);
+        into_jstring(env, &json)
+    }
+
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeXmrSendJson(
+        mut env: JNIEnv,
+        _this: JObject,
+        destination_address: jstring,
+        amount_decimal_or_atomic: jstring,
+        sweep_all: jboolean,
+    ) -> jstring {
+        let dest = read_jstring(&mut env, destination_address);
+        let amt = read_jstring(&mut env, amount_decimal_or_atomic);
+        let json = xmr_send_json(&dest, &amt, sweep_all != 0);
+        into_jstring(env, &json)
+    }
+
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeXmrSetDaemonEndpointJson(
+        mut env: JNIEnv,
+        _this: JObject,
+        endpoint_url: jstring,
+        mode: jstring,
+    ) -> jstring {
+        let ep = read_jstring(&mut env, endpoint_url);
+        let m = read_jstring(&mut env, mode);
+        let json = xmr_set_daemon_endpoint_json(&ep, &m);
+        into_jstring(env, &json)
+    }
+
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeXmrStatusJson(
+        env: JNIEnv,
+        _this: JObject,
+    ) -> jstring {
+        let json = xmr_status_json();
+        into_jstring(env, &json)
+    }
+
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeXmrSwapsActionJson(
+        mut env: JNIEnv,
+        _this: JObject,
+        action_json: jstring,
+    ) -> jstring {
+        let act = read_jstring(&mut env, action_json);
+        let json = xmr_swaps_action_json(&act);
+        into_jstring(env, &json)
+    }
+
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeXmrSyncJson(
+        env: JNIEnv,
+        _this: JObject,
+    ) -> jstring {
+        let json = xmr_sync_json();
+        into_jstring(env, &json)
+    }
 }
 
 #[cfg(test)]
@@ -1311,6 +1590,95 @@ mod tests {
         assert_eq!(dom_arr.len(), 1);
         assert_eq!(dom_arr[0]["kind"], "pgp_public_key");
         assert_eq!(dom_arr[0]["fingerprintHint"], alice_fp);
+
+        // Verify BTC deposit `fingerprintHint` passes through `ov_core::classify_cdp_dom_json` intact:
+        let btc_order_doc = serde_json::json!({
+            "root": {
+                "nodeId": 1, "nodeType": 9, "nodeName": "#document",
+                "children": [{
+                    "nodeId": 2, "nodeType": 1, "nodeName": "DIV", "localName": "div",
+                    "children": [
+                        {
+                            "nodeId": 3, "nodeType": 1, "nodeName": "SPAN", "localName": "span",
+                            "attributes": ["id", "amount_a"],
+                            "children": [{ "nodeId": 4, "nodeType": 3, "nodeName": "#text", "nodeValue": "0.02" }]
+                        },
+                        {
+                            "nodeId": 5, "backendNodeId": 55, "nodeType": 1, "nodeName": "INPUT", "localName": "input",
+                            "attributes": ["type", "text", "id", "deposit_address", "readonly", "readonly", "value", "bc1qwxcndrucjwn7f4u2vrq2lx0hv543sjz57e77q2"]
+                        }
+                    ]
+                }]
+            }
+        });
+        let btc_dom_cls: serde_json::Value =
+            serde_json::from_str(&classify_cdp_dom_json(&btc_order_doc.to_string())).unwrap();
+        assert_eq!(btc_dom_cls[0]["kind"], "btc_deposit_address");
+        assert_eq!(btc_dom_cls[0]["fingerprintHint"], "0.02");
+
+        // Monero Light Wallet + Tracked Swap E2E JSON contract checks:
+        let xmr_empty: serde_json::Value = serde_json::from_str(&xmr_status_json()).unwrap();
+        assert_eq!(xmr_empty["ok"], true);
+        assert_eq!(xmr_empty["hasWallet"], false);
+
+        let xmr_created: serde_json::Value =
+            serde_json::from_str(&xmr_create_wallet_json("Core Vault")).unwrap();
+        assert_eq!(xmr_created["ok"], true);
+        let seed_phrase = xmr_created["mnemonic"].as_str().unwrap().to_string();
+        assert_eq!(seed_phrase.split_whitespace().count(), 25);
+        assert!(xmr_created["primaryAddress"]
+            .as_str()
+            .unwrap()
+            .starts_with('4'));
+        assert!(xmr_created["activeSubaddress"]
+            .as_str()
+            .unwrap()
+            .starts_with('8'));
+
+        let sub2: serde_json::Value =
+            serde_json::from_str(&xmr_new_subaddress_json("Swap #1")).unwrap();
+        assert_eq!(sub2["ok"], true);
+        assert_eq!(sub2["index"], 2);
+        assert!(sub2["address"].as_str().unwrap().starts_with('8'));
+
+        let swap_create: serde_json::Value = serde_json::from_str(&xmr_swaps_action_json(
+            r#"{"op":"create","provider":"WizardSwap","btcAmount":"0.01","quotedXmr":"1.1825666","launchUrl":"http://wizardswgtu2ovor7r2esg3cxdpt7tv4nrugi32lldv53zmtonbz6sid.onion/?from=BTC&to=XMR&amount=0.01"}"#,
+        ))
+        .unwrap();
+        assert_eq!(swap_create["ok"], true);
+        assert_eq!(swap_create["swap"]["subaddressIndex"], 3);
+        assert_eq!(swap_create["swap"]["status"], "awaiting_form");
+        let swap_id = swap_create["swap"]["swapId"].as_str().unwrap().to_string();
+
+        let swap_dismiss: serde_json::Value = serde_json::from_str(&xmr_swaps_action_json(
+            &format!(r#"{{"op":"dismiss","swapId":"{swap_id}"}}"#),
+        ))
+        .unwrap();
+        assert_eq!(swap_dismiss["ok"], true);
+        assert!(swap_dismiss["swaps"].as_array().unwrap().is_empty());
+
+        let exported_seed: serde_json::Value =
+            serde_json::from_str(&xmr_export_seed_json()).unwrap();
+        assert_eq!(exported_seed["ok"], true);
+        assert_eq!(exported_seed["mnemonic"], seed_phrase);
+
+        let restored_seed: serde_json::Value =
+            serde_json::from_str(&xmr_restore_wallet_json(&seed_phrase, 3_809_600)).unwrap();
+        assert_eq!(restored_seed["ok"], true);
+        assert_eq!(restored_seed["restoreHeight"], 3_809_600);
+        assert_eq!(
+            restored_seed["primaryAddress"],
+            xmr_created["primaryAddress"]
+        );
+
+        // Fail-closed Tor check when Arti has not bootstrapped in local offline unit test:
+        let sync_offline: serde_json::Value = serde_json::from_str(&xmr_sync_json()).unwrap();
+        assert_eq!(sync_offline["ok"], false);
+        assert!(sync_offline["error"].as_str().unwrap().contains("Tor"));
+
+        assert!(xmr_delete_wallet());
+        let xmr_after_del: serde_json::Value = serde_json::from_str(&xmr_status_json()).unwrap();
+        assert_eq!(xmr_after_del["hasWallet"], false);
 
         // Biometric toggle, export, delete, reset isolation, and shutdown:
         assert!(!get_require_biometric());

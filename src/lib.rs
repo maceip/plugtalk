@@ -1,6 +1,6 @@
 //! Trap: shared Rust library (`libonion_vault.so`) exporting the `OvNative` JNI ABI.
 //!
-//! All 24 `Java_dev_onionvault_OvNative_*` entry points live here and delegate
+//! All 35 `Java_dev_onionvault_OvNative_*` entry points live here and delegate
 //! to [`ov_core::jni_api`].  Zero `libcef.so` symbols are linked.
 
 pub use ov_core;
@@ -273,6 +273,129 @@ mod jni_entry_points {
     ) -> jboolean {
         ov_core::jni_api::Java_dev_onionvault_OvNative_nativeClearClearnetRules(env, this)
     }
+
+    #[no_mangle]
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeXmrCreateWalletJson(
+        env: JNIEnv,
+        this: JObject,
+        label: jstring,
+    ) -> jstring {
+        ov_core::jni_api::Java_dev_onionvault_OvNative_nativeXmrCreateWalletJson(env, this, label)
+    }
+
+    #[no_mangle]
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeXmrDeleteWallet(
+        env: JNIEnv,
+        this: JObject,
+    ) -> jboolean {
+        ov_core::jni_api::Java_dev_onionvault_OvNative_nativeXmrDeleteWallet(env, this)
+    }
+
+    #[no_mangle]
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeXmrExportSeedJson(
+        env: JNIEnv,
+        this: JObject,
+    ) -> jstring {
+        ov_core::jni_api::Java_dev_onionvault_OvNative_nativeXmrExportSeedJson(env, this)
+    }
+
+    #[no_mangle]
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeXmrFetchBtcSwapQuotesJson(
+        env: JNIEnv,
+        this: JObject,
+        btc_amount_decimal: jstring,
+    ) -> jstring {
+        ov_core::jni_api::Java_dev_onionvault_OvNative_nativeXmrFetchBtcSwapQuotesJson(
+            env,
+            this,
+            btc_amount_decimal,
+        )
+    }
+
+    #[no_mangle]
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeXmrNewSubaddressJson(
+        env: JNIEnv,
+        this: JObject,
+        label: jstring,
+    ) -> jstring {
+        ov_core::jni_api::Java_dev_onionvault_OvNative_nativeXmrNewSubaddressJson(env, this, label)
+    }
+
+    #[no_mangle]
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeXmrRestoreWalletJson(
+        env: JNIEnv,
+        this: JObject,
+        mnemonic: jstring,
+        restore_height: jlong,
+    ) -> jstring {
+        ov_core::jni_api::Java_dev_onionvault_OvNative_nativeXmrRestoreWalletJson(
+            env,
+            this,
+            mnemonic,
+            restore_height,
+        )
+    }
+
+    #[no_mangle]
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeXmrSendJson(
+        env: JNIEnv,
+        this: JObject,
+        destination_address: jstring,
+        amount_decimal_or_atomic: jstring,
+        sweep_all: jboolean,
+    ) -> jstring {
+        ov_core::jni_api::Java_dev_onionvault_OvNative_nativeXmrSendJson(
+            env,
+            this,
+            destination_address,
+            amount_decimal_or_atomic,
+            sweep_all,
+        )
+    }
+
+    #[no_mangle]
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeXmrSetDaemonEndpointJson(
+        env: JNIEnv,
+        this: JObject,
+        endpoint_url: jstring,
+        mode: jstring,
+    ) -> jstring {
+        ov_core::jni_api::Java_dev_onionvault_OvNative_nativeXmrSetDaemonEndpointJson(
+            env,
+            this,
+            endpoint_url,
+            mode,
+        )
+    }
+
+    #[no_mangle]
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeXmrStatusJson(
+        env: JNIEnv,
+        this: JObject,
+    ) -> jstring {
+        ov_core::jni_api::Java_dev_onionvault_OvNative_nativeXmrStatusJson(env, this)
+    }
+
+    #[no_mangle]
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeXmrSwapsActionJson(
+        env: JNIEnv,
+        this: JObject,
+        action_json: jstring,
+    ) -> jstring {
+        ov_core::jni_api::Java_dev_onionvault_OvNative_nativeXmrSwapsActionJson(
+            env,
+            this,
+            action_json,
+        )
+    }
+
+    #[no_mangle]
+    pub extern "system" fn Java_dev_onionvault_OvNative_nativeXmrSyncJson(
+        env: JNIEnv,
+        this: JObject,
+    ) -> jstring {
+        ov_core::jni_api::Java_dev_onionvault_OvNative_nativeXmrSyncJson(env, this)
+    }
 }
 
 #[cfg(test)]
@@ -283,7 +406,7 @@ mod tests {
     }
 
     #[test]
-    fn jni_symbol_table_matches_exact_24_exports_in_both_files() {
+    fn jni_symbol_table_matches_exact_35_exports_in_both_files() {
         let root_src = include_str!("lib.rs");
         let core_src = include_str!("../crates/ov-core/src/lib.rs");
 
@@ -312,7 +435,19 @@ mod tests {
             "Java_dev_onionvault_OvNative_nativeShutdown",
             "Java_dev_onionvault_OvNative_nativeSocksProxy",
             "Java_dev_onionvault_OvNative_nativeTorStatusJson",
+            "Java_dev_onionvault_OvNative_nativeXmrCreateWalletJson",
+            "Java_dev_onionvault_OvNative_nativeXmrDeleteWallet",
+            "Java_dev_onionvault_OvNative_nativeXmrExportSeedJson",
+            "Java_dev_onionvault_OvNative_nativeXmrFetchBtcSwapQuotesJson",
+            "Java_dev_onionvault_OvNative_nativeXmrNewSubaddressJson",
+            "Java_dev_onionvault_OvNative_nativeXmrRestoreWalletJson",
+            "Java_dev_onionvault_OvNative_nativeXmrSendJson",
+            "Java_dev_onionvault_OvNative_nativeXmrSetDaemonEndpointJson",
+            "Java_dev_onionvault_OvNative_nativeXmrStatusJson",
+            "Java_dev_onionvault_OvNative_nativeXmrSwapsActionJson",
+            "Java_dev_onionvault_OvNative_nativeXmrSyncJson",
         ];
+        assert_eq!(expected.len(), 35);
 
         for (label, content) in [("src/lib.rs", root_src), ("ov-core/src/lib.rs", core_src)] {
             let mut found: Vec<&str> = content

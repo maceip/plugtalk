@@ -17,6 +17,7 @@
 pub mod bridge_types;
 pub mod cdp;
 pub mod config;
+pub mod crypto_addr;
 pub mod dom_model;
 pub mod frame_sink;
 pub mod ipc;
@@ -32,6 +33,7 @@ pub use config::{
     is_allowed_url, is_svg_url, is_valid_v3_onion_host, normalize_navigation_url, OvConfig,
     UrlPolicyDecision, V3_ONION_LABEL_LEN,
 };
+pub use crypto_addr::{parse_bitcoin_uri, validate_btc_mainnet_address, validate_monero_uri_str};
 pub use dom_model::{
     analyze_document, analyze_html, classify, css_escape_ident, decode_html_entities,
     document_title, extract_armored_block, merge_inline_style, parse_html, query_selector, scan,

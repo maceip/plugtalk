@@ -8,6 +8,8 @@ description = "Pure-Rust URL leak policy, HTML/CDP DOM PGP classifier, and snaps
 
 [dependencies]
 ov-tor = { workspace = true }
+monero-address = { workspace = true }
+sha2 = { workspace = true }
 log = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
