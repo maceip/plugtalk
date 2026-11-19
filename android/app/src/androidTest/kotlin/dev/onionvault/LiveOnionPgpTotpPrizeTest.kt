@@ -2,6 +2,7 @@ package dev.onionvault
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -132,6 +133,7 @@ class LiveOnionPgpTotpPrizeTest {
         ActivityScenario.launch<MainActivity>(launchIntent).use { scenario ->
             val activityRef = AtomicReference<MainActivity>()
             scenario.onActivity { act ->
+                act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
                 act.setShowWhenLocked(true)
                 act.setTurnScreenOn(true)
                 act.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)

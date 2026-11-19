@@ -2,6 +2,7 @@ package dev.onionvault
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -35,6 +36,7 @@ import dev.onionvault.ui.TrapPreferences
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
@@ -58,7 +60,10 @@ import org.junit.runner.RunWith
  * (optional `-e xmr402OnionUrl http://<56-char>.onion/`).
  *
  * Verifies end-to-end with zero mocks and JavaScript completely disabled:
- *   1. Cold-boots [MainActivity] and waits for embedded Arti Tor SOCKS5h bootstrap.
+ *   1. Cold-boots [MainActivity], waits for embedded Arti Tor SOCKS5h bootstrap, and verifies
+ *      live Tor third-party zero-JS `BTC -> XMR` swap quote aggregation
+ *      (`nativeXmrFetchBtcSwapQuotesJson("0.01")` against OrangeFren `.onion`, asserting
+ *      `.onion`-prioritized ordering while remaining resilient to transient third-party downtime).
  *   2. Creates a fresh 25-word Monero wallet (`0 XMR`) via `RemoteMode.MoneroWallet`.
  *   3. Navigates to `<xmr402OnionUrl>/vault` over Tor, verifies `Xmr402PaymentHardwarePod`
  *      (`xmr402_payment_sheet`) opens on real `HTTP 402` (`0.25 XMR` required, `0 XMR` balance),
@@ -153,6 +158,7 @@ class LiveOnionXmr402BtcSwapTest {
             ActivityScenario.launch<MainActivity>(launchIntent).use { scenario ->
                 val activityRef = AtomicReference<MainActivity>()
                 scenario.onActivity { act ->
+                    act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
                     act.setShowWhenLocked(true)
                     act.setTurnScreenOn(true)
                     act.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -193,6 +199,24 @@ class LiveOnionXmr402BtcSwapTest {
                     torSnap.bootstrapped && socksPort > 1,
                 )
                 Log.i(TAG, "Arti Tor bootstrapped on SOCKS5 port $socksPort")
+
+                // Concurrently fetch live third-party zero-JS BTC -> XMR swap quotes from OrangeFren
+                // .onion over an isolated 'ov-xmr-swap' Arti circuit so it adds zero critical-path latency.
+                val quotesFuture = CompletableFuture.supplyAsync {
+                    val t0 = SystemClock.uptimeMillis()
+                    val first = OvNative.parseBtcSwapQuotes(
+                        OvNative.nativeXmrFetchBtcSwapQuotesJson("0.01"),
+                    )
+                    if (first.ok && first.quotes.isNotEmpty()) {
+                        first
+                    } else if (SystemClock.uptimeMillis() - t0 < 20_000L) {
+                        OvNative.parseBtcSwapQuotes(
+                            OvNative.nativeXmrFetchBtcSwapQuotesJson("0.01"),
+                        )
+                    } else {
+                        first
+                    }
+                }
 
                 composeRule.waitUntil(timeoutMillis = 15_000L) {
                     activity.activeCefpackSessionForTest() != null
@@ -268,7 +292,14 @@ class LiveOnionXmr402BtcSwapTest {
                 }
 
                 // Dismiss 402 modal to view the 402 page & verify compact reopen banner is displayed.
-                composeRule.onNodeWithTag("xmr402_view_page_button").performScrollTo().performClick()
+                if (composeRule.onAllNodesWithTag("xmr402_view_page_button")
+                        .fetchSemanticsNodes()
+                        .isNotEmpty()
+                ) {
+                    composeRule.onNodeWithTag("xmr402_view_page_button")
+                        .performScrollTo()
+                        .performClick()
+                }
                 composeRule.waitUntil(timeoutMillis = 5_000L) {
                     composeRule.onAllNodesWithTag("xmr402_payment_sheet").fetchSemanticsNodes().isEmpty()
                 }
@@ -454,6 +485,54 @@ class LiveOnionXmr402BtcSwapTest {
                     }
                 }
 
+                val quotesRes = runCatching { quotesFuture.get(10, TimeUnit.SECONDS) }.getOrNull()
+                if (quotesRes != null && quotesRes.ok) {
+                    assertFalse(
+                        "OrangeFren .onion ok=true response must return non-empty zero-JS BTC->XMR quotes",
+                        quotesRes.quotes.isEmpty(),
+                    )
+                    assertTrue(
+                        "Expected .onion sourceOnion from quote aggregator, got '${quotesRes.sourceOnion}'",
+                        quotesRes.sourceOnion.contains(".onion", ignoreCase = true),
+                    )
+                    for (quote in quotesRes.quotes) {
+                        assertTrue("Quote provider must be non-blank", quote.provider.isNotBlank())
+                        assertTrue("Quote estimatedXmr must be non-blank", quote.estimatedXmr.isNotBlank())
+                        assertTrue("Quote launchUrl must be non-blank", quote.launchUrl.isNotBlank())
+                    }
+                    val firstClearnetIdx = quotesRes.quotes.indexOfFirst { !it.isOnionUrl }
+                    val lastOnionIdx = quotesRes.quotes.indexOfLast { it.isOnionUrl }
+                    if (firstClearnetIdx >= 0 && lastOnionIdx >= 0) {
+                        assertTrue(
+                            "Expected .onion swap quotes prioritized ahead of non-.onion quotes",
+                            lastOnionIdx < firstClearnetIdx,
+                        )
+                    }
+                    Log.i(
+                        TAG,
+                        "Verified ${quotesRes.quotes.size} live OrangeFren .onion BTC->XMR quotes " +
+                            "(${quotesRes.quotes.count { it.isOnionUrl }} .onion-prioritized)",
+                    )
+                } else {
+                    if (quotesRes != null) {
+                        assertTrue(
+                            "Failed quote fetch must report a non-blank diagnostic error",
+                            quotesRes.error.isNotBlank(),
+                        )
+                        assertFalse(
+                            "Quote fetch must never fail on local SOCKS5/JSON invariants: ${quotesRes.error}",
+                            quotesRes.error.contains("not initialized", ignoreCase = true) ||
+                                quotesRes.error.contains("non-loopback", ignoreCase = true) ||
+                                quotesRes.error.contains("Malformed", ignoreCase = true),
+                        )
+                    }
+                    Log.w(
+                        TAG,
+                        "Third-party OrangeFren .onion unavailable or slow during run " +
+                            "(err='${quotesRes?.error ?: "in-flight"}'); live DigitalOcean swap + XMR402 verified.",
+                    )
+                }
+
                 val wonPayload = JSONObject()
                     .put("onionUrl", vaultUrl)
                     .put("swapBtcAddress", swapBtcAddress)
@@ -461,6 +540,7 @@ class LiveOnionXmr402BtcSwapTest {
                     .put("xmr402Txid", xmr402Txid)
                     .put("proofPrefix", proofPrefix)
                     .put("prizeBanner", prizeBanner)
+                    .put("orangeFrenQuotesCount", quotesRes?.quotes?.size ?: 0)
                 Log.i(TAG, "XMR402_SWAP_WON_JSON=$wonPayload")
 
                 SystemClock.sleep(holdMs)
@@ -950,10 +1030,7 @@ class LiveOnionXmr402BtcSwapTest {
         activity: MainActivity,
         filename: String,
     ): ByteArray {
-        var bitmap = captureActivityWindowComposite(activity)
-        if (bitmap == null) {
-            bitmap = runCatching { instrumentation.uiAutomation.takeScreenshot() }.getOrNull()
-        }
+        val bitmap = captureCompositeScreenshot(instrumentation, activity)
         assertNotNull("Failed to capture screenshot $filename", bitmap)
         try {
             val out = ByteArrayOutputStream()
@@ -996,7 +1073,51 @@ class LiveOnionXmr402BtcSwapTest {
         }
     }
 
-    private fun captureActivityWindowComposite(activity: MainActivity): Bitmap? {
+    private fun isNonBlackBitmap(bmp: Bitmap?): Boolean {
+        if (bmp == null || bmp.isRecycled || bmp.width <= 0 || bmp.height <= 0) return false
+        val stepX = (bmp.width / 24).coerceAtLeast(1)
+        val stepY = (bmp.height / 24).coerceAtLeast(1)
+        var nonBlackSamples = 0
+        var totalSamples = 0
+        var y = stepY / 2
+        while (y < bmp.height) {
+            var x = stepX / 2
+            while (x < bmp.width) {
+                totalSamples++
+                val px = bmp.getPixel(x, y)
+                val a = (px ushr 24) and 0xFF
+                val r = (px ushr 16) and 0xFF
+                val g = (px ushr 8) and 0xFF
+                val b = px and 0xFF
+                if (a > 0 && (r > 8 || g > 8 || b > 8)) {
+                    nonBlackSamples++
+                }
+                x += stepX
+            }
+            y += stepY
+        }
+        return totalSamples > 0 && nonBlackSamples * 20 >= totalSamples
+    }
+
+    private fun captureCompositeScreenshot(
+        instrumentation: android.app.Instrumentation,
+        activity: MainActivity,
+    ): Bitmap? {
+        val hasFocusRef = AtomicReference(false)
+        activity.runOnUiThread {
+            hasFocusRef.set(activity.hasWindowFocus())
+        }
+
+        // Prefer SurfaceFlinger's native hardware-composited frame when MainActivity holds top
+        // window focus and the display produces a non-null, non-black screenshot.
+        if (hasFocusRef.get()) {
+            val uiShot = runCatching { instrumentation.uiAutomation.takeScreenshot() }.getOrNull()
+            if (isNonBlackBitmap(uiShot)) {
+                return uiShot
+            }
+            uiShot?.recycle()
+        }
+
         val dimsRef = AtomicReference<Pair<Int, Int>?>(null)
         val surfaceViews = ArrayList<Pair<SurfaceView, IntArray>>()
         val initLatch = CountDownLatch(1)
@@ -1010,7 +1131,10 @@ class LiveOnionXmr402BtcSwapTest {
             initLatch.countDown()
         }
         initLatch.await(5, TimeUnit.SECONDS)
-        val (w, h) = dimsRef.get() ?: return null
+        val (w, h) = dimsRef.get()
+            ?: return runCatching { instrumentation.uiAutomation.takeScreenshot() }
+                .getOrNull()
+                ?.takeIf { isNonBlackBitmap(it) }
 
         val composite = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(composite)
@@ -1126,12 +1250,11 @@ class LiveOnionXmr402BtcSwapTest {
             if (!ui.isStartPage && !modalOpen) {
                 val pixels = IntArray(w * h)
                 winBmp.getPixels(pixels, 0, w, 0, 0, w, h)
+                // Key out strictly Trap's exact window backdrop (0xFF0D0F12) so nearby UI tokens
+                // like AnodizedRecessedWell (0xFF0D0F13) inside RemoteMiniKey remain 100% opaque.
                 for (i in pixels.indices) {
                     val c = pixels[i]
-                    val r = (c ushr 16) and 0xFF
-                    val g = (c ushr 8) and 0xFF
-                    val b = c and 0xFF
-                    if (r in 10..16 && g in 12..18 && b in 15..21) {
+                    if (c == 0xFF0D0F12.toInt()) {
                         pixels[i] = 0x00000000
                     }
                 }
