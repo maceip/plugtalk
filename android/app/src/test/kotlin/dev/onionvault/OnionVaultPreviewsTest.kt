@@ -107,4 +107,17 @@ class OnionVaultPreviewsTest {
         compose.setContent { ClearnetConsentPreview() }
         compose.onAllNodes(isRoot())[0].assertExists()
     }
+
+    @Test
+    fun the_crt_onion_directory_preview_renders() {
+        compose.setContent { dev.onionvault.ui.previews.CrtOnionDirectoryPreview() }
+        compose.onAllNodes(isRoot())[0].assertExists()
+        compose.onNodeWithTag("trusted_onion_directory").assertIsDisplayed()
+    }
+
+    @Test
+    fun the_monero_wallet_preview_renders() {
+        compose.setContent { dev.onionvault.ui.previews.MoneroWalletHomescreenPreview() }
+        compose.onAllNodes(isRoot())[0].assertExists()
+    }
 }

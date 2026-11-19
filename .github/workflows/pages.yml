@@ -1,0 +1,103 @@
+# Trap — Synced Android Compose @Preview Homescreen Documentation (GitHub Pages)
+#
+# Renders the live Jetpack Compose `@Preview` homescreen (`BrowserChromePreview`)
+# and companion state `@Preview` composables via Robolectric Native Graphics (Skia),
+# extracts exact Compose Semantics (`getUnclippedBoundsInRoot()`) component coordinates
+# into `site/generated/homescreen-sync.json`, and deploys `site/` to GitHub Pages.
+
+name: Homescreen Pages
+
+on:
+  push:
+    branches:
+      - "main"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    name: Render Compose @Preview homescreen & deploy GitHub Pages
+    if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[skip ci]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Install Android SDK 37 & 35 for Robolectric Native Graphics
+        run: |
+          set -euo pipefail
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          sdkmanager="$(find "${sdk_root}/cmdline-tools" -type f -name sdkmanager 2>/dev/null | sort | tail -n 1)"
+          if [ -z "${sdkmanager}" ]; then
+            echo "::error::sdkmanager was not found in ${sdk_root}/cmdline-tools"
+            exit 1
+          fi
+          dirname "${sdkmanager}" >> "$GITHUB_PATH"
+          set +o pipefail
+          yes | "${sdkmanager}" --licenses > /dev/null
+          set -o pipefail
+          "${sdkmanager}" "platform-tools" "platforms;android-37.0" "platforms;android-35" "build-tools;37.0.0" "build-tools;36.0.0"
+
+      - name: Sync Compose @Preview homescreen & Semantics coordinates
+        run: ./scripts/sync-homescreen-pages.sh site/generated
+
+      - name: Verify single-page site assets and manifest
+        run: |
+          set -euo pipefail
+          for required in \
+            site/index.html \
+            site/styles.css \
+            site/app.js \
+            site/.nojekyll \
+            site/generated/homescreen-sync.json \
+            site/generated/assets/homescreen-preview.webp \
+            site/generated/assets/state-crt-directory.webp \
+            site/generated/assets/state-side-remote.webp \
+            site/generated/assets/state-tor-circuit.webp \
+            site/generated/assets/state-pgp-keyring.webp \
+            site/generated/assets/state-monero-wallet.webp; do
+            test -s "${required}" || {
+              echo "::error::Missing or empty Pages asset: ${required}"
+              exit 1
+            }
+          done
+          python3 -c '
+          import json, pathlib
+          data = json.loads(pathlib.Path("site/generated/homescreen-sync.json").read_text())
+          assert len(data["components"]) == 7, f"expected 7 components, got {len(data[\"components\"])}"
+          assert len(data["states"]) == 6, f"expected 6 states, got {len(data[\"states\"])}"
+          print("Verified homescreen-sync.json:", data["appVersion"], data["viewport"])
+          '
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -95,6 +95,7 @@ fun MetaToolsBrowserShell(
     onSetPodsRetracted: (Boolean) -> Unit = {},
     clipboardTextOverride: String? = null,
     imeVisibleOverride: Boolean? = null,
+    initialCrtEditing: Boolean = false,
     initialRemoteExpanded: Boolean = false,
     initialRemoteMode: RemoteMode = RemoteMode.Menu,
     openTorCircuitTrigger: Int = 0,
@@ -199,7 +200,7 @@ fun MetaToolsBrowserShell(
     val focusManager = LocalFocusManager.current
     val chromeHiddenForPip = state.isInPipMode || state.isPipChromeHidden
 
-    var crtEditing by remember { mutableStateOf(false) }
+    var crtEditing by remember(initialCrtEditing) { mutableStateOf(initialCrtEditing) }
     var remoteExpanded by remember(initialRemoteExpanded) { mutableStateOf(initialRemoteExpanded) }
     var remoteMode by remember(initialRemoteMode) { mutableStateOf(initialRemoteMode) }
     var tabsOpen by remember(showTabsModal) { mutableStateOf(showTabsModal) }

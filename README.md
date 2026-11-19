@@ -5,9 +5,12 @@
 # Trap
 
 [![CI & Release](https://github.com/maceip/trap/actions/workflows/ci-release.yml/badge.svg)](https://github.com/maceip/trap/actions/workflows/ci-release.yml)
+[![Homescreen Pages](https://github.com/maceip/trap/actions/workflows/pages.yml/badge.svg)](https://maceip.github.io/trap/)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](LICENSE-APACHE)
 
 **Trap** is an Android Tor & OpenPGP browser (`dev.onionvault`, `minSdk 29`, `targetSdk 37`) that routes every `.onion` and user-approved clearnet connection exclusively through an embedded **Arti** Tor client, gates clearnet origins behind a **3-day globbing Clearnet Consent Interstitial** (`*.tor.taxi`), runs a first-party source-built **Cefpack** Chromium `156.0.8078.96` (`//content/public/android`) runtime from [`maceip/cefpack`](https://github.com/maceip/cefpack) with **JavaScript completely disabled**, and performs **OpenPGP** key management, encryption, signing, and decryption natively in Rust (**Sequoia OpenPGP `1.22`** + **Android Keystore AES-256-GCM**).
+
+- **Interactive Android Homescreen `@Preview` Specification:** [`https://maceip.github.io/trap/`](https://maceip.github.io/trap/) — Single-page GitHub Pages reference synced directly from live Jetpack Compose `@Preview` Skia frames (`OnionVaultPreviews.kt`) and live Compose Semantics root bounds (`HomescreenPagesSyncTest.kt`).
 
 ## Downloads & Attestations
 
@@ -52,10 +55,12 @@ trap/
 │   └── ov-core/                Unified JNI/JSON coordinator bridging Tor, clearnet rules, OpenPGP, and CDP DOM inspection
 ├── docs/
 │   └── BROWSER-RUNTIME-BUILD-PLAN.md  Source-built Chromium Android (`maceip/cefpack` `//content/public/android`) architecture
+├── site/                       GitHub Pages interactive Android homescreen `@Preview` & high-contrast callout site (`https://maceip.github.io/trap/`)
 ├── design/icons/               Reproducible icon & Neon Graffiti sprite pipelines (`trap_icon.py`, `neon/slice_neon.py`)
 ├── licenses/                   Bundled LGPL-3.0, GPL-3.0, and LGPL-2.1 texts copied into `assets/licenses/` by Gradle (`copyLegalNotices`)
 ├── scripts/
 │   ├── bump-version.py         Monotonic `VERSION`, `Cargo.toml`, `Cargo.lock`, and Gradle `versionCode` bumper
+│   ├── sync-homescreen-pages.sh  Renders live Compose `@Preview` Skia `.webp` frames & Semantics bounds into `site/generated/`
 │   ├── audit-apk.sh            Pre-release APK ARMv9 `memtagMode="off"`, 16KB ELF `PT_LOAD`, DEX, `.pak` & v2 cert gate
 │   ├── generate-sbom.py        Real Cargo + Cefpack + Gradle + APK binary CycloneDX 1.5 & SPDX 2.3 SBOM generator
 │   ├── emulator-gate.sh        Automated Android emulator launch, Cefpack + `ov_tor` SOCKS5 & crash/linkage gate

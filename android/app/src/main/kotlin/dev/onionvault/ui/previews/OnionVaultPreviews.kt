@@ -490,3 +490,39 @@ fun ClearnetConsentPreview() {
         ),
     )
 }
+
+@Preview(name = "15. CRT Address Editor & Trusted .onion Directory", heightDp = 760)
+@Composable
+fun CrtOnionDirectoryPreview() {
+    BrowserScreen(
+        state = chromeState(TrapThemeFamily.SecureDrop, TrapThemeMode.Dark),
+        showCrtDirectory = true,
+    )
+}
+
+@Preview(name = "16. Monero Light Wallet & Tor XMR402 Pod", heightDp = 760)
+@Composable
+fun MoneroWalletHomescreenPreview() {
+    BrowserScreen(
+        state = chromeState(TrapThemeFamily.SecureDrop, TrapThemeMode.Dark).copy(
+            xmr = dev.onionvault.ui.MoneroUiState(
+                status = OvNative.XmrStatusSnapshot(
+                    ok = true,
+                    hasWallet = true,
+                    walletLabel = "Trap Ephemeral Vault",
+                    primaryAddress = "44Affq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A",
+                    activeSubaddress = "888tNkZrPN6JsEgekjMnABU4TBzc2Dt29EPAvkRxbANsAnjyPbb3iQ1YBRk1UXcdRsiKc9dhwMVgN5S9cQUiyoogDavup3H",
+                    activeSubaddressIndex = 1,
+                    balanceXmr = "1.4820",
+                    unlockedBalanceXmr = "1.4820",
+                    restoreHeight = 3_812_000L,
+                    syncedHeight = 3_845_910L,
+                    daemonHeight = 3_845_910L,
+                    syncEndpoint = "http://monerod7x2...onion:18089",
+                    syncMode = "monerod_onion",
+                ),
+            ),
+        ),
+        showMoneroWallet = true,
+    )
+}

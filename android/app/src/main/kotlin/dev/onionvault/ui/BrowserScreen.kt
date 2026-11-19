@@ -164,6 +164,7 @@ fun BrowserScreen(
     showMoneroWallet: Boolean = false,
     showBtcXmrSwap: Boolean = false,
     showXmr402Modal: Boolean = false,
+    showCrtDirectory: Boolean = false,
 ) {
     TrapTheme(
         family = state.themeFamily,
@@ -266,6 +267,7 @@ fun BrowserScreen(
             showMoneroWallet = showMoneroWallet,
             showBtcXmrSwap = showBtcXmrSwap,
             showXmr402Modal = showXmr402Modal,
+            showCrtDirectory = showCrtDirectory,
         )
     }
 }
@@ -374,6 +376,7 @@ private fun BrowserScreenContent(
     showMoneroWallet: Boolean,
     showBtcXmrSwap: Boolean,
     showXmr402Modal: Boolean,
+    showCrtDirectory: Boolean,
 ) {
     val colors = TrapTheme.colors
     val scale = remember { Animatable(1f - previewProgress * 0.12f) }
@@ -416,6 +419,7 @@ private fun BrowserScreenContent(
             state = state,
             podsRetracted = state.podsRetracted,
             onSetPodsRetracted = onSetPodsRetracted,
+            initialCrtEditing = showCrtDirectory,
             initialRemoteExpanded = showMenu || showSecurity,
             initialRemoteMode = if (showSecurity) RemoteMode.TorCircuit else RemoteMode.Menu,
             openTorCircuitTrigger = openTorCircuitCount,

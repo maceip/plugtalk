@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Trap Android Homescreen — Live Jetpack Compose @Preview Component Specification</title>
+  <meta
+    name="description"
+    content="Interactive, CI-synced Jetpack Compose @Preview reference of the Trap Android zero-JS Tor browser homescreen with high-contrast hardware component callouts, gesture maps, and Compose Semantics geometry."
+  />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700;800&family=Space+Grotesk:wght@600;700&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand-lockup">
+        <span class="brand-stencil">TRAP</span>
+        <span class="brand-meta">ANDROID HOMESCREEN // COMPOSE @PREVIEW SPEC</span>
+      </div>
+
+      <div class="sync-telemetry" aria-label="Compose Preview synchronization telemetry">
+        <span class="telemetry-chip telemetry-chip--verified">
+          <span class="telemetry-dot" aria-hidden="true"></span>
+          <span>@Preview BrowserChromePreview()</span>
+        </span>
+        <span class="telemetry-chip" id="sync-version-chip">v0.1.43</span>
+        <span class="telemetry-chip" id="sync-viewport-chip">412×915dp</span>
+        <a
+          class="topbar-link"
+          id="repo-header-link"
+          href="https://github.com/maceip/trap"
+          target="_blank"
+          rel="noopener noreferrer"
+        >GitHub Repo ↗</a>
+      </div>
+    </div>
+  </header>
+
+  <main class="page-shell">
+    <section class="hero-header" aria-labelledby="page-title">
+      <h1 class="hero-title" id="page-title">
+        Trap Android Homescreen — Synced Compose @Preview &amp; Component Callouts
+      </h1>
+      <p class="hero-lead">
+        Rendered directly from the live Kotlin Jetpack Compose
+        <code>@Preview BrowserChromePreview()</code> tree via Robolectric Native Skia
+        (<code>HomescreenPagesSyncTest.kt</code>) on every push to <code>main</code>.
+        Every leader line and wireframe box below is driven by live Compose Semantics
+        <code>getUnclippedBoundsInRoot()</code> coordinates — hover or click any callout
+        (or press keys <code>1</code>–<code>7</code>, <code>B</code> for wireframes) to inspect
+        each hardware pod.
+      </p>
+    </section>
+
+    <div class="controls-bar" role="region" aria-label="Preview state and overlay controls">
+      <div class="state-tabs" id="state-tabs" role="tablist" aria-label="Compose Preview states"></div>
+
+      <div class="overlay-actions">
+        <button
+          type="button"
+          class="utility-btn"
+          id="toggle-bounds-btn"
+          aria-pressed="false"
+        >Show All Bounds (B)</button>
+        <button
+          type="button"
+          class="utility-btn"
+          id="reset-selection-btn"
+        >Reset View (Esc)</button>
+      </div>
+    </div>
+
+    <section class="diagram-stage" id="diagram-stage" aria-label="Annotated Android homescreen diagram">
+      <svg class="leader-svg" id="leader-svg" aria-hidden="true"></svg>
+
+      <div class="callout-column" id="callouts-left" aria-label="Left component callouts 01 to 04"></div>
+
+      <div class="phone-column" id="phone-stage">
+        <div class="phone-chassis">
+          <div class="phone-viewport" id="phone-viewport">
+            <img
+              class="phone-image"
+              id="preview-image"
+              src="./generated/assets/homescreen-preview.webp"
+              alt="Synced Jetpack Compose Preview of the Trap Android homescreen"
+              width="824"
+              height="1830"
+            />
+            <div class="viewport-overlay" id="viewport-overlay"></div>
+          </div>
+        </div>
+        <div class="phone-caption" aria-live="polite">
+          <strong id="phone-caption-title">@Preview BrowserChromePreview()</strong>
+          <span id="phone-caption-desc">
+            Live resting Android homescreen with all 7 Compose Semantics callout anchors active.
+          </span>
+        </div>
+      </div>
+
+      <div class="callout-column" id="callouts-right" aria-label="Right component callouts 05 to 07"></div>
+    </section>
+
+    <section class="spec-section" id="global-behaviors" aria-labelledby="behaviors-heading">
+      <h2 class="section-heading" id="behaviors-heading">
+        Whole-Shell Runtime Behaviors (Scroll Retraction, Picture-in-Picture &amp; Sync Pipeline)
+      </h2>
+      <p class="section-sub">
+        Trap eliminates conventional top/bottom browser toolbars so 100% of the screen belongs to the
+        zero-JS hidden service document while keeping hardware controls one thumb-motion away.
+      </p>
+
+      <div class="behavior-strip">
+        <article class="behavior-panel" id="panel-scroll-retraction">
+          <h3>110ms Mechanical Scroll Retraction</h3>
+          <p>
+            Scrolling downward on any webpage retracts the pod cluster in <code>110ms</code>:
+            <code>crt_address_pod</code> tucks <code>+96dp</code> down, left-hand pods scale to
+            <code>0.78×</code>, and right-bezel pods slide <code>+50..58dp</code> outward. Tapping any
+            retracted pod restores full scale before firing actions.
+          </p>
+        </article>
+
+        <article class="behavior-panel" id="panel-pip-mode">
+          <h3>Zero-White Scaled Picture-in-Picture</h3>
+          <p>
+            Minimizing an eligible tab enters Android PiP with <code>seamlessResizeEnabled</code>,
+            <code>0.88</code> window translucency, proportional zoom scaling
+            (<code>pipWidth / fullViewportWidth</code>), cached dark <code>#0D0F12</code> fallback frame,
+            and 3 <code>RemoteAction</code> controls: <code>Back</code>, <code>Reload/Stop</code>, and
+            <code>Text Search</code> (expanding into zero-JS <code>FindInPageHardwarePod</code>).
+          </p>
+        </article>
+
+        <article class="behavior-panel" id="panel-continuous-sync">
+          <h3>Continuous Compose @Preview Sync</h3>
+          <p>
+            <code>.github/workflows/pages.yml</code> executes
+            <code>HomescreenPagesSyncTest.kt</code> on every push to <code>main</code>, rendering
+            <code>OnionVaultPreviews.kt</code> with native Skia and exporting exact
+            <code>getUnclippedBoundsInRoot()</code> coordinates to
+            <code>generated/homescreen-sync.json</code>.
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <section class="spec-section" id="component-matrix" aria-labelledby="matrix-heading">
+      <h2 class="section-heading" id="matrix-heading">
+        Complete Homescreen Component &amp; Security Invariant Matrix
+      </h2>
+      <p class="section-sub">
+        Live-measured Compose Semantics tags, Kotlin source files, and cryptographic / transport
+        invariants for all seven homescreen elements.
+      </p>
+
+      <div class="table-wrap">
+        <table class="spec-table" id="spec-table">
+          <thead>
+            <tr>
+              <th scope="col">#</th>
+              <th scope="col">Component &amp; Source</th>
+              <th scope="col">Compose Tag &amp; Bounds</th>
+              <th scope="col">Primary Function</th>
+              <th scope="col">Security &amp; Transport Invariant</th>
+            </tr>
+          </thead>
+          <tbody id="spec-table-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer class="page-footer">
+      <span id="footer-sync-meta">
+        Synced from @Preview BrowserChromePreview() · w412dp-h915dp-xhdpi
+      </span>
+      <span>
+        <a href="https://github.com/maceip/trap/releases/latest" id="latest-release-link" target="_blank" rel="noopener noreferrer">Latest Signed APK &amp; SBOM Release ↗</a>
+        &nbsp;·&nbsp;
+        <a href="https://github.com/maceip/cefpack" id="cefpack-repo-link" target="_blank" rel="noopener noreferrer">maceip/cefpack Chromium 156 Engine ↗</a>
+      </span>
+    </footer>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>

@@ -1,0 +1,238 @@
+{
+  "schemaVersion": 1,
+  "appVersion": "0.1.44",
+  "gitCommit": "34c42953c4b2",
+  "previewEntrypoint": "dev.onionvault.ui.previews.BrowserChromePreview",
+  "viewport": {
+    "qualifiers": "w412dp-h915dp-xhdpi",
+    "density": 2,
+    "widthDp": 412,
+    "heightDp": 915,
+    "widthPx": 824,
+    "heightPx": 1830
+  },
+  "homescreenImage": "generated\/assets\/homescreen-preview.webp",
+  "states": [
+    {
+      "id": "resting",
+      "previewFn": "BrowserChromePreview",
+      "image": "generated\/assets\/homescreen-preview.webp"
+    },
+    {
+      "id": "crt-directory",
+      "previewFn": "CrtOnionDirectoryPreview",
+      "image": "generated\/assets\/state-crt-directory.webp"
+    },
+    {
+      "id": "side-remote",
+      "previewFn": "BrowserMenuPreview",
+      "image": "generated\/assets\/state-side-remote.webp"
+    },
+    {
+      "id": "tor-circuit",
+      "previewFn": "TorBootstrapPreview",
+      "image": "generated\/assets\/state-tor-circuit.webp"
+    },
+    {
+      "id": "pgp-keyring",
+      "previewFn": "NeonGraffitiKeyringPreview",
+      "image": "generated\/assets\/state-pgp-keyring.webp"
+    },
+    {
+      "id": "monero-wallet",
+      "previewFn": "MoneroWalletHomescreenPreview",
+      "image": "generated\/assets\/state-monero-wallet.webp"
+    }
+  ],
+  "components": [
+    {
+      "id": "start-zine-viewport",
+      "index": "01",
+      "side": "left",
+      "testTag": "webpage_viewport_host",
+      "composable": "StartPage \/ BrowserScreen",
+      "sourcePath": "android\/app\/src\/main\/kotlin\/dev\/onionvault\/ui\/StartPage.kt",
+      "statePreviewId": "resting",
+      "boundsDp": {
+        "left": 0,
+        "top": 0,
+        "right": 412,
+        "bottom": 915,
+        "width": 412,
+        "height": 915
+      },
+      "boundsNorm": {
+        "left": 0.03,
+        "top": 0.015,
+        "width": 0.94,
+        "height": 0.46
+      },
+      "anchorNorm": {
+        "x": 0.48,
+        "y": 0.19
+      }
+    },
+    {
+      "id": "perimeter-steel-rails",
+      "index": "02",
+      "side": "left",
+      "testTag": "perimeter_steel_rails",
+      "composable": "PerimeterSteelRails",
+      "sourcePath": "android\/app\/src\/main\/kotlin\/dev\/onionvault\/ui\/pods\/PerimeterSteelRails.kt",
+      "statePreviewId": "tor-circuit",
+      "boundsDp": {
+        "left": 0,
+        "top": 0,
+        "right": 412,
+        "bottom": 915,
+        "width": 412,
+        "height": 915
+      },
+      "boundsNorm": {
+        "left": 0,
+        "top": 0,
+        "width": 0.0291,
+        "height": 1
+      },
+      "anchorNorm": {
+        "x": 0.0146,
+        "y": 0.43
+      }
+    },
+    {
+      "id": "kpt-back-pod",
+      "index": "03",
+      "side": "left",
+      "testTag": "kpt_back_pod",
+      "composable": "KptBackButtonPod",
+      "sourcePath": "android\/app\/src\/main\/kotlin\/dev\/onionvault\/ui\/pods\/KptBackButtonPod.kt",
+      "statePreviewId": "resting",
+      "boundsDp": {
+        "left": 22,
+        "top": 707,
+        "right": 84,
+        "bottom": 747,
+        "width": 62,
+        "height": 40
+      },
+      "boundsNorm": {
+        "left": 0.0534,
+        "top": 0.7727,
+        "width": 0.1505,
+        "height": 0.0437
+      },
+      "anchorNorm": {
+        "x": 0.1286,
+        "y": 0.7945
+      }
+    },
+    {
+      "id": "tor-orb-pod",
+      "index": "04",
+      "side": "left",
+      "testTag": "tor_orb_pod",
+      "composable": "TorKnurledOrbPod",
+      "sourcePath": "android\/app\/src\/main\/kotlin\/dev\/onionvault\/ui\/pods\/TorKnurledOrbPod.kt",
+      "statePreviewId": "tor-circuit",
+      "boundsDp": {
+        "left": 8,
+        "top": 759,
+        "right": 112,
+        "bottom": 863,
+        "width": 104,
+        "height": 104
+      },
+      "boundsNorm": {
+        "left": 0.0194,
+        "top": 0.8295,
+        "width": 0.2524,
+        "height": 0.1137
+      },
+      "anchorNorm": {
+        "x": 0.1456,
+        "y": 0.8863
+      }
+    },
+    {
+      "id": "crt-address-pod",
+      "index": "05",
+      "side": "right",
+      "testTag": "crt_address_pod",
+      "composable": "RecessedCrtAddressPod",
+      "sourcePath": "android\/app\/src\/main\/kotlin\/dev\/onionvault\/ui\/pods\/RecessedCrtAddressPod.kt",
+      "statePreviewId": "crt-directory",
+      "boundsDp": {
+        "left": 124,
+        "top": 648,
+        "right": 280,
+        "bottom": 783,
+        "width": 156,
+        "height": 135
+      },
+      "boundsNorm": {
+        "left": 0.301,
+        "top": 0.7082,
+        "width": 0.3786,
+        "height": 0.1475
+      },
+      "anchorNorm": {
+        "x": 0.4903,
+        "y": 0.782
+      }
+    },
+    {
+      "id": "pgp-rocker-pod",
+      "index": "06",
+      "side": "right",
+      "testTag": "pgp_rocker_pod",
+      "composable": "OpenPgpRockerPod",
+      "sourcePath": "android\/app\/src\/main\/kotlin\/dev\/onionvault\/ui\/pods\/OpenPgpRockerPod.kt",
+      "statePreviewId": "pgp-keyring",
+      "boundsDp": {
+        "left": 337.68,
+        "top": 556.72,
+        "right": 419.68,
+        "bottom": 680.72,
+        "width": 82,
+        "height": 124
+      },
+      "boundsNorm": {
+        "left": 0.8196,
+        "top": 0.6084,
+        "width": 0.1804,
+        "height": 0.1355
+      },
+      "anchorNorm": {
+        "x": 0.89,
+        "y": 0.6762
+      }
+    },
+    {
+      "id": "side-remote-pod",
+      "index": "07",
+      "side": "right",
+      "testTag": "side_remote_pod",
+      "composable": "PhotoSoapSideRemote",
+      "sourcePath": "android\/app\/src\/main\/kotlin\/dev\/onionvault\/ui\/pods\/PhotoSoapSideRemote.kt",
+      "statePreviewId": "side-remote",
+      "boundsDp": {
+        "left": 363.62,
+        "top": 706.35,
+        "right": 423.62,
+        "bottom": 892.35,
+        "width": 60,
+        "height": 186
+      },
+      "boundsNorm": {
+        "left": 0.8826,
+        "top": 0.772,
+        "width": 0.1174,
+        "height": 0.2033
+      },
+      "anchorNorm": {
+        "x": 0.89,
+        "y": 0.8736
+      }
+    }
+  ]
+}
