@@ -282,7 +282,8 @@ fun TrapTheme(
 
 /**
  * Semantic iconography for Trap.
- * Never includes unbacked glyphs (wallet, monero, usd, microphone, autofill).
+ * Monero and Wallet are 100% backed by `crates/ov-xmr` light wallet & Tor swap engine;
+ * unbacked glyphs (usd, microphone, autofill) are never exposed.
  */
 enum class TrapGlyph(
     val vectorRes: Int,
@@ -314,6 +315,8 @@ enum class TrapGlyph(
     Onion(R.drawable.ic_ov_onion, R.drawable.ic_neon_onion),
     RefreshIdentity(R.drawable.ic_ov_refresh_id, R.drawable.ic_neon_update),
     Search(R.drawable.ic_ov_search, null),
+    Monero(R.drawable.ic_ov_monero, R.drawable.ic_neon_monero),
+    Wallet(R.drawable.ic_ov_wallet, R.drawable.ic_neon_wallet),
 }
 
 /**

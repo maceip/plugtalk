@@ -72,6 +72,8 @@ class TabSessionManager(
     private val onUrlBlocked: (tabId: String, blockedUrl: String, reason: String) -> Unit = { _, _, _ -> },
     private val onSecurityNotice: (String) -> Unit = {},
     private val onNavigationRecovered: (tabId: String) -> Unit = {},
+    private val onMoneroUriIntercepted: (OvNative.MoneroPaymentRequest) -> Unit = {},
+    private val onInternalRouteIntercepted: (String) -> Boolean = { false },
 ) {
 
     data class TabState(
@@ -477,6 +479,8 @@ class TabSessionManager(
                 lower.startsWith("sms:") ||
                 lower.startsWith("geo:") ||
                 lower.startsWith("magnet:") ||
+                lower.startsWith("monero:") ||
+                lower.startsWith("bitcoin:") ||
                 lower.startsWith("chrome:") ||
                 lower.startsWith("chrome-error:") ||
                 lower.startsWith("view-source:")
@@ -930,6 +934,39 @@ class TabSessionManager(
         )
 
         val candidate = normalizeUserAddressInput(rawInput)
+        if (candidate.equals("about:wallet", ignoreCase = true) ||
+            candidate.equals("about:swap", ignoreCase = true)
+        ) {
+            val route = candidate.lowercase()
+            onInternalRouteIntercepted(route)
+            return OvNative.UrlPolicyResult(
+                allowed = true,
+                normalizedUrl = route,
+                isOnion = false,
+                reason = "",
+            )
+        }
+        if (candidate.startsWith("monero:", ignoreCase = true)) {
+            val payment = OvNative.parseMoneroUri(candidate)
+            return if (payment != null) {
+                onMoneroUriIntercepted(payment)
+                OvNative.UrlPolicyResult(
+                    allowed = true,
+                    normalizedUrl = candidate,
+                    isOnion = false,
+                    reason = "",
+                )
+            } else {
+                val invalidReason = "Invalid Monero payment URI"
+                onUrlBlocked(targetTabId, candidate, invalidReason)
+                OvNative.UrlPolicyResult(
+                    allowed = false,
+                    normalizedUrl = candidate,
+                    isOnion = false,
+                    reason = invalidReason,
+                )
+            }
+        }
         val lanDecision = lanAccessController.evaluateRequest(
             pageUrl = managed.state.url,
             targetUrl = candidate,
@@ -1835,6 +1872,21 @@ class TabSessionManager(
         browser.setPopupHandler { targetUrl, userGesture ->
             if (userGesture && !targetUrl.isNullOrBlank()) {
                 val normalizedInput = normalizeUserAddressInput(targetUrl)
+                if (normalizedInput.startsWith("monero:", ignoreCase = true)) {
+                    val payment = OvNative.parseMoneroUri(normalizedInput)
+                    if (payment != null) {
+                        mainHandler.post { onMoneroUriIntercepted(payment) }
+                    } else {
+                        mainHandler.post { onUrlBlocked(tabId, targetUrl, "Invalid Monero payment URI") }
+                    }
+                    return@setPopupHandler true
+                }
+                if (normalizedInput.equals("about:wallet", ignoreCase = true) ||
+                    normalizedInput.equals("about:swap", ignoreCase = true)
+                ) {
+                    mainHandler.post { onInternalRouteIntercepted(normalizedInput.lowercase()) }
+                    return@setPopupHandler true
+                }
                 val decision = evaluateUrlPolicy(normalizedInput, _hiddenServiceOnly.value)
                 if (decision.allowed) {
                     mainHandler.post { createTab(decision.normalizedUrl, select = true) }
@@ -2199,6 +2251,28 @@ class TabSessionManager(
             resourceType.isEmpty() || resourceType == "main_frame"
             )
         val isSubFrameNavigation = resourceType == "sub_frame"
+        val trimmedUrl = url.trim()
+        if (trimmedUrl.startsWith("monero:", ignoreCase = true)) {
+            if (isTopLevelNavigation) {
+                val payment = OvNative.parseMoneroUri(trimmedUrl)
+                if (payment != null) {
+                    lastConsentInterceptedUrl = url
+                    mainHandler.post { onMoneroUriIntercepted(payment) }
+                } else {
+                    mainHandler.post { onUrlBlocked(tabId, url, "Invalid Monero payment URI") }
+                }
+            }
+            return true
+        }
+        if (trimmedUrl.equals("about:wallet", ignoreCase = true) ||
+            trimmedUrl.equals("about:swap", ignoreCase = true)
+        ) {
+            if (isTopLevelNavigation) {
+                lastConsentInterceptedUrl = url
+                mainHandler.post { onInternalRouteIntercepted(trimmedUrl.lowercase()) }
+            }
+            return true
+        }
         val pageUrl = topLevelUrl.ifBlank { sessions[tabId]?.state?.url.orEmpty() }
         val lanDecision = lanAccessController.evaluateRequest(
             pageUrl = pageUrl,

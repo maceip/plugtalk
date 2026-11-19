@@ -22,7 +22,7 @@
 #      descriptors, and `dexdump` verifies `TrapApplication.attachBaseContext` passes `this`
 #      (never raw `ContextImpl` parameter) to `CefpackEngine.initProcess`.
 #   3. `libonion_vault.so` on BOTH `arm64-v8a` and `x86_64` has ZERO browser `.so` `DT_NEEDED`
-#      entries and exports all 24 `Java_dev_onionvault_OvNative_*` JNI entry points, while
+#      entries and exports all 35 `Java_dev_onionvault_OvNative_*` JNI entry points, while
 #      `libcefpack_content.so` exports `JNI_OnLoad`.
 #   4. Valid APK Signature Scheme v2+ signature (matching deterministic `android/app/debug.keystore`
 #      when signed with the Android Debug DN).
@@ -713,7 +713,7 @@ with zipfile.ZipFile(apk_path, "r") as zf:
         verify_trap_application_bytecode(trap_app_dex[0], trap_app_dex[1], dexdump_bin)
 PY
 
-echo "== [3/5] Auditing ELF DT_NEEDED, JNI_OnLoad & 24 OvNative JNI exports on arm64-v8a and x86_64 =="
+echo "== [3/5] Auditing ELF DT_NEEDED, JNI_OnLoad & 35 OvNative JNI exports on arm64-v8a and x86_64 =="
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
@@ -742,6 +742,17 @@ EXPECTED_JNI_SYMBOLS=(
     "Java_dev_onionvault_OvNative_nativeShutdown"
     "Java_dev_onionvault_OvNative_nativeSocksProxy"
     "Java_dev_onionvault_OvNative_nativeTorStatusJson"
+    "Java_dev_onionvault_OvNative_nativeXmrCreateWalletJson"
+    "Java_dev_onionvault_OvNative_nativeXmrDeleteWallet"
+    "Java_dev_onionvault_OvNative_nativeXmrExportSeedJson"
+    "Java_dev_onionvault_OvNative_nativeXmrFetchBtcSwapQuotesJson"
+    "Java_dev_onionvault_OvNative_nativeXmrNewSubaddressJson"
+    "Java_dev_onionvault_OvNative_nativeXmrRestoreWalletJson"
+    "Java_dev_onionvault_OvNative_nativeXmrSendJson"
+    "Java_dev_onionvault_OvNative_nativeXmrSetDaemonEndpointJson"
+    "Java_dev_onionvault_OvNative_nativeXmrStatusJson"
+    "Java_dev_onionvault_OvNative_nativeXmrSwapsActionJson"
+    "Java_dev_onionvault_OvNative_nativeXmrSyncJson"
 )
 
 for abi in arm64-v8a x86_64; do
@@ -779,7 +790,7 @@ for abi in arm64-v8a x86_64; do
     if (( missing_count > 0 )); then
         exit 1
     fi
-    echo "  [elf:${abi}] zero browser .so DT_NEEDED; libcefpack_content.so exports JNI_OnLoad; ${#EXPECTED_JNI_SYMBOLS[@]}/24 OvNative JNI symbols exported"
+    echo "  [elf:${abi}] zero browser .so DT_NEEDED; libcefpack_content.so exports JNI_OnLoad; ${#EXPECTED_JNI_SYMBOLS[@]}/35 OvNative JNI symbols exported"
 done
 
 echo "== [4/5] Auditing APK Signature Scheme v2+ & deterministic debug signing certificate =="

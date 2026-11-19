@@ -55,6 +55,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -75,6 +76,8 @@ import dev.onionvault.ui.DecryptPassphraseRequestState
 import dev.onionvault.ui.EncryptRequestState
 import dev.onionvault.ui.KeyInfo
 import dev.onionvault.ui.LegalDocument
+import dev.onionvault.ui.MoneroUiState
+import dev.onionvault.ui.MoneroWalletTab
 import dev.onionvault.ui.PgpFieldState
 import dev.onionvault.ui.PgpPlaintextState
 import dev.onionvault.ui.SelectionPgpUiState
@@ -2085,4 +2088,1280 @@ internal fun HardwareCrtTextField(
             },
         )
     }
+}
+
+// ============================================================================
+// 8. Monero Light Wallet Hardware Pod (`xmr_wallet_sheet`)
+// ============================================================================
+
+private enum class XmrOnboardingMode {
+    Create,
+    Restore,
+}
+
+@Composable
+fun MoneroWalletHardwarePod(
+    xmr: MoneroUiState,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+    onCreateWallet: (label: String) -> Unit = {},
+    onRestoreWallet: (mnemonic: String, restoreHeight: Long) -> Unit = { _, _ -> },
+    onSyncWallet: () -> Unit = {},
+    onNewSubaddress: (label: String) -> Unit = {},
+    onSendXmr: (destinationAddress: String, amountXmr: String, sweepAll: Boolean) -> Unit = { _, _, _ -> },
+    onSetDaemonEndpoint: (endpointUrl: String, mode: String) -> Unit = { _, _ -> },
+    onRevealSeed: () -> Unit = {},
+    onHideSeed: () -> Unit = {},
+    onDismissNewSeedBackup: () -> Unit = {},
+    onDeleteWallet: () -> Unit = {},
+    onOpenSwap: () -> Unit = {},
+    onCopyText: (String) -> Unit = {},
+) {
+    val clipboard = LocalClipboardManager.current
+    val focusManager = LocalFocusManager.current
+    val status = xmr.status
+
+    fun copyString(text: String) {
+        if (text.isBlank()) return
+        runCatching { clipboard.setText(AnnotatedString(text)) }
+        onCopyText(text)
+    }
+
+    var onboardingMode by remember { mutableStateOf(XmrOnboardingMode.Create) }
+    var createLabel by remember { mutableStateOf("Trap Light Wallet") }
+    var restoreMnemonic by remember { mutableStateOf("") }
+    var restoreHeightInput by remember { mutableStateOf("") }
+
+    var activeTab by remember(xmr.walletInitialTab, xmr.prefillSendAddress) {
+        mutableStateOf(
+            if (xmr.prefillSendAddress.isNotBlank()) {
+                MoneroWalletTab.Send
+            } else {
+                xmr.walletInitialTab
+            },
+        )
+    }
+    var newSubaddressLabel by remember { mutableStateOf("") }
+
+    var destAddress by remember(xmr.prefillSendAddress) { mutableStateOf(xmr.prefillSendAddress) }
+    var amountInput by remember(xmr.prefillSendAmount) { mutableStateOf(xmr.prefillSendAmount) }
+    var sweepAll by remember { mutableStateOf(false) }
+
+    var syncMode by remember(status.syncMode) {
+        mutableStateOf(status.syncMode.ifBlank { "monerod_onion" })
+    }
+    var daemonEndpointInput by remember(status.syncEndpoint) {
+        mutableStateOf(status.syncEndpoint)
+    }
+    var confirmDeleteWallet by remember { mutableStateOf(false) }
+
+    HardwareModalFrame(
+        title = "MONERO LIGHT WALLET",
+        ledColor = if (status.hasWallet) MetaToolsTokens.LedGreen else MetaToolsTokens.LedAmber,
+        onDismiss = onDismiss,
+        modifier = modifier.testTag("xmr_wallet_sheet"),
+        headerAction = if (status.hasWallet) {
+            {
+                HardwareBezelButton(
+                    text = if (xmr.syncing) "Syncing…" else "Sync Tor",
+                    compact = true,
+                    primary = true,
+                    enabled = !xmr.syncing,
+                    onClick = onSyncWallet,
+                    modifier = Modifier.testTag("xmr_sync_button"),
+                )
+            }
+        } else {
+            null
+        },
+    ) {
+        SensitiveContentEffect()
+
+        if (!xmr.error.isNullOrBlank()) {
+            Text(
+                text = xmr.error,
+                color = MetaToolsTokens.StreetMagenta,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier
+                    .padding(bottom = 8.dp)
+                    .testTag("xmr_wallet_error"),
+            )
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f, fill = false)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            if (!status.hasWallet) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MetaToolsTokens.CrtBlackGlass)
+                        .border(1.dp, MetaToolsTokens.GrooveHighlight, RoundedCornerShape(12.dp))
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = "No Wallet Created",
+                        color = MetaToolsTokens.PhosphorLoadingAmber,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.testTag("xmr_empty_wallet_title"),
+                    )
+                    Text(
+                        text = "25-word Monero light wallet wrapped in Android Keystore and synced fail-closed over Arti Tor.",
+                        color = MetaToolsTokens.StencilInk,
+                        fontSize = 11.5.sp,
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    HardwareChoicePill(
+                        label = "Create New",
+                        selected = onboardingMode == XmrOnboardingMode.Create,
+                        onClick = { onboardingMode = XmrOnboardingMode.Create },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("xmr_mode_create"),
+                    )
+                    HardwareChoicePill(
+                        label = "Restore Seed",
+                        selected = onboardingMode == XmrOnboardingMode.Restore,
+                        onClick = { onboardingMode = XmrOnboardingMode.Restore },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("xmr_mode_restore"),
+                    )
+                }
+
+                when (onboardingMode) {
+                    XmrOnboardingMode.Create -> {
+                        HardwareSectionHeader("Wallet Label")
+                        HardwareCrtTextField(
+                            value = createLabel,
+                            onValueChange = { createLabel = it },
+                            placeholder = "Trap Light Wallet",
+                            singleLine = true,
+                            testTag = "xmr_create_label_input",
+                        )
+                        HardwareBezelButton(
+                            text = if (xmr.creatingOrRestoring) {
+                                "Generating Seed…"
+                            } else {
+                                "Create 25-Word Wallet"
+                            },
+                            primary = true,
+                            enabled = !xmr.creatingOrRestoring,
+                            onClick = {
+                                focusManager.clearFocus()
+                                onCreateWallet(createLabel.trim().ifEmpty { "Trap Light Wallet" })
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("xmr_create_wallet_button"),
+                        )
+                    }
+
+                    XmrOnboardingMode.Restore -> {
+                        HardwareSectionHeader("25-Word Monero Electrum Seed")
+                        HardwareCrtTextField(
+                            value = restoreMnemonic,
+                            onValueChange = { restoreMnemonic = it },
+                            placeholder = "Enter 25 space-separated seed words…",
+                            singleLine = false,
+                            minHeight = 76.dp,
+                            testTag = "xmr_restore_mnemonic_input",
+                        )
+                        HardwareSectionHeader("Restore Height (Optional)")
+                        HardwareCrtTextField(
+                            value = restoreHeightInput,
+                            onValueChange = { next ->
+                                restoreHeightInput = next.filter { it.isDigit() }
+                            },
+                            placeholder = "0 (or wallet creation block height)",
+                            singleLine = true,
+                            keyboardType = KeyboardType.Number,
+                            testTag = "xmr_restore_height_input",
+                        )
+                        val wordCount = restoreMnemonic.trim()
+                            .split(Regex("\\s+"))
+                            .count { it.isNotEmpty() }
+                        HardwareBezelButton(
+                            text = if (xmr.creatingOrRestoring) {
+                                "Restoring Wallet…"
+                            } else {
+                                "Restore Light Wallet ($wordCount/25)"
+                            },
+                            primary = true,
+                            enabled = !xmr.creatingOrRestoring && wordCount == 25,
+                            onClick = {
+                                focusManager.clearFocus()
+                                val height = restoreHeightInput.trim().toLongOrNull() ?: 0L
+                                onRestoreWallet(restoreMnemonic.trim(), height)
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("xmr_restore_wallet_button"),
+                        )
+                    }
+                }
+            } else {
+                // Backup seed banner immediately after fresh wallet creation
+                if (!xmr.newlyCreatedMnemonic.isNullOrBlank()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MetaToolsTokens.CrtBlackGlass)
+                            .border(1.dp, MetaToolsTokens.PhosphorLoadingAmber, RoundedCornerShape(12.dp))
+                            .padding(10.dp)
+                            .testTag("xmr_new_seed_backup_box"),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        HardwareSectionHeader("BACKUP 25-WORD RECOVERY SEED")
+                        Text(
+                            text = xmr.newlyCreatedMnemonic,
+                            color = MetaToolsTokens.PhosphorOnionGreen,
+                            fontSize = 11.5.sp,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.testTag("xmr_seed_words_text"),
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            HardwareBezelButton(
+                                text = "Copy Seed",
+                                primary = true,
+                                compact = true,
+                                onClick = { copyString(xmr.newlyCreatedMnemonic) },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("xmr_copy_seed_button"),
+                            )
+                            HardwareBezelButton(
+                                text = "Saved",
+                                compact = true,
+                                onClick = onDismissNewSeedBackup,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("xmr_dismiss_new_seed_button"),
+                            )
+                        }
+                    }
+                }
+
+                // Balance & .onion Daemon Height CRT Readout (<= 2:1 label density)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MetaToolsTokens.CrtBlackGlass)
+                        .border(1.dp, MetaToolsTokens.GrooveHighlight, RoundedCornerShape(12.dp))
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            text = "${status.unlockedBalanceXmr} XMR",
+                            color = MetaToolsTokens.PhosphorOnionGreen,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.testTag("xmr_unlocked_balance_text"),
+                        )
+                        Text(
+                            text = "Total ${status.balanceXmr} XMR",
+                            color = MetaToolsTokens.StencilInk,
+                            fontSize = 11.5.sp,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.testTag("xmr_total_balance_text"),
+                        )
+                    }
+                    val heightReadout = when {
+                        status.daemonHeight > 0L ->
+                            "Synced ${status.syncedHeight} / ${status.daemonHeight} (${if (status.syncMode == "lws") "LWS" else ".onion"})"
+                        status.birthdayPending ->
+                            "Height pending Tor sync"
+                        else ->
+                            "Synced #${status.syncedHeight}"
+                    }
+                    Text(
+                        text = heightReadout,
+                        color = MetaToolsTokens.PhosphorClearnetGreen,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag("xmr_sync_height_text"),
+                    )
+                }
+
+                // 2x2 Hardware Section Grid (strictly <= 2 pills per row!)
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        HardwareChoicePill(
+                            label = "Receive",
+                            selected = activeTab == MoneroWalletTab.Receive,
+                            onClick = { activeTab = MoneroWalletTab.Receive },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("xmr_tab_receive"),
+                        )
+                        HardwareChoicePill(
+                            label = "Send",
+                            selected = activeTab == MoneroWalletTab.Send,
+                            onClick = { activeTab = MoneroWalletTab.Send },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("xmr_tab_send"),
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        HardwareChoicePill(
+                            label = "Node / Seed",
+                            selected = activeTab == MoneroWalletTab.NodeSeed,
+                            onClick = { activeTab = MoneroWalletTab.NodeSeed },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("xmr_tab_node_seed"),
+                        )
+                        HardwareBezelButton(
+                            text = "Swap BTC → XMR",
+                            compact = true,
+                            onClick = onOpenSwap,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("xmr_open_swap_button"),
+                        )
+                    }
+                }
+
+                when (activeTab) {
+                    MoneroWalletTab.Receive -> {
+                        val activeAddr = status.activeSubaddress.ifBlank { status.primaryAddress }
+                        HardwareSectionHeader("Active 8… Subaddress")
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(MetaToolsTokens.CrtBlackGlass)
+                                .border(1.dp, MetaToolsTokens.GrooveHighlight, RoundedCornerShape(10.dp))
+                                .padding(10.dp),
+                        ) {
+                            Text(
+                                text = activeAddr,
+                                color = MetaToolsTokens.PhosphorOnionGreen,
+                                fontSize = 11.5.sp,
+                                fontFamily = FontFamily.Monospace,
+                                modifier = Modifier.testTag("xmr_active_subaddress_text"),
+                            )
+                        }
+
+                        HardwareCrtTextField(
+                            value = newSubaddressLabel,
+                            onValueChange = { newSubaddressLabel = it },
+                            placeholder = "Optional subaddress label (e.g. Source Drop)",
+                            singleLine = true,
+                            testTag = "xmr_subaddress_label_input",
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            HardwareBezelButton(
+                                text = "Copy 8…",
+                                primary = true,
+                                enabled = activeAddr.isNotBlank(),
+                                onClick = { copyString(activeAddr) },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("xmr_copy_subaddress_button"),
+                            )
+                            HardwareBezelButton(
+                                text = "+ New Subaddress",
+                                onClick = {
+                                    val label = newSubaddressLabel.trim()
+                                    newSubaddressLabel = ""
+                                    onNewSubaddress(label)
+                                },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("xmr_new_subaddress_button"),
+                            )
+                        }
+
+                        if (status.subaddresses.isNotEmpty()) {
+                            HardwareSectionHeader("Subaddresses (${status.subaddresses.size})")
+                            status.subaddresses.forEach { sub ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(MetaToolsTokens.AnodizedRecessedWell)
+                                        .border(1.dp, MetaToolsTokens.GrooveHighlight, RoundedCornerShape(10.dp))
+                                        .clickable(
+                                            role = Role.Button,
+                                            onClick = { copyString(sub.address) },
+                                        )
+                                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                                        .testTag("xmr_subaddr_row_${sub.index}"),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "#${sub.index} ${sub.label.ifBlank { "Subaddress" }}",
+                                            color = Color.White,
+                                            fontSize = 12.5.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        Text(
+                                            text = "${truncateCryptoAddress(sub.address)} · ${sub.receivedXmr} XMR",
+                                            color = MetaToolsTokens.StencilInk.copy(alpha = 0.8f),
+                                            fontSize = 10.5.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                    Spacer(Modifier.width(8.dp))
+                                    HardwareStatusChip(
+                                        text = "COPY",
+                                        accent = MetaToolsTokens.PhosphorClearnetGreen,
+                                    )
+                                }
+                            }
+                        }
+
+                        HardwareSectionHeader("Recent Transactions (${status.recentTxs.size})")
+                        if (status.recentTxs.isEmpty()) {
+                            Text(
+                                text = "No transactions scanned yet.",
+                                color = MetaToolsTokens.StencilInk,
+                                fontSize = 12.sp,
+                                modifier = Modifier.testTag("xmr_empty_txs_text"),
+                            )
+                        } else {
+                            status.recentTxs.forEach { tx ->
+                                val isIncoming = tx.direction.equals("in", ignoreCase = true)
+                                val signPrefix = if (isIncoming) "+" else "-"
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(MetaToolsTokens.AnodizedRecessedWell)
+                                        .border(1.dp, MetaToolsTokens.GrooveHighlight, RoundedCornerShape(10.dp))
+                                        .clickable(
+                                            role = Role.Button,
+                                            onClick = { copyString(tx.txid) },
+                                        )
+                                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                                        .testTag("xmr_tx_row_${tx.txid.take(12)}"),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "$signPrefix${tx.amountXmr} XMR",
+                                            color = if (isIncoming) {
+                                                MetaToolsTokens.PhosphorOnionGreen
+                                            } else {
+                                                MetaToolsTokens.PhosphorLoadingAmber
+                                            },
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            fontFamily = FontFamily.Monospace,
+                                        )
+                                        Text(
+                                            text = "${truncateCryptoAddress(tx.txid)} · #${tx.height}",
+                                            color = MetaToolsTokens.StencilInk.copy(alpha = 0.78f),
+                                            fontSize = 10.5.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                    Spacer(Modifier.width(8.dp))
+                                    HardwareStatusChip(
+                                        text = if (tx.unlocked) "UNLOCKED" else "LOCKED",
+                                        accent = if (tx.unlocked) {
+                                            MetaToolsTokens.PhosphorOnionGreen
+                                        } else {
+                                            MetaToolsTokens.PhosphorLoadingAmber
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    MoneroWalletTab.Send -> {
+                        HardwareSectionHeader("Destination 4… / 8… Address or monero: URI")
+                        HardwareCrtTextField(
+                            value = destAddress,
+                            onValueChange = { input ->
+                                val parsedUri = OvNative.parseMoneroUri(input)
+                                if (parsedUri != null) {
+                                    destAddress = parsedUri.address
+                                    if (parsedUri.amountXmr.isNotBlank()) {
+                                        amountInput = parsedUri.amountXmr
+                                    }
+                                } else {
+                                    destAddress = input.trim()
+                                }
+                            },
+                            placeholder = "8… or 4… Monero mainnet address",
+                            singleLine = true,
+                            testTag = "xmr_send_address_input",
+                        )
+
+                        HardwareSectionHeader("Amount (XMR)")
+                        HardwareCrtTextField(
+                            value = if (sweepAll) "" else amountInput,
+                            onValueChange = { next ->
+                                if (!sweepAll) {
+                                    amountInput = next.trim()
+                                }
+                            },
+                            placeholder = if (sweepAll) {
+                                "Sweeping full unlocked balance (${status.unlockedBalanceXmr} XMR)"
+                            } else {
+                                "0.25"
+                            },
+                            singleLine = true,
+                            keyboardType = KeyboardType.Decimal,
+                            testTag = "xmr_send_amount_input",
+                        )
+
+                        HardwareToggleRow(
+                            title = "Sweep All Unlocked XMR",
+                            subtitle = "Spend entire unlocked balance minus RingCT network fee",
+                            checked = sweepAll,
+                            onCheckedChange = { sweepAll = it },
+                            testTag = "xmr_sweep_all_toggle",
+                        )
+
+                        val destValid = OvNative.isValidMoneroAddress(destAddress)
+                        val amountValid = sweepAll || (
+                            amountInput.isNotBlank() &&
+                                amountInput.toDoubleOrNull()?.let { it > 0.0 } == true
+                            )
+                        HardwareBezelButton(
+                            text = if (xmr.sending) {
+                                "Broadcasting Ring-16 TX…"
+                            } else {
+                                "Sign & Broadcast XMR"
+                            },
+                            primary = true,
+                            enabled = !xmr.sending && destValid && amountValid,
+                            onClick = {
+                                focusManager.clearFocus()
+                                onSendXmr(destAddress.trim(), amountInput.trim(), sweepAll)
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("xmr_send_submit_button"),
+                        )
+
+                        if (!xmr.lastTxid.isNullOrBlank()) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(MetaToolsTokens.CrtBlackGlass)
+                                    .border(1.dp, MetaToolsTokens.PhosphorOnionGreen, RoundedCornerShape(10.dp))
+                                    .padding(10.dp)
+                                    .testTag("xmr_send_receipt_box"),
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Text(
+                                    text = "Broadcast TX: ${xmr.lastTxid}",
+                                    color = MetaToolsTokens.PhosphorOnionGreen,
+                                    fontSize = 11.5.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    modifier = Modifier.testTag("xmr_last_txid_text"),
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    Text(
+                                        text = "Fee ${xmr.lastFeeXmr.orEmpty().ifBlank { "0" }} XMR",
+                                        color = MetaToolsTokens.StencilInk,
+                                        fontSize = 11.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                    )
+                                    HardwareBezelButton(
+                                        text = "Copy TXID",
+                                        compact = true,
+                                        onClick = { copyString(xmr.lastTxid) },
+                                        modifier = Modifier.testTag("xmr_copy_txid_button"),
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    MoneroWalletTab.NodeSeed -> {
+                        HardwareSectionHeader("Tor Sync Mode")
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            HardwareChoicePill(
+                                label = ".onion monerod",
+                                selected = syncMode != "lws",
+                                onClick = { syncMode = "monerod_onion" },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("xmr_mode_monerod"),
+                            )
+                            HardwareChoicePill(
+                                label = "Self-Hosted LWS",
+                                selected = syncMode == "lws",
+                                onClick = { syncMode = "lws" },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("xmr_mode_lws"),
+                            )
+                        }
+
+                        HardwareSectionHeader("Custom Endpoint URL (Blank = 4-Node .onion Pool)")
+                        HardwareCrtTextField(
+                            value = daemonEndpointInput,
+                            onValueChange = { daemonEndpointInput = it },
+                            placeholder = "http://plowsoff…6tyd.onion:18089",
+                            singleLine = true,
+                            keyboardType = KeyboardType.Uri,
+                            testTag = "xmr_daemon_endpoint_input",
+                        )
+
+                        HardwareBezelButton(
+                            text = "Save Sync Endpoint",
+                            onClick = {
+                                focusManager.clearFocus()
+                                onSetDaemonEndpoint(daemonEndpointInput.trim(), syncMode)
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("xmr_save_daemon_button"),
+                        )
+
+                        EngravedGrooveDivider()
+
+                        HardwareSectionHeader("25-Word Recovery Seed")
+                        if (xmr.revealedMnemonic.isNullOrBlank()) {
+                            HardwareBezelButton(
+                                text = "Reveal 25-Word Seed",
+                                onClick = onRevealSeed,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("xmr_reveal_seed_button"),
+                            )
+                        } else {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(MetaToolsTokens.CrtBlackGlass)
+                                    .border(1.dp, MetaToolsTokens.PhosphorLoadingAmber, RoundedCornerShape(10.dp))
+                                    .padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Text(
+                                    text = xmr.revealedMnemonic,
+                                    color = MetaToolsTokens.PhosphorOnionGreen,
+                                    fontSize = 11.5.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    modifier = Modifier.testTag("xmr_revealed_seed_text"),
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    HardwareBezelButton(
+                                        text = "Copy Seed",
+                                        primary = true,
+                                        compact = true,
+                                        onClick = { copyString(xmr.revealedMnemonic) },
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .testTag("xmr_copy_revealed_seed_button"),
+                                    )
+                                    HardwareBezelButton(
+                                        text = "Hide Seed",
+                                        compact = true,
+                                        onClick = onHideSeed,
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .testTag("xmr_hide_seed_button"),
+                                    )
+                                }
+                            }
+                        }
+
+                        HardwareBezelButton(
+                            text = if (confirmDeleteWallet) {
+                                "Confirm Delete Wallet?"
+                            } else {
+                                "Delete Wallet"
+                            },
+                            danger = true,
+                            onClick = {
+                                if (!confirmDeleteWallet) {
+                                    confirmDeleteWallet = true
+                                } else {
+                                    confirmDeleteWallet = false
+                                    onDeleteWallet()
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("xmr_delete_wallet_button"),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// 9. BTC -> XMR Zero-JS Tor Swap Hardware Pod (`btc_xmr_swap_sheet`)
+// ============================================================================
+
+@Composable
+fun BtcToXmrSwapHardwarePod(
+    xmr: MoneroUiState,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+    onFetchQuotes: (btcAmount: String) -> Unit = {},
+    onLaunchQuoteInBrowser: (quote: OvNative.BtcSwapQuoteItem, btcAmount: String) -> Unit = { _, _ -> },
+    onOpenTrackedSwapPage: (OvNative.TrackedBtcXmrSwap) -> Unit = {},
+    onDismissSwap: (swapId: String) -> Unit = {},
+    onSyncWallet: () -> Unit = {},
+    onOpenWallet: () -> Unit = {},
+    onCopyText: (String) -> Unit = {},
+) {
+    val clipboard = LocalClipboardManager.current
+    val focusManager = LocalFocusManager.current
+    var btcAmount by remember(xmr.quotesBtcAmount) {
+        mutableStateOf(xmr.quotesBtcAmount.ifBlank { "0.01" })
+    }
+
+    fun copyString(text: String) {
+        if (text.isBlank()) return
+        runCatching { clipboard.setText(AnnotatedString(text)) }
+        onCopyText(text)
+    }
+
+    HardwareModalFrame(
+        title = "SWAP BTC → XMR (TOR)",
+        ledColor = if (xmr.quotes.isNotEmpty()) MetaToolsTokens.LedGreen else MetaToolsTokens.LedAmber,
+        onDismiss = onDismiss,
+        modifier = modifier.testTag("btc_xmr_swap_sheet"),
+        headerAction = {
+            HardwareBezelButton(
+                text = "Wallet",
+                compact = true,
+                onClick = onOpenWallet,
+                modifier = Modifier.testTag("swap_open_wallet_button"),
+            )
+        },
+    ) {
+        SensitiveContentEffect()
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f, fill = false)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                text = "Live zero-JS aggregator quotes via OrangeFren .onion over Arti Tor. Each swap mints a fresh unlinkable 8… subaddress.",
+                color = MetaToolsTokens.StencilInk,
+                fontSize = 11.5.sp,
+            )
+
+            HardwareSectionHeader("Send BTC Amount")
+            HardwareCrtTextField(
+                value = btcAmount,
+                onValueChange = { btcAmount = it.trim() },
+                placeholder = "0.01",
+                singleLine = true,
+                keyboardType = KeyboardType.Decimal,
+                testTag = "swap_btc_amount_input",
+            )
+
+            val amountPositive = btcAmount.toDoubleOrNull()?.let { it > 0.0 } == true
+            HardwareBezelButton(
+                text = if (xmr.quotesLoading) {
+                    "Fetching Live .onion Quotes…"
+                } else {
+                    "Fetch Live Tor Quotes"
+                },
+                primary = true,
+                enabled = !xmr.quotesLoading && amountPositive,
+                onClick = {
+                    focusManager.clearFocus()
+                    onFetchQuotes(btcAmount.trim())
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("swap_fetch_quotes_button"),
+            )
+
+            if (!xmr.error.isNullOrBlank()) {
+                Text(
+                    text = xmr.error,
+                    color = MetaToolsTokens.StreetMagenta,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.testTag("swap_error_text"),
+                )
+            }
+
+            if (xmr.quotes.isEmpty() && !xmr.quotesLoading) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(MetaToolsTokens.CrtBlackGlass)
+                        .border(1.dp, MetaToolsTokens.GrooveHighlight, RoundedCornerShape(10.dp))
+                        .padding(12.dp),
+                ) {
+                    Text(
+                        text = if (!xmr.quotesHasFetched) {
+                            "Enter BTC amount & tap Fetch Tor Quotes"
+                        } else {
+                            "No zero-JS quotes returned for ${xmr.quotesBtcAmount} BTC."
+                        },
+                        color = MetaToolsTokens.PhosphorMutedHint,
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.testTag("swap_quotes_empty_text"),
+                    )
+                }
+            } else if (xmr.quotes.isNotEmpty()) {
+                HardwareSectionHeader("Live Zero-JS Offers (${xmr.quotes.size})")
+                xmr.quotes.forEach { quote ->
+                    // Single combined badge strictly enforcing <= 2:1 UI label density
+                    val singleChip = when {
+                        quote.isOnionUrl && quote.neverKyc -> ".ONION·NO-KYC"
+                        quote.isOnionUrl -> ".ONION"
+                        quote.neverKyc -> "NO-KYC"
+                        else -> "CLEARNET"
+                    }
+                    val chipAccent = if (quote.isOnionUrl) {
+                        MetaToolsTokens.PhosphorOnionGreen
+                    } else {
+                        MetaToolsTokens.PhosphorLoadingAmber
+                    }
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MetaToolsTokens.AnodizedRecessedWell)
+                            .border(1.dp, MetaToolsTokens.GrooveHighlight, RoundedCornerShape(12.dp))
+                            .padding(12.dp)
+                            .testTag("swap_quote_card_${quote.id}"),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = quote.provider,
+                                    color = Color(0xFFF0F4F8),
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                val rateSuffix = if (quote.rateXmrPerBtc.isNotBlank()) {
+                                    " · 1 BTC ≈ ${quote.rateXmrPerBtc} XMR"
+                                } else {
+                                    ""
+                                }
+                                Text(
+                                    text = "${quote.estimatedXmr} XMR$rateSuffix",
+                                    color = MetaToolsTokens.PhosphorOnionGreen,
+                                    fontSize = 11.5.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            HardwareStatusChip(
+                                text = singleChip,
+                                accent = chipAccent,
+                            )
+                        }
+
+                        if (!quote.neverKyc && quote.kycWarning.isNotBlank()) {
+                            Text(
+                                text = quote.kycWarning,
+                                color = MetaToolsTokens.PhosphorLoadingAmber,
+                                fontSize = 10.5.sp,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+
+                        HardwareBezelButton(
+                            text = "Swap in Browser",
+                            primary = true,
+                            compact = true,
+                            onClick = { onLaunchQuoteInBrowser(quote, btcAmount.trim()) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("swap_launch_${quote.id}"),
+                        )
+                    }
+                }
+            }
+
+            if (xmr.activeTrackedSwaps.isNotEmpty()) {
+                EngravedGrooveDivider()
+                HardwareSectionHeader("Tracked Swaps (${xmr.activeTrackedSwaps.size})")
+                xmr.activeTrackedSwaps.forEach { swap ->
+                    val statusBadge = when (swap.status) {
+                        "completed" -> "COMPLETED"
+                        "awaiting_btc_deposit" -> "DEPOSIT BTC"
+                        else -> "AWAITING FORM"
+                    }
+                    val statusAccent = when (swap.status) {
+                        "completed" -> MetaToolsTokens.PhosphorOnionGreen
+                        else -> MetaToolsTokens.PhosphorLoadingAmber
+                    }
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MetaToolsTokens.AnodizedRecessedWell)
+                            .border(1.dp, MetaToolsTokens.GrooveHighlight, RoundedCornerShape(12.dp))
+                            .padding(12.dp)
+                            .testTag("tracked_swap_${swap.swapId}"),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "${swap.provider} · ${swap.btcAmount} BTC",
+                                    color = Color(0xFFF0F4F8),
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                val subLine = if (swap.status == "completed" && swap.receivedXmr != "0") {
+                                    "Received +${swap.receivedXmr} XMR"
+                                } else if (swap.btcDepositAddress.isNotBlank()) {
+                                    "BTC In: ${truncateCryptoAddress(swap.btcDepositAddress)}"
+                                } else {
+                                    "Payout: ${truncateCryptoAddress(swap.subaddress)}"
+                                }
+                                Text(
+                                    text = subLine,
+                                    color = MetaToolsTokens.StencilInk,
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            HardwareStatusChip(
+                                text = statusBadge,
+                                accent = statusAccent,
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            HardwareBezelButton(
+                                text = "Open Order Page",
+                                compact = true,
+                                onClick = { onOpenTrackedSwapPage(swap) },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("tracked_swap_open_${swap.swapId}"),
+                            )
+                            if (swap.btcDepositAddress.isNotBlank()) {
+                                HardwareBezelButton(
+                                    text = "Copy BTC Deposit",
+                                    compact = true,
+                                    onClick = { copyString(swap.btcDepositAddress) },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("tracked_swap_copy_btc_${swap.swapId}"),
+                                )
+                            } else {
+                                HardwareBezelButton(
+                                    text = "Copy 8…",
+                                    compact = true,
+                                    onClick = { copyString(swap.subaddress) },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("tracked_swap_copy_xmr_${swap.swapId}"),
+                                )
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            HardwareBezelButton(
+                                text = "Sync Payout",
+                                compact = true,
+                                onClick = onSyncWallet,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("tracked_swap_sync_${swap.swapId}"),
+                            )
+                            HardwareBezelButton(
+                                text = "Dismiss",
+                                danger = true,
+                                compact = true,
+                                onClick = { onDismissSwap(swap.swapId) },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("tracked_swap_dismiss_${swap.swapId}"),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// 10. Compact Bottom-Docked Active Swap Browser HUD (`active_swap_hud`)
+// ============================================================================
+
+@Composable
+fun ActiveSwapBrowserHud(
+    swap: OvNative.TrackedBtcXmrSwap,
+    syncing: Boolean,
+    onCopyText: (String) -> Unit,
+    onSyncPayout: () -> Unit,
+    onOpenWallet: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val clipboard = LocalClipboardManager.current
+    val shape = RoundedCornerShape(14.dp)
+
+    fun copyString(text: String) {
+        if (text.isBlank()) return
+        runCatching { clipboard.setText(AnnotatedString(text)) }
+        onCopyText(text)
+    }
+
+    val statusChip = when (swap.status) {
+        "completed" -> "PAID +${swap.receivedXmr} XMR"
+        "awaiting_btc_deposit" -> "DEPOSIT BTC"
+        else -> "FILL 8…"
+    }
+    val accent = if (swap.status == "completed") {
+        MetaToolsTokens.PhosphorOnionGreen
+    } else {
+        MetaToolsTokens.PhosphorLoadingAmber
+    }
+
+    SensitiveContentEffect()
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth(0.92f)
+            .metaToolsDropShadow(cornerRadius = 14.dp)
+            .clip(shape)
+            .background(MetaToolsTokens.AnodizedSurface)
+            .border(1.2.dp, MetaToolsTokens.AnodizedBevelLight, shape)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .testTag("active_swap_hud"),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Canvas(modifier = Modifier.size(8.dp)) {
+                drawRecessedGlassLedBead(
+                    center = center,
+                    beadDiameterPx = 6.dp.toPx(),
+                    litColor = if (swap.status == "completed") {
+                        MetaToolsTokens.LedGreen
+                    } else {
+                        MetaToolsTokens.LedAmber
+                    },
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "${swap.provider} · ${swap.btcDepositAmount.ifBlank { swap.btcAmount }} BTC",
+                color = Color(0xFFF0F4F8),
+                fontSize = 12.5.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(6.dp))
+            HardwareStatusChip(text = statusChip, accent = accent)
+            Spacer(Modifier.width(6.dp))
+            HardwareBezelButton(
+                text = "✕",
+                compact = true,
+                onClick = onDismiss,
+                modifier = Modifier.testTag("active_swap_hud_dismiss"),
+            )
+        }
+
+        when (swap.status) {
+            "awaiting_btc_deposit" -> {
+                if (swap.btcDepositAddress.isNotBlank()) {
+                    Text(
+                        text = truncateCryptoAddress(swap.btcDepositAddress),
+                        color = MetaToolsTokens.PhosphorLoadingAmber,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag("active_swap_hud_btc_addr_text"),
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    HardwareBezelButton(
+                        text = "Copy BTC Addr",
+                        primary = true,
+                        compact = true,
+                        enabled = swap.btcDepositAddress.isNotBlank(),
+                        onClick = { copyString(swap.btcDepositAddress) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("active_swap_copy_btc_addr"),
+                    )
+                    HardwareBezelButton(
+                        text = "Copy BTC Amt",
+                        compact = true,
+                        onClick = { copyString(swap.btcDepositAmount.ifBlank { swap.btcAmount }) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("active_swap_copy_btc_amt"),
+                    )
+                }
+                HardwareBezelButton(
+                    text = if (syncing) "Syncing XMR…" else "Sync XMR Payout",
+                    compact = true,
+                    enabled = !syncing,
+                    onClick = onSyncPayout,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("active_swap_sync_button"),
+                )
+            }
+
+            "completed" -> {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    HardwareBezelButton(
+                        text = "Open Wallet",
+                        primary = true,
+                        compact = true,
+                        onClick = onOpenWallet,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("active_swap_open_wallet"),
+                    )
+                    HardwareBezelButton(
+                        text = if (syncing) "Syncing…" else "Sync XMR",
+                        compact = true,
+                        enabled = !syncing,
+                        onClick = onSyncPayout,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("active_swap_sync_button"),
+                    )
+                }
+            }
+
+            else -> {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    HardwareBezelButton(
+                        text = "Copy 8… Subaddress",
+                        primary = true,
+                        compact = true,
+                        enabled = swap.subaddress.isNotBlank(),
+                        onClick = { copyString(swap.subaddress) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("active_swap_copy_subaddress"),
+                    )
+                    HardwareBezelButton(
+                        text = if (syncing) "Syncing…" else "Sync XMR",
+                        compact = true,
+                        enabled = !syncing,
+                        onClick = onSyncPayout,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("active_swap_sync_button"),
+                    )
+                }
+            }
+        }
+    }
+}
+
+internal fun truncateCryptoAddress(address: String): String {
+    val clean = address.trim()
+    if (clean.length <= 18) return clean
+    return "${clean.take(10)}…${clean.takeLast(8)}"
 }

@@ -42,6 +42,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.onionvault.OvNative
 import dev.onionvault.platform.SensitiveContentEffect
 import dev.onionvault.platform.SurfaceFilterMode
 import dev.onionvault.ui.pods.MetaToolsBrowserShell
@@ -126,6 +127,25 @@ fun BrowserScreen(
     onOverlayOpenChanged: (Boolean) -> Unit = {},
     onSetPodsRetracted: (Boolean) -> Unit = {},
     onLoadLegalLines: suspend (String) -> List<String> = { emptyList() },
+    onOpenMoneroWallet: () -> Unit = {},
+    onDismissMoneroWallet: () -> Unit = {},
+    onOpenBtcXmrSwap: () -> Unit = {},
+    onDismissBtcXmrSwap: () -> Unit = {},
+    onCreateXmrWallet: (label: String) -> Unit = {},
+    onRestoreXmrWallet: (mnemonic: String, restoreHeight: Long) -> Unit = { _, _ -> },
+    onSyncXmrWallet: () -> Unit = {},
+    onNewXmrSubaddress: (label: String) -> Unit = {},
+    onSendXmr: (destinationAddress: String, amountXmr: String, sweepAll: Boolean) -> Unit = { _, _, _ -> },
+    onSetXmrDaemonEndpoint: (endpointUrl: String, mode: String) -> Unit = { _, _ -> },
+    onRevealXmrSeed: () -> Unit = {},
+    onHideXmrSeed: () -> Unit = {},
+    onDismissNewXmrSeedBackup: () -> Unit = {},
+    onDeleteXmrWallet: () -> Unit = {},
+    onFetchBtcSwapQuotes: (btcAmount: String) -> Unit = {},
+    onLaunchBtcSwapQuoteInBrowser: (quote: OvNative.BtcSwapQuoteItem, btcAmount: String) -> Unit = { _, _ -> },
+    onOpenTrackedSwapPage: (OvNative.TrackedBtcXmrSwap) -> Unit = {},
+    onDismissTrackedSwap: (swapId: String) -> Unit = {},
+    onDismissActiveSwapHud: (swapId: String) -> Unit = {},
     surface: @Composable () -> Unit = {},
     previewProgress: Float = 0f,
     showKeyManager: Boolean = false,
@@ -134,6 +154,8 @@ fun BrowserScreen(
     showTabs: Boolean = false,
     showSecurity: Boolean = false,
     showSettings: Boolean = false,
+    showMoneroWallet: Boolean = false,
+    showBtcXmrSwap: Boolean = false,
 ) {
     TrapTheme(
         family = state.themeFamily,
@@ -199,6 +221,25 @@ fun BrowserScreen(
             onOverlayOpenChanged = onOverlayOpenChanged,
             onSetPodsRetracted = onSetPodsRetracted,
             onLoadLegalLines = onLoadLegalLines,
+            onOpenMoneroWallet = onOpenMoneroWallet,
+            onDismissMoneroWallet = onDismissMoneroWallet,
+            onOpenBtcXmrSwap = onOpenBtcXmrSwap,
+            onDismissBtcXmrSwap = onDismissBtcXmrSwap,
+            onCreateXmrWallet = onCreateXmrWallet,
+            onRestoreXmrWallet = onRestoreXmrWallet,
+            onSyncXmrWallet = onSyncXmrWallet,
+            onNewXmrSubaddress = onNewXmrSubaddress,
+            onSendXmr = onSendXmr,
+            onSetXmrDaemonEndpoint = onSetXmrDaemonEndpoint,
+            onRevealXmrSeed = onRevealXmrSeed,
+            onHideXmrSeed = onHideXmrSeed,
+            onDismissNewXmrSeedBackup = onDismissNewXmrSeedBackup,
+            onDeleteXmrWallet = onDeleteXmrWallet,
+            onFetchBtcSwapQuotes = onFetchBtcSwapQuotes,
+            onLaunchBtcSwapQuoteInBrowser = onLaunchBtcSwapQuoteInBrowser,
+            onOpenTrackedSwapPage = onOpenTrackedSwapPage,
+            onDismissTrackedSwap = onDismissTrackedSwap,
+            onDismissActiveSwapHud = onDismissActiveSwapHud,
             surface = surface,
             previewProgress = previewProgress,
             showKeyManager = showKeyManager,
@@ -207,6 +248,8 @@ fun BrowserScreen(
             showTabs = showTabs,
             showSecurity = showSecurity,
             showSettings = showSettings,
+            showMoneroWallet = showMoneroWallet,
+            showBtcXmrSwap = showBtcXmrSwap,
         )
     }
 }
@@ -278,6 +321,25 @@ private fun BrowserScreenContent(
     onOverlayOpenChanged: (Boolean) -> Unit,
     onSetPodsRetracted: (Boolean) -> Unit,
     onLoadLegalLines: suspend (String) -> List<String>,
+    onOpenMoneroWallet: () -> Unit,
+    onDismissMoneroWallet: () -> Unit,
+    onOpenBtcXmrSwap: () -> Unit,
+    onDismissBtcXmrSwap: () -> Unit,
+    onCreateXmrWallet: (label: String) -> Unit,
+    onRestoreXmrWallet: (mnemonic: String, restoreHeight: Long) -> Unit,
+    onSyncXmrWallet: () -> Unit,
+    onNewXmrSubaddress: (label: String) -> Unit,
+    onSendXmr: (destinationAddress: String, amountXmr: String, sweepAll: Boolean) -> Unit,
+    onSetXmrDaemonEndpoint: (endpointUrl: String, mode: String) -> Unit,
+    onRevealXmrSeed: () -> Unit,
+    onHideXmrSeed: () -> Unit,
+    onDismissNewXmrSeedBackup: () -> Unit,
+    onDeleteXmrWallet: () -> Unit,
+    onFetchBtcSwapQuotes: (btcAmount: String) -> Unit,
+    onLaunchBtcSwapQuoteInBrowser: (quote: OvNative.BtcSwapQuoteItem, btcAmount: String) -> Unit,
+    onOpenTrackedSwapPage: (OvNative.TrackedBtcXmrSwap) -> Unit,
+    onDismissTrackedSwap: (swapId: String) -> Unit,
+    onDismissActiveSwapHud: (swapId: String) -> Unit,
     surface: @Composable () -> Unit,
     previewProgress: Float,
     showKeyManager: Boolean,
@@ -286,6 +348,8 @@ private fun BrowserScreenContent(
     showTabs: Boolean,
     showSecurity: Boolean,
     showSettings: Boolean,
+    showMoneroWallet: Boolean,
+    showBtcXmrSwap: Boolean,
 ) {
     val colors = TrapTheme.colors
     val scale = remember { Animatable(1f - previewProgress * 0.12f) }
@@ -335,6 +399,8 @@ private fun BrowserScreenContent(
             showKeyringModal = showKeyManager,
             showSettingsModal = showSettings,
             showLegalModal = showLegalNotices,
+            showMoneroWalletModal = showMoneroWallet,
+            showBtcXmrSwapModal = showBtcXmrSwap,
             onNavigate = onNavigate,
             onSwitchAdjacentTab = onSwitchAdjacentTab,
             onSelectTab = onSelectTab,
@@ -392,6 +458,25 @@ private fun BrowserScreenContent(
                 onOverlayOpenChanged(open)
             },
             onLoadLegalLines = onLoadLegalLines,
+            onOpenMoneroWallet = onOpenMoneroWallet,
+            onDismissMoneroWallet = onDismissMoneroWallet,
+            onOpenBtcXmrSwap = onOpenBtcXmrSwap,
+            onDismissBtcXmrSwap = onDismissBtcXmrSwap,
+            onCreateXmrWallet = onCreateXmrWallet,
+            onRestoreXmrWallet = onRestoreXmrWallet,
+            onSyncXmrWallet = onSyncXmrWallet,
+            onNewXmrSubaddress = onNewXmrSubaddress,
+            onSendXmr = onSendXmr,
+            onSetXmrDaemonEndpoint = onSetXmrDaemonEndpoint,
+            onRevealXmrSeed = onRevealXmrSeed,
+            onHideXmrSeed = onHideXmrSeed,
+            onDismissNewXmrSeedBackup = onDismissNewXmrSeedBackup,
+            onDeleteXmrWallet = onDeleteXmrWallet,
+            onFetchBtcSwapQuotes = onFetchBtcSwapQuotes,
+            onLaunchBtcSwapQuoteInBrowser = onLaunchBtcSwapQuoteInBrowser,
+            onOpenTrackedSwapPage = onOpenTrackedSwapPage,
+            onDismissTrackedSwap = onDismissTrackedSwap,
+            onDismissActiveSwapHud = onDismissActiveSwapHud,
             surface = {
                 Box(
                     modifier = Modifier
@@ -615,7 +700,11 @@ private fun PgpFieldOverlay(
         val viewportW = maxWidth
         val viewportH = maxHeight
 
-        fields.forEach { field ->
+        var renderedXmrInputPill = false
+        var renderedBtcDepositPill = false
+        var renderedMoneroUriPill = false
+
+        fields.forEachIndexed { index, field ->
             val bounds = field.bounds
             val anchorX = (viewportW * bounds.left + 8.dp).coerceIn(8.dp, (viewportW - 140.dp).coerceAtLeast(8.dp))
             val fieldHeight = viewportH * (bounds.bottom - bounds.top).coerceAtLeast(0f)
@@ -668,13 +757,64 @@ private fun PgpFieldOverlay(
                             )
                         }
                     }
+
+                    "xmr_address_input" -> {
+                        val tag = if (!renderedXmrInputPill) {
+                            renderedXmrInputPill = true
+                            "xmr_insert_subaddress_pill"
+                        } else {
+                            "xmr_insert_subaddress_pill_$index"
+                        }
+                        OvPgpPill(
+                            text = "Insert XMR Subaddress",
+                            kind = PgpPillKind.InsertXmrSubaddress,
+                            onClick = { onFieldAction(field) },
+                            modifier = Modifier.testTag(tag),
+                        )
+                    }
+
+                    "btc_deposit_address" -> {
+                        val tag = if (!renderedBtcDepositPill) {
+                            renderedBtcDepositPill = true
+                            "btc_copy_deposit_pill"
+                        } else {
+                            "btc_copy_deposit_pill_$index"
+                        }
+                        OvPgpPill(
+                            text = "Copy BTC Deposit",
+                            kind = PgpPillKind.CopyBtcDeposit,
+                            onClick = { onFieldAction(field) },
+                            modifier = Modifier.testTag(tag),
+                        )
+                    }
+
+                    "monero_uri" -> {
+                        val tag = if (!renderedMoneroUriPill) {
+                            renderedMoneroUriPill = true
+                            "xmr_pay_uri_pill"
+                        } else {
+                            "xmr_pay_uri_pill_$index"
+                        }
+                        OvPgpPill(
+                            text = "Pay XMR",
+                            kind = PgpPillKind.PayXmrUri,
+                            onClick = { onFieldAction(field) },
+                            modifier = Modifier.testTag(tag),
+                        )
+                    }
                 }
             }
         }
     }
 }
 
-private val EDITABLE_FIELD_KINDS = setOf("pgp_textarea", "textarea", "text_input", "editable")
+private val EDITABLE_FIELD_KINDS = setOf(
+    "pgp_textarea",
+    "textarea",
+    "text_input",
+    "editable",
+    "xmr_address_input",
+)
 
 private fun PgpFieldState.isEditablePubKeyTarget(): Boolean =
     kind == "pgp_public_key" && label.equals("Insert My PubKey", ignoreCase = true)

@@ -59,6 +59,7 @@ import dev.onionvault.ui.DecryptPassphraseRequestState
 import dev.onionvault.ui.EncryptRequestState
 import dev.onionvault.ui.FindInPageState
 import dev.onionvault.ui.KeyInfo
+import dev.onionvault.ui.MoneroWalletTab
 import dev.onionvault.ui.NormalizedBounds
 import dev.onionvault.ui.OvCrashScreen
 import dev.onionvault.ui.PgpFieldState
@@ -425,6 +426,39 @@ class MainActivity : FragmentActivity() {
                         LegalNotices.read(this@MainActivity, name)
                     }
                 },
+                onOpenMoneroWallet = { openMoneroWalletModal(MoneroWalletTab.Receive) },
+                onDismissMoneroWallet = { dismissMoneroWalletModal() },
+                onOpenBtcXmrSwap = { openBtcXmrSwapModal() },
+                onDismissBtcXmrSwap = { dismissBtcXmrSwapModal() },
+                onCreateXmrWallet = { label -> createXmrWallet(label) },
+                onRestoreXmrWallet = { mnemonic, restoreHeight ->
+                    restoreXmrWallet(mnemonic, restoreHeight)
+                },
+                onSyncXmrWallet = { syncXmrWallet() },
+                onNewXmrSubaddress = { label -> mintNewXmrSubaddress(label) },
+                onSendXmr = { dest, amount, sweep -> sendXmr(dest, amount, sweep) },
+                onSetXmrDaemonEndpoint = { url, mode -> setXmrDaemonEndpoint(url, mode) },
+                onRevealXmrSeed = { revealXmrSeed() },
+                onHideXmrSeed = {
+                    uiState = uiState.copy(xmr = uiState.xmr.copy(revealedMnemonic = null))
+                },
+                onDismissNewXmrSeedBackup = {
+                    uiState = uiState.copy(xmr = uiState.xmr.copy(newlyCreatedMnemonic = null))
+                },
+                onDeleteXmrWallet = { deleteXmrWallet() },
+                onFetchBtcSwapQuotes = { btcAmount -> fetchBtcSwapQuotes(btcAmount) },
+                onLaunchBtcSwapQuoteInBrowser = { quote, btcAmount ->
+                    launchBtcSwapQuoteInBrowser(quote, btcAmount)
+                },
+                onOpenTrackedSwapPage = { swap -> openTrackedSwapPage(swap) },
+                onDismissTrackedSwap = { swapId -> dismissTrackedSwap(swapId) },
+                onDismissActiveSwapHud = { swapId ->
+                    uiState = uiState.copy(
+                        xmr = uiState.xmr.copy(
+                            dismissedHudSwapIds = uiState.xmr.dismissedHudSwapIds + swapId,
+                        ),
+                    )
+                },
                 surface = {
                     ActiveBrowserSurfaceHost(activeTabId = uiState.activeTabId)
                 },
@@ -698,16 +732,18 @@ class MainActivity : FragmentActivity() {
         ensureControllersInitialized(initialUrl)
         refreshKeys()
         refreshClearnetRules()
+        refreshXmrStatus()
         startTorPolling()
     }
 
     private fun ensureControllersInitialized(initialUrl: String) {
         if (!controllersReady) {
             cdpController = CdpDomPgpController(
-                onNodesDetected = { tabId, _, domHtml, _ ->
+                onNodesDetected = { tabId, url, domHtml, nodes ->
                     if (controllersReady) {
                         tabSessionManager.recordTabDomHtml(tabId, domHtml)
                     }
+                    maybeAttachDetectedBtcDepositToActiveSwap(tabId, url, nodes)
                 },
             )
             tabSessionManager = TabSessionManager(
@@ -751,6 +787,24 @@ class MainActivity : FragmentActivity() {
                         uiState.status.startsWith("Navigation failed")
                     ) {
                         uiState = uiState.copy(status = "", blocked = false)
+                    }
+                },
+                onMoneroUriIntercepted = { payment ->
+                    openMoneroSendWithPayment(payment)
+                },
+                onInternalRouteIntercepted = { route ->
+                    when (route.lowercase()) {
+                        "about:wallet" -> {
+                            openMoneroWalletModal(MoneroWalletTab.Receive)
+                            true
+                        }
+
+                        "about:swap" -> {
+                            openBtcXmrSwapModal()
+                            true
+                        }
+
+                        else -> false
                     }
                 },
             )
@@ -1019,6 +1073,24 @@ class MainActivity : FragmentActivity() {
         if (!controllersReady) return
         val trimmed = rawInput.trim()
         if (trimmed.isEmpty()) return
+
+        if (trimmed.equals("about:wallet", ignoreCase = true)) {
+            openMoneroWalletModal(MoneroWalletTab.Receive)
+            return
+        }
+        if (trimmed.equals("about:swap", ignoreCase = true)) {
+            openBtcXmrSwapModal()
+            return
+        }
+        if (trimmed.startsWith("monero:", ignoreCase = true)) {
+            val payment = OvNative.parseMoneroUri(trimmed)
+            if (payment != null) {
+                openMoneroSendWithPayment(payment)
+            } else {
+                showStatus("Invalid Monero payment URI", blocked = true)
+            }
+            return
+        }
 
         activeSnapshotView = null
         resetFindInPage()
@@ -1574,7 +1646,9 @@ class MainActivity : FragmentActivity() {
             uiState.findInPage.visible ||
             uiState.pgp.encryptRequest != null ||
             uiState.pgp.decryptPassphraseRequest != null ||
-            uiState.pgp.plaintext != null
+            uiState.pgp.plaintext != null ||
+            uiState.xmr.walletSheetOpen ||
+            uiState.xmr.swapSheetOpen
         ) {
             uiState = uiState.copy(
                 contextMenu = null,
@@ -1585,6 +1659,11 @@ class MainActivity : FragmentActivity() {
                     encryptRequest = null,
                     decryptPassphraseRequest = null,
                     plaintext = null,
+                ),
+                xmr = uiState.xmr.copy(
+                    walletSheetOpen = false,
+                    swapSheetOpen = false,
+                    revealedMnemonic = null,
                 ),
             )
         }
@@ -1777,6 +1856,16 @@ class MainActivity : FragmentActivity() {
                 )
             } else {
                 uiState.pgp
+            },
+            xmr = if (active) {
+                uiState.xmr.copy(
+                    walletSheetOpen = false,
+                    swapSheetOpen = false,
+                    revealedMnemonic = null,
+                    newlyCreatedMnemonic = null,
+                )
+            } else {
+                uiState.xmr
             },
         )
     }
@@ -2051,6 +2140,31 @@ class MainActivity : FragmentActivity() {
                 } else {
                     val keyBlock = field.armored?.takeIf { it.isNotBlank() } ?: field.preview
                     importKey(keyBlock, "")
+                }
+            }
+
+            "xmr_address_input" -> {
+                insertXmrSubaddressIntoField(field)
+            }
+
+            "btc_deposit_address" -> {
+                val btcAddr = (field.armored?.takeIf { it.isNotBlank() } ?: field.preview).trim()
+                if (btcAddr.isNotEmpty()) {
+                    copyToClipboard(
+                        label = "BTC Deposit Address",
+                        text = btcAddr,
+                        toastMessage = "BTC deposit address copied to clipboard",
+                    )
+                }
+            }
+
+            "monero_uri" -> {
+                val rawUri = (field.armored?.takeIf { it.isNotBlank() } ?: field.preview).trim()
+                val payment = OvNative.parseMoneroUri(rawUri)
+                if (payment != null) {
+                    openMoneroSendWithPayment(payment)
+                } else {
+                    showStatus("Invalid Monero payment URI", blocked = true)
                 }
             }
         }
@@ -2339,6 +2453,7 @@ class MainActivity : FragmentActivity() {
 
     private fun withSecretKeyAuth(
         subtitle: String,
+        onError: (String) -> Unit = ::setPgpError,
         onAuthorized: () -> Unit,
     ) {
         if (!uiState.requireBiometric || isJvmUnitTestRuntime()) {
@@ -2350,7 +2465,7 @@ class MainActivity : FragmentActivity() {
             BiometricManager.Authenticators.DEVICE_CREDENTIAL
         val canAuth = BiometricManager.from(this).canAuthenticate(authenticators)
         if (canAuth != BiometricManager.BIOMETRIC_SUCCESS) {
-            setPgpError("Device authentication is required for secret keys, but no lock screen is enrolled.")
+            onError("Device authentication is required for secret keys, but no lock screen is enrolled.")
             return
         }
 
@@ -2363,7 +2478,7 @@ class MainActivity : FragmentActivity() {
                 }
 
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                    setPgpError(errString.toString())
+                    onError(errString.toString())
                 }
             },
         )
@@ -2373,6 +2488,650 @@ class MainActivity : FragmentActivity() {
             .setAllowedAuthenticators(authenticators)
             .build()
         prompt.authenticate(promptInfo)
+    }
+
+    private fun authenticateBiometricIfRequired(
+        subtitle: String,
+        onAuthorized: () -> Unit,
+    ) {
+        withSecretKeyAuth(
+            subtitle = subtitle,
+            onError = ::setXmrError,
+            onAuthorized = onAuthorized,
+        )
+    }
+
+    // --- Monero Light Wallet (`crates/ov-xmr`) & Browser-Wired BTC -> XMR Swap Actions ---
+
+    private fun openMoneroWalletModal(initialTab: MoneroWalletTab) {
+        uiState = uiState.copy(
+            xmr = uiState.xmr.copy(
+                walletSheetOpen = true,
+                walletInitialTab = initialTab,
+                swapSheetOpen = false,
+                error = null,
+            ),
+        )
+        refreshXmrStatus()
+    }
+
+    private fun dismissMoneroWalletModal() {
+        uiState = uiState.copy(
+            xmr = uiState.xmr.copy(
+                walletSheetOpen = false,
+                revealedMnemonic = null,
+                error = null,
+            ),
+        )
+    }
+
+    private fun openBtcXmrSwapModal() {
+        uiState = uiState.copy(
+            xmr = uiState.xmr.copy(
+                swapSheetOpen = true,
+                walletSheetOpen = false,
+                error = null,
+            ),
+        )
+        refreshXmrStatus()
+    }
+
+    private fun dismissBtcXmrSwapModal() {
+        uiState = uiState.copy(
+            xmr = uiState.xmr.copy(
+                swapSheetOpen = false,
+                error = null,
+            ),
+        )
+    }
+
+    private fun openMoneroSendWithPayment(payment: OvNative.MoneroPaymentRequest) {
+        uiState = uiState.copy(
+            xmr = uiState.xmr.copy(
+                walletSheetOpen = true,
+                swapSheetOpen = false,
+                walletInitialTab = MoneroWalletTab.Send,
+                prefillSendAddress = payment.address,
+                prefillSendAmount = payment.amountXmr,
+                prefillSendDescription = payment.txDescription,
+                error = null,
+            ),
+        )
+        refreshXmrStatus()
+    }
+
+    private fun refreshXmrStatus() {
+        if (!OvNative.isLoaded) return
+        lifecycleScope.launch {
+            val status = withContext(Dispatchers.IO) {
+                val json = runCatching { OvNative.nativeXmrStatusJson() }.getOrDefault("")
+                OvNative.parseXmrStatus(json)
+            }
+            uiState = uiState.copy(
+                xmr = uiState.xmr.copy(status = status),
+            )
+        }
+    }
+
+    private fun createXmrWallet(label: String) {
+        if (!OvNative.isLoaded) {
+            setXmrError("Native Monero wallet engine is unavailable.")
+            return
+        }
+        val cleanLabel = label.trim().ifEmpty { "Trap Light Wallet" }
+        authenticateBiometricIfRequired(subtitle = "Unlock Keystore to wrap new Monero spend key") {
+            uiState = uiState.copy(
+                xmr = uiState.xmr.copy(creatingOrRestoring = true, error = null),
+            )
+            lifecycleScope.launch {
+                val (seedRes, statusSnap) = withContext(Dispatchers.IO) {
+                    val rawSeed = runCatching {
+                        OvNative.nativeXmrCreateWalletJson(cleanLabel)
+                    }.getOrDefault("")
+                    val parsedSeed = OvNative.parseXmrSeedResult(rawSeed)
+                    val rawStatus = runCatching { OvNative.nativeXmrStatusJson() }.getOrDefault("")
+                    parsedSeed to OvNative.parseXmrStatus(rawStatus)
+                }
+                if (seedRes.ok) {
+                    uiState = uiState.copy(
+                        xmr = uiState.xmr.copy(
+                            status = statusSnap,
+                            creatingOrRestoring = false,
+                            newlyCreatedMnemonic = seedRes.mnemonic.takeIf { it.isNotBlank() },
+                            error = null,
+                        ),
+                    )
+                    showStatus("Created Monero light wallet", blocked = false)
+                } else {
+                    uiState = uiState.copy(
+                        xmr = uiState.xmr.copy(
+                            status = statusSnap,
+                            creatingOrRestoring = false,
+                            error = seedRes.error.ifBlank { "Monero wallet creation failed." },
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun restoreXmrWallet(mnemonic: String, restoreHeight: Long) {
+        if (!OvNative.isLoaded) {
+            setXmrError("Native Monero wallet engine is unavailable.")
+            return
+        }
+        val cleanMnemonic = mnemonic.trim()
+        if (cleanMnemonic.isEmpty()) {
+            setXmrError("Enter your 25-word Monero recovery seed.")
+            return
+        }
+        authenticateBiometricIfRequired(subtitle = "Unlock Keystore to wrap restored Monero spend key") {
+            uiState = uiState.copy(
+                xmr = uiState.xmr.copy(creatingOrRestoring = true, error = null),
+            )
+            lifecycleScope.launch {
+                val (seedRes, statusSnap) = withContext(Dispatchers.IO) {
+                    val rawSeed = runCatching {
+                        OvNative.nativeXmrRestoreWalletJson(
+                            cleanMnemonic,
+                            restoreHeight.coerceAtLeast(0L),
+                        )
+                    }.getOrDefault("")
+                    val parsedSeed = OvNative.parseXmrSeedResult(rawSeed)
+                    val rawStatus = runCatching { OvNative.nativeXmrStatusJson() }.getOrDefault("")
+                    parsedSeed to OvNative.parseXmrStatus(rawStatus)
+                }
+                if (seedRes.ok) {
+                    uiState = uiState.copy(
+                        xmr = uiState.xmr.copy(
+                            status = statusSnap,
+                            creatingOrRestoring = false,
+                            newlyCreatedMnemonic = null,
+                            revealedMnemonic = null,
+                            error = null,
+                        ),
+                    )
+                    showStatus("Restored Monero light wallet", blocked = false)
+                } else {
+                    uiState = uiState.copy(
+                        xmr = uiState.xmr.copy(
+                            status = statusSnap,
+                            creatingOrRestoring = false,
+                            error = seedRes.error.ifBlank { "Monero seed restore failed." },
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun syncXmrWallet() {
+        if (!OvNative.isLoaded) {
+            setXmrError("Native Monero wallet engine is unavailable.")
+            return
+        }
+        if (uiState.xmr.syncing) return
+        uiState = uiState.copy(
+            xmr = uiState.xmr.copy(syncing = true, error = null),
+        )
+        lifecycleScope.launch {
+            val synced = withContext(Dispatchers.IO) {
+                val json = runCatching { OvNative.nativeXmrSyncJson() }.getOrDefault("")
+                OvNative.parseXmrStatus(json)
+            }
+            uiState = uiState.copy(
+                xmr = uiState.xmr.copy(
+                    status = if (synced.hasWallet || uiState.xmr.status.hasWallet.not()) {
+                        synced
+                    } else {
+                        uiState.xmr.status
+                    },
+                    syncing = false,
+                    error = if (!synced.ok) {
+                        synced.error.ifBlank { "Tor Monero sync failed." }
+                    } else {
+                        null
+                    },
+                ),
+            )
+        }
+    }
+
+    private fun mintNewXmrSubaddress(label: String) {
+        if (!OvNative.isLoaded) {
+            setXmrError("Native Monero wallet engine is unavailable.")
+            return
+        }
+        lifecycleScope.launch {
+            val (subRes, statusSnap) = withContext(Dispatchers.IO) {
+                val subJson = runCatching {
+                    OvNative.nativeXmrNewSubaddressJson(label.trim())
+                }.getOrDefault("")
+                val parsedSub = OvNative.parseXmrNewSubaddressResult(subJson)
+                val statusJson = runCatching { OvNative.nativeXmrStatusJson() }.getOrDefault("")
+                parsedSub to OvNative.parseXmrStatus(statusJson)
+            }
+            if (subRes.ok && subRes.address.isNotBlank()) {
+                uiState = uiState.copy(
+                    xmr = uiState.xmr.copy(status = statusSnap, error = null),
+                )
+                copyToClipboard(
+                    label = "Monero Subaddress",
+                    text = subRes.address,
+                    toastMessage = "Minted & copied 8… subaddress #${subRes.index}",
+                )
+            } else {
+                setXmrError(subRes.error.ifBlank { "Could not mint Monero subaddress." })
+            }
+        }
+    }
+
+    private fun sendXmr(destination: String, amountXmr: String, sweepAll: Boolean) {
+        if (!OvNative.isLoaded) {
+            setXmrError("Native Monero wallet engine is unavailable.")
+            return
+        }
+        val cleanDest = destination.trim()
+        if (!OvNative.isValidMoneroAddress(cleanDest)) {
+            setXmrError("Enter a valid Monero 4… or 8… mainnet address.")
+            return
+        }
+        authenticateBiometricIfRequired(subtitle = "Authenticate to sign and broadcast Monero transaction") {
+            uiState = uiState.copy(
+                xmr = uiState.xmr.copy(
+                    sending = true,
+                    lastTxid = null,
+                    lastFeeXmr = null,
+                    error = null,
+                ),
+            )
+            lifecycleScope.launch {
+                val (sendRes, statusSnap) = withContext(Dispatchers.IO) {
+                    val rawSend = runCatching {
+                        OvNative.nativeXmrSendJson(cleanDest, amountXmr.trim(), sweepAll)
+                    }.getOrDefault("")
+                    val parsedSend = OvNative.parseXmrSendResult(rawSend)
+                    val rawStatus = runCatching { OvNative.nativeXmrStatusJson() }.getOrDefault("")
+                    parsedSend to OvNative.parseXmrStatus(rawStatus)
+                }
+                if (sendRes.ok && sendRes.txid.isNotBlank()) {
+                    uiState = uiState.copy(
+                        xmr = uiState.xmr.copy(
+                            status = statusSnap,
+                            sending = false,
+                            prefillSendAddress = "",
+                            prefillSendAmount = "",
+                            prefillSendDescription = "",
+                            lastTxid = sendRes.txid,
+                            lastFeeXmr = sendRes.feeXmr,
+                            error = null,
+                        ),
+                    )
+                    showStatus("Broadcast Monero tx ${sendRes.txid.take(12)}…", blocked = false)
+                } else {
+                    uiState = uiState.copy(
+                        xmr = uiState.xmr.copy(
+                            status = statusSnap,
+                            sending = false,
+                            error = sendRes.error.ifBlank { "Monero transaction failed." },
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun setXmrDaemonEndpoint(endpointUrl: String, mode: String) {
+        if (!OvNative.isLoaded) {
+            setXmrError("Native Monero wallet engine is unavailable.")
+            return
+        }
+        lifecycleScope.launch {
+            val updated = withContext(Dispatchers.IO) {
+                val json = runCatching {
+                    OvNative.nativeXmrSetDaemonEndpointJson(endpointUrl.trim(), mode.trim())
+                }.getOrDefault("")
+                OvNative.parseXmrStatus(json)
+            }
+            if (updated.ok) {
+                uiState = uiState.copy(
+                    xmr = uiState.xmr.copy(status = updated, error = null),
+                )
+                showStatus("Saved Monero Tor sync endpoint", blocked = false)
+            } else {
+                setXmrError(updated.error.ifBlank { "Invalid Monero daemon endpoint." })
+            }
+        }
+    }
+
+    private fun revealXmrSeed() {
+        if (!OvNative.isLoaded) {
+            setXmrError("Native Monero wallet engine is unavailable.")
+            return
+        }
+        authenticateBiometricIfRequired(subtitle = "Authenticate to reveal 25-word Monero recovery seed") {
+            lifecycleScope.launch {
+                val res = withContext(Dispatchers.IO) {
+                    val json = runCatching { OvNative.nativeXmrExportSeedJson() }.getOrDefault("")
+                    OvNative.parseXmrSeedResult(json)
+                }
+                if (res.ok && res.mnemonic.isNotBlank()) {
+                    uiState = uiState.copy(
+                        xmr = uiState.xmr.copy(revealedMnemonic = res.mnemonic, error = null),
+                    )
+                } else {
+                    setXmrError(res.error.ifBlank { "Could not export Monero recovery seed." })
+                }
+            }
+        }
+    }
+
+    private fun deleteXmrWallet() {
+        if (!OvNative.isLoaded) return
+        authenticateBiometricIfRequired(subtitle = "Authenticate to delete Monero wallet from device") {
+            lifecycleScope.launch {
+                val (deleted, statusSnap) = withContext(Dispatchers.IO) {
+                    val ok = runCatching { OvNative.nativeXmrDeleteWallet() }.getOrDefault(false)
+                    val json = runCatching { OvNative.nativeXmrStatusJson() }.getOrDefault("")
+                    ok to OvNative.parseXmrStatus(json)
+                }
+                if (deleted) {
+                    uiState = uiState.copy(
+                        xmr = uiState.xmr.copy(
+                            status = statusSnap,
+                            revealedMnemonic = null,
+                            newlyCreatedMnemonic = null,
+                            lastTxid = null,
+                            lastFeeXmr = null,
+                            activeSwapTabMap = emptyMap(),
+                            error = null,
+                        ),
+                    )
+                    showStatus("Deleted Monero wallet", blocked = false)
+                } else {
+                    setXmrError("Could not delete Monero wallet.")
+                }
+            }
+        }
+    }
+
+    private fun fetchBtcSwapQuotes(btcAmount: String) {
+        if (!OvNative.isLoaded) {
+            setXmrError("Native swap quote aggregator is unavailable.")
+            return
+        }
+        val cleanAmount = btcAmount.trim()
+        if (cleanAmount.isEmpty()) {
+            setXmrError("Enter a BTC amount first.")
+            return
+        }
+        uiState = uiState.copy(
+            xmr = uiState.xmr.copy(
+                quotesBtcAmount = cleanAmount,
+                quotesLoading = true,
+                error = null,
+            ),
+        )
+        lifecycleScope.launch {
+            val res = withContext(Dispatchers.IO) {
+                val json = runCatching {
+                    OvNative.nativeXmrFetchBtcSwapQuotesJson(cleanAmount)
+                }.getOrDefault("")
+                OvNative.parseBtcSwapQuotes(json)
+            }
+            uiState = uiState.copy(
+                xmr = uiState.xmr.copy(
+                    quotes = if (res.ok) res.quotes else emptyList(),
+                    quotesSourceOnion = res.sourceOnion,
+                    quotesFetchedAtEpochSecs = res.fetchedAtEpochSecs,
+                    quotesHasFetched = true,
+                    quotesLoading = false,
+                    error = if (!res.ok) {
+                        res.error.ifBlank { "Could not fetch Tor BTC -> XMR quotes." }
+                    } else {
+                        null
+                    },
+                ),
+            )
+        }
+    }
+
+    private fun launchBtcSwapQuoteInBrowser(
+        quote: OvNative.BtcSwapQuoteItem,
+        btcAmount: String,
+    ) {
+        if (!OvNative.isLoaded || !controllersReady) return
+        val cleanAmount = btcAmount.trim().ifEmpty { uiState.xmr.quotesBtcAmount.ifBlank { "0.01" } }
+        lifecycleScope.launch {
+            val outcome = withContext(Dispatchers.IO) {
+                var createdMnemonic: String? = null
+                val initialStatus = OvNative.parseXmrStatus(
+                    runCatching { OvNative.nativeXmrStatusJson() }.getOrDefault(""),
+                )
+                if (!initialStatus.hasWallet) {
+                    val created = OvNative.parseXmrSeedResult(
+                        runCatching {
+                            OvNative.nativeXmrCreateWalletJson("Trap Light Wallet")
+                        }.getOrDefault(""),
+                    )
+                    if (!created.ok) {
+                        return@withContext Triple(null, initialStatus, created.error)
+                    }
+                    createdMnemonic = created.mnemonic.takeIf { it.isNotBlank() }
+                }
+                val actionJson = OvNative.buildSwapCreateActionJson(
+                    provider = quote.provider,
+                    btcAmount = cleanAmount,
+                    quotedXmr = quote.estimatedXmr,
+                    launchUrl = quote.launchUrl,
+                )
+                val swapRes = OvNative.parseXmrSwapsAction(
+                    runCatching { OvNative.nativeXmrSwapsActionJson(actionJson) }.getOrDefault(""),
+                )
+                val updatedStatus = OvNative.parseXmrStatus(
+                    runCatching { OvNative.nativeXmrStatusJson() }.getOrDefault(""),
+                )
+                if (!swapRes.ok || swapRes.swap == null) {
+                    Triple(null, updatedStatus, swapRes.error.ifBlank { "Could not create swap subaddress." })
+                } else {
+                    Triple(swapRes.swap to createdMnemonic, updatedStatus, "")
+                }
+            }
+
+            val createdPair = outcome.first
+            val updatedStatus = outcome.second
+            val err = outcome.third
+            if (createdPair == null) {
+                uiState = uiState.copy(
+                    xmr = uiState.xmr.copy(
+                        status = updatedStatus,
+                        error = err,
+                    ),
+                )
+                return@launch
+            }
+
+            val trackedSwap = createdPair.first
+            val createdSeed = createdPair.second
+            val targetTabId = tabSessionManager.activeTabId.value ?: tabSessionManager.ensureInitialTab()
+            uiState = uiState.copy(
+                xmr = uiState.xmr.copy(
+                    status = updatedStatus,
+                    swapSheetOpen = false,
+                    walletSheetOpen = false,
+                    newlyCreatedMnemonic = createdSeed ?: uiState.xmr.newlyCreatedMnemonic,
+                    activeSwapTabMap = uiState.xmr.activeSwapTabMap + (targetTabId to trackedSwap.swapId),
+                    dismissedHudSwapIds = uiState.xmr.dismissedHudSwapIds - trackedSwap.swapId,
+                    error = null,
+                ),
+            )
+            navigate(quote.launchUrl, targetTabId)
+        }
+    }
+
+    private fun openTrackedSwapPage(swap: OvNative.TrackedBtcXmrSwap) {
+        if (!controllersReady) return
+        val targetUrl = swap.orderUrl.ifBlank { swap.launchUrl }.trim()
+        if (targetUrl.isEmpty()) return
+        val targetTabId = tabSessionManager.activeTabId.value ?: tabSessionManager.ensureInitialTab()
+        uiState = uiState.copy(
+            xmr = uiState.xmr.copy(
+                swapSheetOpen = false,
+                activeSwapTabMap = uiState.xmr.activeSwapTabMap + (targetTabId to swap.swapId),
+                dismissedHudSwapIds = uiState.xmr.dismissedHudSwapIds - swap.swapId,
+            ),
+        )
+        navigate(targetUrl, targetTabId)
+    }
+
+    private fun dismissTrackedSwap(swapId: String) {
+        if (!OvNative.isLoaded || swapId.isBlank()) return
+        lifecycleScope.launch {
+            val updatedStatus = withContext(Dispatchers.IO) {
+                runCatching {
+                    OvNative.nativeXmrSwapsActionJson(OvNative.buildSwapDismissActionJson(swapId))
+                }
+                val json = runCatching { OvNative.nativeXmrStatusJson() }.getOrDefault("")
+                OvNative.parseXmrStatus(json)
+            }
+            uiState = uiState.copy(
+                xmr = uiState.xmr.copy(
+                    status = updatedStatus,
+                    activeSwapTabMap = uiState.xmr.activeSwapTabMap.filterValues { it != swapId },
+                    dismissedHudSwapIds = uiState.xmr.dismissedHudSwapIds + swapId,
+                ),
+            )
+        }
+    }
+
+    private fun insertXmrSubaddressIntoField(field: PgpFieldState) {
+        if (!OvNative.isLoaded) {
+            showStatus("Native Monero wallet engine is unavailable.", blocked = true)
+            return
+        }
+        val activeTabId = if (controllersReady) tabSessionManager.activeTabId.value.orEmpty() else ""
+        val mappedSwapSubaddress = uiState.xmr.activeSwapForTab(activeTabId)
+            ?.subaddress
+            ?.takeIf { it.isNotBlank() }
+
+        lifecycleScope.launch {
+            val resolved = withContext(Dispatchers.IO) {
+                if (!mappedSwapSubaddress.isNullOrBlank()) {
+                    val statusSnap = OvNative.parseXmrStatus(
+                        runCatching { OvNative.nativeXmrStatusJson() }.getOrDefault(""),
+                    )
+                    return@withContext Triple(mappedSwapSubaddress, null as String?, statusSnap)
+                }
+
+                var createdSeed: String? = null
+                var statusSnap = OvNative.parseXmrStatus(
+                    runCatching { OvNative.nativeXmrStatusJson() }.getOrDefault(""),
+                )
+                if (!statusSnap.hasWallet) {
+                    val seedRes = OvNative.parseXmrSeedResult(
+                        runCatching {
+                            OvNative.nativeXmrCreateWalletJson("Trap Light Wallet")
+                        }.getOrDefault(""),
+                    )
+                    if (!seedRes.ok) {
+                        return@withContext Triple("", null, statusSnap)
+                    }
+                    createdSeed = seedRes.mnemonic.takeIf { it.isNotBlank() }
+                    statusSnap = OvNative.parseXmrStatus(
+                        runCatching { OvNative.nativeXmrStatusJson() }.getOrDefault(""),
+                    )
+                }
+
+                var subaddress = statusSnap.activeSubaddress.trim()
+                if (subaddress.isEmpty() || !subaddress.startsWith("8")) {
+                    val minted = OvNative.parseXmrNewSubaddressResult(
+                        runCatching {
+                            OvNative.nativeXmrNewSubaddressJson("Swap Payout")
+                        }.getOrDefault(""),
+                    )
+                    if (minted.ok && minted.address.isNotBlank()) {
+                        subaddress = minted.address
+                    }
+                    statusSnap = OvNative.parseXmrStatus(
+                        runCatching { OvNative.nativeXmrStatusJson() }.getOrDefault(""),
+                    )
+                }
+                Triple(subaddress.ifBlank { statusSnap.primaryAddress }, createdSeed, statusSnap)
+            }
+
+            val targetSubaddress = resolved.first
+            val createdSeed = resolved.second
+            val statusSnap = resolved.third
+            uiState = uiState.copy(
+                xmr = uiState.xmr.copy(
+                    status = statusSnap,
+                    newlyCreatedMnemonic = createdSeed ?: uiState.xmr.newlyCreatedMnemonic,
+                ),
+            )
+            if (targetSubaddress.isBlank()) {
+                showStatus("Could not generate Monero 8… subaddress.", blocked = true)
+                return@launch
+            }
+            writeValueIntoActiveTabField(
+                cdpNodeId = field.cdpNodeId,
+                backendNodeId = field.backendNodeId,
+                newValue = targetSubaddress,
+                successNotice = "Inserted 8… Monero subaddress and verified DOM field",
+            )
+        }
+    }
+
+    private fun maybeAttachDetectedBtcDepositToActiveSwap(
+        tabId: String,
+        url: String,
+        nodes: List<CdpDomPgpController.DetectedPgpNode>,
+    ) {
+        if (!OvNative.isLoaded || nodes.isEmpty()) return
+        val btcNode = nodes.firstOrNull {
+            it.kind == "btc_deposit_address" && it.text.isNotBlank()
+        } ?: return
+
+        val candidateSwap = uiState.xmr.activeSwapForTab(tabId)
+            ?.takeIf { it.status == "awaiting_form" || it.status == "awaiting_btc_deposit" }
+            ?: return
+
+        val detectedAddr = btcNode.text.trim()
+        val detectedAmt = btcNode.fingerprintHint.trim()
+        val cleanOrderUrl = url.trim()
+        if (candidateSwap.status == "awaiting_btc_deposit" &&
+            candidateSwap.btcDepositAddress == detectedAddr &&
+            (cleanOrderUrl.isEmpty() || candidateSwap.orderUrl == cleanOrderUrl)
+        ) {
+            return
+        }
+
+        lifecycleScope.launch {
+            val updatedStatus = withContext(Dispatchers.IO) {
+                val actionJson = OvNative.buildSwapUpdateOrderActionJson(
+                    swapId = candidateSwap.swapId,
+                    btcDepositAddress = detectedAddr,
+                    btcDepositAmount = detectedAmt.ifBlank { candidateSwap.btcAmount },
+                    providerOrderId = candidateSwap.providerOrderId,
+                    orderUrl = cleanOrderUrl.ifBlank { candidateSwap.orderUrl },
+                    status = "awaiting_btc_deposit",
+                )
+                runCatching { OvNative.nativeXmrSwapsActionJson(actionJson) }
+                val rawStatus = runCatching { OvNative.nativeXmrStatusJson() }.getOrDefault("")
+                OvNative.parseXmrStatus(rawStatus)
+            }
+            uiState = uiState.copy(
+                xmr = uiState.xmr.copy(
+                    status = updatedStatus,
+                    dismissedHudSwapIds = uiState.xmr.dismissedHudSwapIds - candidateSwap.swapId,
+                ),
+            )
+        }
+    }
+
+    private fun setXmrError(message: String) {
+        uiState = uiState.copy(
+            xmr = uiState.xmr.copy(error = message),
+        )
     }
 
     private fun resolveInitialUrl(savedInstanceState: Bundle?, launchIntent: Intent?): String {

@@ -143,18 +143,22 @@ class CdpDomPgpController(
                         val nodeId = obj.optInt("nodeId", 0)
                         val backendNodeId = obj.optInt("backendNodeId", 0)
                         if (nodeId <= 0 && backendNodeId <= 0) continue
+                        val kind = obj.optString("kind", "")
                         val isSearchLike = obj.optBoolean("isSearchLike", false)
-                        if (isSearchLike && !includeSearchFields) continue
+                        val isCryptoOverlayKind = kind == "xmr_address_input" ||
+                            kind == "btc_deposit_address" ||
+                            kind == "monero_uri"
+                        if (isSearchLike && !includeSearchFields && !isCryptoOverlayKind) continue
                         add(
                             ClassifiedNodeEntry(
                                 nodeId = nodeId,
                                 backendNodeId = backendNodeId,
                                 tag = obj.optString("tag", ""),
-                                kind = obj.optString("kind", ""),
+                                kind = kind,
                                 actionLabel = obj.optString("actionLabel", ""),
                                 text = obj.optString("text", ""),
                                 fingerprintHint = obj.optString("fingerprintHint", ""),
-                                isSearchLike = isSearchLike,
+                                isSearchLike = isSearchLike && !isCryptoOverlayKind,
                             ),
                         )
                     }
@@ -504,6 +508,24 @@ class CdpDomPgpController(
                 runOnMain { onComplete(outcome) }
             }
         }
+    }
+
+    fun replaceFieldValue(
+        browser: CefpackSession,
+        nodeId: Int,
+        backendNodeId: Int = 0,
+        newValue: String,
+        tabId: String? = null,
+        onComplete: (FieldMutationOutcome) -> Unit = {},
+    ) {
+        writeFieldValue(
+            browser = browser,
+            nodeId = nodeId,
+            backendNodeId = backendNodeId,
+            newValue = newValue,
+            tabId = tabId,
+            onComplete = onComplete,
+        )
     }
 
     fun detachTab(tabId: String) {

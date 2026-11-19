@@ -550,14 +550,19 @@ enum class PgpPillKind {
     DecryptBlock,
     InsertPubKey,
     ImportKey,
+    InsertXmrSubaddress,
+    CopyBtcDeposit,
+    PayXmrUri,
 }
 
 /**
- * Anchored PGP overlay pill using exact `App.tsx` tokens:
+ * Anchored PGP & Monero/Swap overlay pill using exact `App.tsx` / hardware tokens:
  * - `Encrypt Field`: `#E8A33D` fill, `#1A1510` ink
  * - `Decrypt Block`: `#2EC4B0` fill, `#062A26` ink
  * - `Insert My PubKey`: `#3ECF6A` fill, `#0B2A16` ink
  * - `Import Key`: `#2EC4B0` / `#00E4C1` fill, `#062A26` ink
+ * - `Insert XMR Subaddress` / `Pay XMR`: `#FF6B1A` fill, `#180800` ink
+ * - `Copy BTC Deposit`: `#FFB000` fill, `#1A1000` ink
  */
 @Composable
 fun OvPgpPill(
@@ -572,6 +577,9 @@ fun OvPgpPill(
         PgpPillKind.DecryptBlock -> Triple(colors.pgpDecryptFill, colors.pgpDecryptInk, TrapGlyph.Decrypt)
         PgpPillKind.InsertPubKey -> Triple(colors.pgpPubKeyFill, colors.pgpPubKeyInk, TrapGlyph.Key)
         PgpPillKind.ImportKey -> Triple(colors.pgpDecryptFill, colors.pgpDecryptInk, TrapGlyph.Import)
+        PgpPillKind.InsertXmrSubaddress -> Triple(Color(0xFFFF6B1A), Color(0xFF180800), TrapGlyph.Monero)
+        PgpPillKind.CopyBtcDeposit -> Triple(Color(0xFFFFB000), Color(0xFF1A1000), TrapGlyph.Copy)
+        PgpPillKind.PayXmrUri -> Triple(Color(0xFFFF6B1A), Color(0xFF180800), TrapGlyph.Monero)
     }
     val shape = RoundedCornerShape(50)
     Row(

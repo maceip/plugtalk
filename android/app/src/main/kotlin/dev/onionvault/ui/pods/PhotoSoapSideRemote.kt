@@ -201,6 +201,8 @@ fun PhotoSoapSideRemote(
     onZoomIn: () -> Unit = {},
     onZoomOut: () -> Unit = {},
     onOpenFindInPage: () -> Unit = {},
+    onOpenMoneroWallet: () -> Unit = {},
+    onOpenBtcXmrSwap: () -> Unit = {},
 ) {
     val haptics = LocalHapticFeedback.current
     val grainBrush = rememberPewterGrainBrush()
@@ -296,6 +298,8 @@ fun PhotoSoapSideRemote(
                 onZoomIn = onZoomIn,
                 onZoomOut = onZoomOut,
                 onOpenFindInPage = onOpenFindInPage,
+                onOpenMoneroWallet = onOpenMoneroWallet,
+                onOpenBtcXmrSwap = onOpenBtcXmrSwap,
             )
         }
     }
@@ -429,6 +433,8 @@ private fun ExpandedRemoteFace(
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit,
     onOpenFindInPage: () -> Unit,
+    onOpenMoneroWallet: () -> Unit,
+    onOpenBtcXmrSwap: () -> Unit,
 ) {
     val headerLabel = when (mode) {
         RemoteMode.Menu -> "REMOTE"
@@ -495,6 +501,8 @@ private fun ExpandedRemoteFace(
                     state = state,
                     onCollapse = onCollapse,
                     onOpenOnionDirectory = { onSelectMode(RemoteMode.OnionDirectory) },
+                    onOpenMoneroWallet = onOpenMoneroWallet,
+                    onOpenBtcXmrSwap = onOpenBtcXmrSwap,
                     onForward = onForward,
                     onReload = onReload,
                     onNewTab = onNewTab,
@@ -570,7 +578,16 @@ private fun RemoteMenuBody(
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit,
     onOpenFindInPage: () -> Unit,
+    onOpenMoneroWallet: () -> Unit,
+    onOpenBtcXmrSwap: () -> Unit,
 ) {
+    val activeSwapsCount = state.xmr.liveSwapsCount.takeIf { it > 0 }
+    val walletTrailingToken = if (state.xmr.status.hasWallet) {
+        "${state.xmr.status.unlockedBalanceXmr.take(6)} XMR"
+    } else {
+        "NEW"
+    }
+
     RemoteEngravedRowButton(
         label = "Onion Sites",
         glyph = TrapGlyph.Onion,
@@ -578,6 +595,32 @@ private fun RemoteMenuBody(
         ledIdleColor = MetaToolsTokens.LedGreen,
         onClick = onOpenOnionDirectory,
         testTag = "remote_onion_sites",
+    )
+    RemoteEngravedRowButton(
+        label = "Monero Wallet",
+        glyph = TrapGlyph.Monero,
+        trailingToken = walletTrailingToken,
+        ledIdleColor = if (state.xmr.status.hasWallet) {
+            MetaToolsTokens.LedGreen
+        } else {
+            MetaToolsTokens.LedAmber
+        },
+        onClick = {
+            onCollapse()
+            onOpenMoneroWallet()
+        },
+        testTag = "remote_monero_wallet",
+    )
+    RemoteEngravedRowButton(
+        label = "Swap BTC → XMR",
+        glyph = TrapGlyph.Wallet,
+        trailingToken = activeSwapsCount?.let { "$it LIVE" },
+        ledIdleColor = if (activeSwapsCount != null) MetaToolsTokens.LedAmber else null,
+        onClick = {
+            onCollapse()
+            onOpenBtcXmrSwap()
+        },
+        testTag = "remote_btc_xmr_swap",
     )
     RemoteEngravedRowButton(
         label = "Forward",

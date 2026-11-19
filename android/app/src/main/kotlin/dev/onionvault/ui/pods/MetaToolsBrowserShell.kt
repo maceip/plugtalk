@@ -55,6 +55,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.onionvault.OvNative
 import dev.onionvault.platform.SurfaceFilterMode
 import dev.onionvault.ui.BrowserUiState
 import dev.onionvault.ui.ClearnetPromptState
@@ -101,6 +102,8 @@ fun MetaToolsBrowserShell(
     showKeyringModal: Boolean = false,
     showSettingsModal: Boolean = false,
     showLegalModal: Boolean = false,
+    showMoneroWalletModal: Boolean = false,
+    showBtcXmrSwapModal: Boolean = false,
     onNavigate: (String) -> Unit = {},
     onSwitchAdjacentTab: (delta: Int) -> Unit = {},
     onSelectTab: (String) -> Unit = {},
@@ -162,6 +165,25 @@ fun MetaToolsBrowserShell(
     onDismissSelectionPgp: () -> Unit = {},
     onOverlayOpenChanged: (Boolean) -> Unit = {},
     onLoadLegalLines: suspend (String) -> List<String> = { emptyList() },
+    onOpenMoneroWallet: () -> Unit = {},
+    onDismissMoneroWallet: () -> Unit = {},
+    onOpenBtcXmrSwap: () -> Unit = {},
+    onDismissBtcXmrSwap: () -> Unit = {},
+    onCreateXmrWallet: (label: String) -> Unit = {},
+    onRestoreXmrWallet: (mnemonic: String, restoreHeight: Long) -> Unit = { _, _ -> },
+    onSyncXmrWallet: () -> Unit = {},
+    onNewXmrSubaddress: (label: String) -> Unit = {},
+    onSendXmr: (destinationAddress: String, amountXmr: String, sweepAll: Boolean) -> Unit = { _, _, _ -> },
+    onSetXmrDaemonEndpoint: (endpointUrl: String, mode: String) -> Unit = { _, _ -> },
+    onRevealXmrSeed: () -> Unit = {},
+    onHideXmrSeed: () -> Unit = {},
+    onDismissNewXmrSeedBackup: () -> Unit = {},
+    onDeleteXmrWallet: () -> Unit = {},
+    onFetchBtcSwapQuotes: (btcAmount: String) -> Unit = {},
+    onLaunchBtcSwapQuoteInBrowser: (quote: OvNative.BtcSwapQuoteItem, btcAmount: String) -> Unit = { _, _ -> },
+    onOpenTrackedSwapPage: (OvNative.TrackedBtcXmrSwap) -> Unit = {},
+    onDismissTrackedSwap: (swapId: String) -> Unit = {},
+    onDismissActiveSwapHud: (swapId: String) -> Unit = {},
     surface: @Composable () -> Unit = {},
 ) {
     val density = LocalDensity.current
@@ -176,6 +198,12 @@ fun MetaToolsBrowserShell(
     var keyringOpen by remember(showKeyringModal) { mutableStateOf(showKeyringModal) }
     var settingsOpen by remember(showSettingsModal) { mutableStateOf(showSettingsModal) }
     var legalOpen by remember(showLegalModal) { mutableStateOf(showLegalModal) }
+    var localWalletOpen by remember(showMoneroWalletModal) { mutableStateOf(showMoneroWalletModal) }
+    var localSwapOpen by remember(showBtcXmrSwapModal) { mutableStateOf(showBtcXmrSwapModal) }
+    var localDismissedHudIds by remember { mutableStateOf(emptySet<String>()) }
+
+    val walletModalOpen = localWalletOpen || state.xmr.walletSheetOpen
+    val swapModalOpen = localSwapOpen || state.xmr.swapSheetOpen
 
     var retracted by remember(podsRetracted) { mutableStateOf(podsRetracted) }
 
@@ -192,6 +220,8 @@ fun MetaToolsBrowserShell(
             keyringOpen = false
             settingsOpen = false
             legalOpen = false
+            localWalletOpen = false
+            localSwapOpen = false
         }
     }
 
@@ -260,6 +290,8 @@ fun MetaToolsBrowserShell(
             keyringOpen ||
             settingsOpen ||
             legalOpen ||
+            walletModalOpen ||
+            swapModalOpen ||
             state.clearnetPrompt != null ||
             state.pgp.plaintext != null ||
             state.pgp.encryptRequest != null ||
@@ -570,7 +602,53 @@ fun MetaToolsBrowserShell(
                             restoreRetractedPods()
                             onOpenFindInPage()
                         },
+                        onOpenMoneroWallet = {
+                            restoreRetractedPods()
+                            localSwapOpen = false
+                            localWalletOpen = true
+                            onOpenMoneroWallet()
+                        },
+                        onOpenBtcXmrSwap = {
+                            restoreRetractedPods()
+                            localWalletOpen = false
+                            localSwapOpen = true
+                            onOpenBtcXmrSwap()
+                        },
                     )
+                }
+
+                // 3f. Compact Bottom-Docked Active Swap Browser HUD (NEVER on StartPage!)
+                val activeSwap = state.xmr.activeSwapForTab(state.activeTabId)
+                    ?.takeIf { it.swapId !in localDismissedHudIds }
+                if (!state.isStartPage &&
+                    !state.isScreenRecordingActive &&
+                    activeSwap != null
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                            .padding(bottom = if (retracted) 18.dp else 354.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        ActiveSwapBrowserHud(
+                            swap = activeSwap,
+                            syncing = state.xmr.syncing,
+                            onCopyText = onCopyText,
+                            onSyncPayout = onSyncXmrWallet,
+                            onOpenWallet = {
+                                restoreRetractedPods()
+                                localSwapOpen = false
+                                localWalletOpen = true
+                                onOpenMoneroWallet()
+                            },
+                            onDismiss = {
+                                localDismissedHudIds = localDismissedHudIds + activeSwap.swapId
+                                onDismissActiveSwapHud(activeSwap.swapId)
+                            },
+                        )
+                    }
                 }
             }
 
@@ -594,7 +672,12 @@ fun MetaToolsBrowserShell(
             }
 
             // 4. Sculptural Hardware Modal Pods
-            val managementModalOpen = tabsOpen || keyringOpen || settingsOpen || legalOpen
+            val managementModalOpen = tabsOpen ||
+                keyringOpen ||
+                settingsOpen ||
+                legalOpen ||
+                walletModalOpen ||
+                swapModalOpen
 
             if (!managementModalOpen) {
                 state.clearnetPrompt?.let { prompt ->
@@ -634,6 +717,63 @@ fun MetaToolsBrowserShell(
                     onInsertMyPubKey = onInsertMyPubKey,
                     onDecryptArmoredText = onDecryptArmoredText,
                     onEncryptSelectedText = onEncryptSelectedText,
+                )
+            }
+
+            if (walletModalOpen && !state.isScreenRecordingActive) {
+                MoneroWalletHardwarePod(
+                    xmr = state.xmr,
+                    onCreateWallet = onCreateXmrWallet,
+                    onRestoreWallet = onRestoreXmrWallet,
+                    onSyncWallet = onSyncXmrWallet,
+                    onNewSubaddress = onNewXmrSubaddress,
+                    onSendXmr = onSendXmr,
+                    onSetDaemonEndpoint = onSetXmrDaemonEndpoint,
+                    onRevealSeed = onRevealXmrSeed,
+                    onHideSeed = onHideXmrSeed,
+                    onDismissNewSeedBackup = onDismissNewXmrSeedBackup,
+                    onDeleteWallet = onDeleteXmrWallet,
+                    onOpenSwap = {
+                        localWalletOpen = false
+                        onDismissMoneroWallet()
+                        localSwapOpen = true
+                        onOpenBtcXmrSwap()
+                    },
+                    onCopyText = onCopyText,
+                    onDismiss = {
+                        localWalletOpen = false
+                        onDismissMoneroWallet()
+                    },
+                )
+            }
+
+            if (swapModalOpen && !state.isScreenRecordingActive) {
+                BtcToXmrSwapHardwarePod(
+                    xmr = state.xmr,
+                    onFetchQuotes = onFetchBtcSwapQuotes,
+                    onLaunchQuoteInBrowser = { quote, amount ->
+                        localSwapOpen = false
+                        onDismissBtcXmrSwap()
+                        onLaunchBtcSwapQuoteInBrowser(quote, amount)
+                    },
+                    onOpenTrackedSwapPage = { tracked ->
+                        localSwapOpen = false
+                        onDismissBtcXmrSwap()
+                        onOpenTrackedSwapPage(tracked)
+                    },
+                    onDismissSwap = onDismissTrackedSwap,
+                    onSyncWallet = onSyncXmrWallet,
+                    onOpenWallet = {
+                        localSwapOpen = false
+                        onDismissBtcXmrSwap()
+                        localWalletOpen = true
+                        onOpenMoneroWallet()
+                    },
+                    onCopyText = onCopyText,
+                    onDismiss = {
+                        localSwapOpen = false
+                        onDismissBtcXmrSwap()
+                    },
                 )
             }
 

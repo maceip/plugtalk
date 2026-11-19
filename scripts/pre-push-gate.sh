@@ -64,21 +64,35 @@ if home:
         if nvm_bins:
             prepend_if_dir(nvm_bins[0])
 
-# Prefer rustup stable toolchain + ~/.cargo/bin ahead of Homebrew standalone rustc so
+# Prefer rustup toolchain + ~/.cargo/bin ahead of Homebrew standalone rustc so
 # cargo-ndk always finds aarch64-linux-android and x86_64-linux-android target stdlibs.
 if home:
     prepend_if_dir(f"{home}/.cargo/bin")
     arch = platform.machine()
     rust_arch = "aarch64" if arch in ("arm64", "aarch64") else arch
-    stable_bins = sorted(
-        glob.glob(f"{home}/.rustup/toolchains/stable-{rust_arch}-*/bin")
-        + glob.glob(f"{home}/.rustup/toolchains/stable-*/bin"),
-        reverse=True,
+    stable_bins = (
+        sorted(
+            glob.glob(f"{home}/.rustup/toolchains/stable-{rust_arch}-*/bin")
+            + glob.glob(f"{home}/.rustup/toolchains/stable-*/bin"),
+            reverse=True,
+        )
+        + sorted(
+            glob.glob(f"{home}/.rustup/toolchains/[0-9]*-{rust_arch}-*/bin")
+            + glob.glob(f"{home}/.rustup/toolchains/*/bin"),
+            reverse=True,
+        )
     )
+    chosen_rust_bin = ""
     for sb in stable_bins:
         if os.path.isfile(os.path.join(sb, "cargo")) and os.path.isfile(os.path.join(sb, "rustc")):
-            prepend_if_dir(sb)
-            break
+            if not chosen_rust_bin:
+                chosen_rust_bin = sb
+            tc_root = os.path.dirname(sb)
+            if os.path.isdir(os.path.join(tc_root, "lib", "rustlib", "aarch64-linux-android")):
+                chosen_rust_bin = sb
+                break
+    if chosen_rust_bin:
+        prepend_if_dir(chosen_rust_bin)
 
 # Discover JAVA_HOME >= 25 (`cefpack-android.aar` uses class file version 69.0 / JDK 25, matching CI).
 def java_major(jh: str) -> int:

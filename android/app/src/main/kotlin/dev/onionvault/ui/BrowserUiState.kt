@@ -22,6 +22,7 @@ data class BrowserUiState(
     val backPreview: BackPreviewState? = null,
     val tor: TorBootstrapState = TorBootstrapState(),
     val pgp: PgpOverlayState = PgpOverlayState(),
+    val xmr: MoneroUiState = MoneroUiState(),
     val status: String = "",
     val blocked: Boolean = false,
     val tabs: List<TabItemState> = listOf(
@@ -247,3 +248,69 @@ data class SelectionPgpUiState(
     val armored: String = "",
     val fingerprintHint: String = "",
 )
+
+enum class MoneroWalletTab {
+    Receive,
+    Send,
+    NodeSeed,
+}
+
+/**
+ * Real, persisted Monero light wallet & browser-wired BTC -> XMR swap UI state
+ * backed exclusively by `OvNative` (`crates/ov-xmr` + Keystore SQLite).
+ */
+@Immutable
+data class MoneroUiState(
+    val status: OvNative.XmrStatusSnapshot = OvNative.XmrStatusSnapshot(),
+    val quotes: List<OvNative.BtcSwapQuoteItem> = emptyList(),
+    val quotesBtcAmount: String = "0.01",
+    val quotesSourceOnion: String = "",
+    val quotesFetchedAtEpochSecs: Long = 0L,
+    val quotesHasFetched: Boolean = false,
+    val quotesLoading: Boolean = false,
+    val syncing: Boolean = false,
+    val sending: Boolean = false,
+    val creatingOrRestoring: Boolean = false,
+    val walletSheetOpen: Boolean = false,
+    val walletInitialTab: MoneroWalletTab = MoneroWalletTab.Receive,
+    val swapSheetOpen: Boolean = false,
+    val revealedMnemonic: String? = null,
+    val newlyCreatedMnemonic: String? = null,
+    val prefillSendAddress: String = "",
+    val prefillSendAmount: String = "",
+    val prefillSendDescription: String = "",
+    val activeSwapTabMap: Map<String, String> = emptyMap(),
+    val dismissedHudSwapIds: Set<String> = emptySet(),
+    val lastTxid: String? = null,
+    val lastFeeXmr: String? = null,
+    val error: String? = null,
+) {
+    val activeTrackedSwaps: List<OvNative.TrackedBtcXmrSwap>
+        get() = status.swaps.filter { it.status != "dismissed" }
+
+    val liveSwapsCount: Int
+        get() = status.swaps.count {
+            it.status == "awaiting_form" || it.status == "awaiting_btc_deposit"
+        }
+
+    fun activeSwapForTab(tabId: String): OvNative.TrackedBtcXmrSwap? {
+        val mappedId = activeSwapTabMap[tabId]
+        if (!mappedId.isNullOrBlank()) {
+            status.swaps.firstOrNull {
+                it.swapId == mappedId &&
+                    it.status != "dismissed" &&
+                    it.swapId !in dismissedHudSwapIds
+            }?.let { return it }
+        }
+        return activeSwap
+    }
+
+    val activeSwap: OvNative.TrackedBtcXmrSwap?
+        get() = status.swaps.firstOrNull {
+            it.swapId !in dismissedHudSwapIds && (
+                it.status == "awaiting_btc_deposit" ||
+                    it.status == "awaiting_form" ||
+                    it.status == "completed"
+                )
+        }
+}
