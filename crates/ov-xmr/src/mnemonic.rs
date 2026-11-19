@@ -234,7 +234,7 @@ mod tests {
             let decoded = decode_mnemonic(phrase).unwrap();
             assert_eq!(*decoded, spend);
 
-            let view_scalar = Scalar::hash(&*decoded);
+            let view_scalar = Scalar::hash(*decoded);
             let view_dalek: curve25519_dalek::Scalar = view_scalar.into();
             assert_eq!(hex::encode(view_dalek.to_bytes()), view_hex);
         }

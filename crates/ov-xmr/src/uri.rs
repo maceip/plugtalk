@@ -177,15 +177,11 @@ pub fn parse_monero_uri(raw_uri: &str) -> Result<MoneroUri> {
                         tx_amount_atomic = Some(atomic);
                     }
                 }
-                "recipient_name" => {
-                    if !value.is_empty() {
-                        recipient_name = Some(value.into_owned());
-                    }
+                "recipient_name" if !value.is_empty() => {
+                    recipient_name = Some(value.into_owned());
                 }
-                "tx_description" | "message" => {
-                    if !value.is_empty() {
-                        tx_description = Some(value.into_owned());
-                    }
+                "tx_description" | "message" if !value.is_empty() => {
+                    tx_description = Some(value.into_owned());
                 }
                 _ => {}
             }

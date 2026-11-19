@@ -652,7 +652,7 @@ pub async fn send_xmr(
     }
 
     // Sort largest-first to minimize Ring-16 input count and fee.
-    spendable.sort_by(|a, b| b.0.amount_atomic.cmp(&a.0.amount_atomic));
+    spendable.sort_by_key(|a| std::cmp::Reverse(a.0.amount_atomic));
 
     let selected: Vec<(StoredOutput, WalletOutput)> = if sweep_all {
         spendable.into_iter().take(MAX_TX_INPUTS).collect()

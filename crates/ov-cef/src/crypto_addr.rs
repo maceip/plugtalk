@@ -121,7 +121,7 @@ fn validate_btc_base58check(addr: &str) -> Option<String> {
         }
     }
 
-    let mut b256 = vec![0u8; 32];
+    let mut b256 = [0u8; 32];
     for &ch in addr.as_bytes() {
         let digit = BASE58_ALPHABET.iter().position(|&c| c == ch)? as u32;
         let mut carry = digit;
