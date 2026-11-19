@@ -5,18 +5,21 @@
  * Boots an in-process HTTP + WebSocket test harness speaking the real `@limrun/api`
  * control-plane (`/v1/android_instances`, `/v1/assets`) and Android instance data-plane
  * (`/ws`, `/sync/state`, `/sync`, `/logcat`) protocols, then executes `scripts/limrun-gate.sh`
- * across six mandatory scenarios:
+ * across seven mandatory scenarios:
  *   1. Missing `LIM_API_KEY` / `LIMRUN_API_KEY` -> fails closed immediately (exit 1).
  *   2. Immediate launch crash (`appExit` + native `Fatal signal 6`) -> captures forensic
  *      artifacts, deletes the cloud instance cleanly, and fails closed (exit 1).
  *   3. Healthy boot + Arti Tor bootstrap + UI tap on DuckDuckGo `.onion` card + circuit
  *      isolation (`iso-duckduckgogg42xj`) + 3-round `LiveOnionPgpTotpPrizeTest` prize won
- *      -> writes launch/onion/prize screenshots + logs + summary, deletes the cloud
- *      instance cleanly, and exits 0.
+ *      + `LiveOnionXmr402BtcSwapTest` BTC->XMR swap & `XMR402` `OutProofV2` unlock won
+ *      -> writes launch/onion/prize/xmr402-swap screenshots + logs + summary (`hardTimeout: '30m'`),
+ *      deletes the cloud instance cleanly, and exits 0.
  *   4. ARMv9 MTE child-process `SIGTRAP` (`Fatal signal 5`) -> fails closed (exit 1).
  *   5. Premature unrendered `.onion` tab (`Stop loading` + missing `OnLoadEnd`) -> fails closed (exit 1).
  *   6. Failed or unverified `LiveOnionPgpTotpPrizeTest` (missing `PRIZE_WON_JSON` / `roundsCompleted !== 3`)
  *      -> fails closed and deletes the cloud instance cleanly (exit 1).
+ *   7. Passed `LiveOnionPgpTotpPrizeTest` followed by failed or unverified `LiveOnionXmr402BtcSwapTest`
+ *      (missing `XMR402_SWAP_WON_JSON`) -> fails closed and deletes the cloud instance cleanly (exit 1).
  */
 
 import assert from 'node:assert/strict';
@@ -38,6 +41,13 @@ const ONE_PX_PNG_BASE64 =
 
 const SAMPLE_TOTP_ONION_URL =
   'http://b36xrf3dwtizfea3z6pl2i2el2vzraju4gdddben5eqpicdswuvfgoyd.onion/';
+const SAMPLE_XMR402_ONION_URL =
+  'http://6e52wfxr64n2zxjhalrldumrjuqfzjh5gbnyarrkuxrvjrusf25g6yad.onion/vault';
+const SAMPLE_SWAP_BTC_ADDR = 'bcrt1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqdku202';
+const SAMPLE_SWAP_XMR_SUBADDR =
+  '85PyHN9RSbEPG92XWsJzsUYT5jQh7RtPr2waThEbAwzwaXMAVJaV7HKT6k52NKZmdFDjmhaZw96DqCJxC8dFkTvhFm7gFHF';
+const SAMPLE_XMR402_TXID =
+  '7322c8adaca4e0ee7985771ad0569a069143fb5c5e00ba033df97d524393b457';
 
 function ensureToolsDir() {
   if (
@@ -115,6 +125,7 @@ async function startMockLimrunServer(toolsDir, mode) {
     launched: false,
     navigatedOnion: false,
     ranPrizeInstrumentation: false,
+    ranXmr402Instrumentation: false,
     injectedTransientTryAgain: false,
     createPayloads: [],
   };
@@ -145,7 +156,7 @@ async function startMockLimrunServer(toolsDir, mode) {
             },
             spec: {
               inactivityTimeout: parsed?.spec?.inactivityTimeout || '10m',
-              hardTimeout: parsed?.spec?.hardTimeout || '25m',
+              hardTimeout: parsed?.spec?.hardTimeout || '30m',
               region: 'us-west1',
             },
             status: {
@@ -446,6 +457,22 @@ async function startMockLimrunServer(toolsDir, mode) {
           }
           state.ranPrizeInstrumentation = true;
           out = '';
+        } else if (
+          cmd.includes('nohup sh -c') &&
+          cmd.includes('dev.onionvault.LiveOnionXmr402BtcSwapTest')
+        ) {
+          state.ranXmr402Instrumentation = true;
+          out = '';
+        } else if (cmd.includes('__TRAP_INST_EXIT__=') && cmd.includes('trap-xmr402-inst.exit')) {
+          if (!state.ranXmr402Instrumentation) {
+            out = '__TRAP_INST_RUNNING__\n';
+          } else if (mode === 'xmr402_gate_failed') {
+            out =
+              '__TRAP_INST_EXIT__=1\nINSTRUMENTATION_STATUS_CODE: -2\nTime: 5.2\nFAILURES!!!\nTests run: 1,  Failures: 1\n';
+          } else {
+            out =
+              '__TRAP_INST_EXIT__=0\nINSTRUMENTATION_STATUS_CODE: 0\nTime: 24.6\n\nOK (1 test)\n';
+          }
         } else if (cmd.includes('__TRAP_INST_EXIT__=')) {
           if (!state.ranPrizeInstrumentation) {
             out = '__TRAP_INST_RUNNING__\n';
@@ -455,6 +482,15 @@ async function startMockLimrunServer(toolsDir, mode) {
           } else {
             out =
               '__TRAP_INST_EXIT__=0\nINSTRUMENTATION_STATUS_CODE: 0\nTime: 18.4\n\nOK (1 test)\n';
+          }
+        } else if (
+          (cmd.includes('trap-xmr402-swap-won.png') || cmd.includes('files/xmr402-swap-won.png')) &&
+          cmd.includes('base64')
+        ) {
+          if (state.ranXmr402Instrumentation && mode !== 'xmr402_gate_failed') {
+            out = `${ONE_PX_PNG_BASE64}\n`;
+          } else {
+            out = '';
           }
         } else if (
           (cmd.includes('trap-prize-won.png') || cmd.includes('files/prize-won.png')) &&
@@ -498,7 +534,10 @@ async function startMockLimrunServer(toolsDir, mode) {
                 );
               }
             }
-            if (state.ranPrizeInstrumentation && mode === 'healthy') {
+            if (
+              state.ranPrizeInstrumentation &&
+              (mode === 'healthy' || mode === 'xmr402_gate_failed')
+            ) {
               const prizeRecord = JSON.stringify({
                 onionUrl: SAMPLE_TOTP_ONION_URL,
                 roundsCompleted: 3,
@@ -511,6 +550,20 @@ async function startMockLimrunServer(toolsDir, mode) {
                   'ROUNDS VERIFIED: 3 OF 3',
               });
               lines.push(`11-15 03:00:36.900  9412  9430 I TrapPrizeGate: PRIZE_WON_JSON=${prizeRecord}`);
+            }
+            if (state.ranXmr402Instrumentation && mode === 'healthy') {
+              const xmrRecord = JSON.stringify({
+                onionUrl: SAMPLE_XMR402_ONION_URL,
+                swapBtcAddress: SAMPLE_SWAP_BTC_ADDR,
+                swapXmrSubaddress: SAMPLE_SWAP_XMR_SUBADDR,
+                xmr402Txid: SAMPLE_XMR402_TXID,
+                proofPrefix: 'OutProofV21111111111111111',
+                prizeBanner:
+                  'PRIZE: OBSIDIAN-MONERO-CITADEL :: ZERO-JS XMR402 + BTC-SWAP CHAMPION [SEAL-402XMR]',
+              });
+              lines.push(
+                `11-15 03:01:02.400  9610  9628 I TrapXmr402Gate: XMR402_SWAP_WON_JSON=${xmrRecord}`,
+              );
             }
             out = `${lines.join('\n')}\n`;
           }
@@ -631,7 +684,7 @@ async function runTests() {
     }
   }
 
-  console.log('== Test 3: Healthy boot + Tor + .onion UI tap + 3-round OpenPGP TOTP Prize Gate passes ==');
+  console.log('== Test 3: Healthy boot + Tor + .onion UI tap + Dual Live .onion E2E Gates (TOTP + XMR402 Swap) passes ==');
   {
     const mock = await startMockLimrunServer(toolsDir, 'healthy');
     const outDir = path.join(workDir, 'out-healthy');
@@ -644,6 +697,7 @@ async function runTests() {
         BOOT_WAIT_SECONDS: '10',
         ONION_WAIT_SECONDS: '10',
         PRIZE_WAIT_SECONDS: '30',
+        XMR402_WAIT_SECONDS: '30',
         STABILITY_SECONDS: '1',
         POLL_INTERVAL_MS: '200',
         GITHUB_REPOSITORY: 'maceip/trap',
@@ -655,7 +709,7 @@ async function runTests() {
         console.error('STDOUT:\n', res.stdout);
         console.error('STDERR:\n', res.stderr);
       }
-      assert.equal(res.status, 0, 'Healthy gate run with 3-round TOTP prize won must exit 0');
+      assert.equal(res.status, 0, 'Healthy gate run with both TOTP & XMR402 Swap gates won must exit 0');
       assert.deepEqual(
         mock.state.deletedInstances,
         mock.state.createdInstances,
@@ -663,6 +717,7 @@ async function runTests() {
       );
       const summary = JSON.parse(fs.readFileSync(path.join(outDir, 'limrun-summary.json'), 'utf8'));
       assert.equal(summary.passed, true);
+      assert.equal(summary.requestedSpec.hardTimeout, '30m');
       assert.equal(summary.installMethod, 'syncApp');
       assert.equal(summary.testInstallMethod, 'syncApp');
       assert.equal(summary.readiness.engineReady, true);
@@ -677,15 +732,23 @@ async function runTests() {
       assert.equal(summary.totpPrize.passed, true);
       assert.equal(summary.totpPrize.roundsCompleted, 3);
       assert.equal(summary.totpPrize.prizeBanner, 'HARNESS-PROTOCOL-TEST-VECTOR');
+      assert.equal(summary.xmr402SwapGate.passed, true);
+      assert.equal(summary.xmr402SwapGate.swapBtcAddress, SAMPLE_SWAP_BTC_ADDR);
+      assert.equal(summary.xmr402SwapGate.swapXmrSubaddress, SAMPLE_SWAP_XMR_SUBADDR);
+      assert.equal(summary.xmr402SwapGate.xmr402Txid, SAMPLE_XMR402_TXID);
+      assert.ok(summary.xmr402SwapGate.proofPrefix?.startsWith('OutProofV2'));
+      assert.ok(summary.xmr402SwapGate.prizeBanner?.includes('OBSIDIAN-MONERO-CITADEL'));
       assert.equal(mock.state.injectedTransientTryAgain, true);
       assert.match(res.stdout, /\[PRIZE WON\]/);
+      assert.match(res.stdout, /\[XMR402 \+ SWAP WON\]/);
       assert.equal(summary.appPid, '9001');
       assert.ok(fs.statSync(path.join(outDir, 'limrun-launch.png')).size > 0);
       assert.ok(fs.statSync(path.join(outDir, 'limrun-onion.png')).size > 0);
       assert.ok(fs.statSync(path.join(outDir, 'limrun-prize.png')).size > 0);
+      assert.ok(fs.statSync(path.join(outDir, 'limrun-xmr402-swap.png')).size > 0);
       assert.ok(fs.statSync(path.join(outDir, 'limrun-logcat.txt')).size > 0);
       assert.ok(fs.statSync(path.join(outDir, 'limrun-ui-tree.xml')).size > 0);
-      console.log('  PASS: Healthy gate verified syncApp + Tor + .onion smoke + 3-round OpenPGP TOTP prize + cleanup');
+      console.log('  PASS: Healthy gate verified syncApp + Tor + .onion smoke + TOTP prize + XMR402 BTC->XMR swap + cleanup');
     } finally {
       await mock.close();
     }
@@ -809,8 +872,49 @@ async function runTests() {
     }
   }
 
+  console.log('== Test 7: Passed TOTP Prize Gate followed by failed LiveOnionXmr402BtcSwapTest fails closed ==');
+  {
+    const mock = await startMockLimrunServer(toolsDir, 'xmr402_gate_failed');
+    const outDir = path.join(workDir, 'out-xmr402-failed');
+    try {
+      const res = await runGateAsync([apkPath, outDir, testApkPath], {
+        ...process.env,
+        LIM_API_KEY: 'lim_test_key_xmr402_fail',
+        LIMRUN_BASE_URL: mock.baseURL,
+        LIMRUN_TOOLS_DIR: toolsDir,
+        BOOT_WAIT_SECONDS: '8',
+        ONION_WAIT_SECONDS: '8',
+        PRIZE_WAIT_SECONDS: '15',
+        XMR402_WAIT_SECONDS: '15',
+        STABILITY_SECONDS: '0',
+        POLL_INTERVAL_MS: '200',
+      });
+      assert.notEqual(
+        res.status,
+        0,
+        'Gate must fail closed when LiveOnionXmr402BtcSwapTest fails or omits XMR402_SWAP_WON_JSON',
+      );
+      assert.deepEqual(mock.state.deletedInstances, mock.state.createdInstances);
+      const summary = JSON.parse(fs.readFileSync(path.join(outDir, 'limrun-summary.json'), 'utf8'));
+      assert.equal(summary.passed, false);
+      assert.equal(summary.totpPrize.passed, true);
+      assert.equal(summary.xmr402SwapGate.passed, false);
+      assert.ok(
+        summary.failures.some((f) => /LiveOnionXmr402BtcSwapTest did not pass/.test(f)),
+        `Expected XMR402 instrumentation failure in summary.failures: ${JSON.stringify(summary.failures)}`,
+      );
+      assert.ok(
+        summary.failures.some((f) => /XMR402_SWAP_WON_JSON/.test(f)),
+        `Expected missing XMR402_SWAP_WON_JSON failure in summary.failures: ${JSON.stringify(summary.failures)}`,
+      );
+      console.log('  PASS: Failed XMR402 swap gate failed closed after Gate #1 passed and deleted instance');
+    } finally {
+      await mock.close();
+    }
+  }
+
   fs.rmSync(workDir, { recursive: true, force: true });
-  console.log('ALL 6 LIMRUN GATE E2E TESTS PASSED');
+  console.log('ALL 7 LIMRUN GATE E2E TESTS PASSED');
 }
 
 runTests().catch((err) => {

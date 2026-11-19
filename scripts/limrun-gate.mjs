@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Limrun Cloud Android Runtime, `.onion` Smoke & 3-Round OpenPGP TOTP Prize Gate for Trap (`dev.onionvault`).
+ * Limrun Cloud Android Runtime, `.onion` Smoke & Dual Live `.onion` Hidden-Service E2E Gates for Trap (`dev.onionvault`).
  *
  * Provisions an isolated cloud Android instance via the official `@limrun/api` SDK,
  * syncs & installs both `app-debug.apk` and `app-debug-androidTest.apk` (`syncApp` with
@@ -13,20 +13,26 @@
  *   4. Compose `StartPage` renders cleanly (zero `OvCrashScreen`),
  *   5. Live `.onion` navigation (`https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/`)
  *      binds per-service circuit isolation (`iso-duckduckgogg42xj`) and renders without error,
- *   6. Mandatory 3-round OpenPGP TOTP `.onion` Prize Gate (`LiveOnionPgpTotpPrizeTest`):
+ *   6. Mandatory Gate #1 — 3-round OpenPGP TOTP `.onion` Prize Gate (`LiveOnionPgpTotpPrizeTest`):
  *      cold-boots `MainActivity`, generates a Sequoia + Keystore OpenPGP keypair, connects over
  *      Tor to our DigitalOcean OpenPGP TOTP `.onion` hidden service, inserts `"Insert My PubKey"`,
  *      decrypts all 3 OpenPGP TOTP challenges via `DecryptedPlaintextHardwarePod`, submits all 3
  *      HTML form POSTs over Tor, wins Round 3 (`OK (1 test)` + `TrapPrizeGate: PRIZE_WON_JSON=...`),
  *      and captures `limrun-prize.png` while the decrypted prize certificate is displayed,
- *   7. Zero Java `FATAL EXCEPTION`s, ANRs, native signals/tombstones, DropBox crashes,
+ *   7. Mandatory Gate #2 — Zero-JS `BTC -> XMR` Swap + `XMR402` (`HTTP 402`) `OutProofV2` Unlock Gate
+ *      (`LiveOnionXmr402BtcSwapTest`): cold-boots `MainActivity`, creates a fresh 25-word Monero wallet,
+ *      hits `/vault` (`HTTP 402` `XMR402`), navigates to `/swap`, injects a site-isolated `8...`
+ *      subaddress via zero-JS CDP, funds the `bcrt1q...` BTC deposit address, syncs `1.0 XMR` over
+ *      `.onion:18081`, pays `0.25 XMR` + replays single-shot `Authorization: XMR402 txid=..., proof=OutProofV2...`
+ *      (`OK (1 test)` + `TrapXmr402Gate: XMR402_SWAP_WON_JSON=...`), and captures `limrun-xmr402-swap.png`,
+ *   8. Zero Java `FATAL EXCEPTION`s, ANRs, native signals/tombstones, DropBox crashes,
  *      `CrashReporter` files, or JNI/DEX linkage errors,
- *   8. Captures `limrun-launch.png`, `limrun-onion.png`, `limrun-prize.png`, `limrun-logcat.txt`,
- *      `limrun-ui-tree.xml`, and `limrun-summary.json`, and always deletes the cloud Android
- *      instance in `finally` / `SIGINT` / `SIGTERM`.
+ *   9. Captures `limrun-launch.png`, `limrun-onion.png`, `limrun-prize.png`, `limrun-xmr402-swap.png`,
+ *      `limrun-logcat.txt`, `limrun-ui-tree.xml`, and `limrun-summary.json`, and always deletes the
+ *      cloud Android instance in `finally` / `SIGINT` / `SIGTERM`.
  *
  * Fails closed immediately if `LIM_API_KEY` (or `LIMRUN_API_KEY`) is missing or empty, or if
- * Round 3's OpenPGP TOTP prize is not won and verified.
+ * either hidden-service E2E gate fails or omits its verified JSON/screenshot.
  */
 
 import fs from 'node:fs';
@@ -49,10 +55,15 @@ const TEST_PACKAGE = process.env.TEST_PACKAGE || 'dev.onionvault.test';
 const TEST_RUNNER = process.env.TEST_RUNNER || 'androidx.test.runner.AndroidJUnitRunner';
 const PRIZE_TEST_CLASS =
   process.env.PRIZE_TEST_CLASS || 'dev.onionvault.LiveOnionPgpTotpPrizeTest';
+const XMR402_TEST_CLASS =
+  process.env.XMR402_TEST_CLASS || 'dev.onionvault.LiveOnionXmr402BtcSwapTest';
 const ACTIVITY = process.env.ACTIVITY || 'dev.onionvault/.MainActivity';
 const DEFAULT_TOTP_ONION_URL =
   'http://b36xrf3dwtizfea3z6pl2i2el2vzraju4gdddben5eqpicdswuvfgoyd.onion/';
 const TOTP_ONION_URL = (process.env.TOTP_ONION_URL || DEFAULT_TOTP_ONION_URL).trim();
+const DEFAULT_XMR402_ONION_URL =
+  'http://6e52wfxr64n2zxjhalrldumrjuqfzjh5gbnyarrkuxrvjrusf25g6yad.onion';
+const XMR402_ONION_URL = (process.env.XMR402_ONION_URL || DEFAULT_XMR402_ONION_URL).trim();
 
 const ONION_TEST_URL =
   process.env.ONION_TEST_URL ||
@@ -66,7 +77,7 @@ const ONION_EXPECTED_HOST =
 const LIMRUN_OS_VERSION = process.env.LIMRUN_OS_VERSION || '15';
 const LIMRUN_MODEL = process.env.LIMRUN_MODEL || 'phone';
 const LIMRUN_JURISDICTION = (process.env.LIMRUN_JURISDICTION || '').trim() || undefined;
-const LIMRUN_HARD_TIMEOUT = process.env.LIMRUN_HARD_TIMEOUT || '25m';
+const LIMRUN_HARD_TIMEOUT = process.env.LIMRUN_HARD_TIMEOUT || '30m';
 const LIMRUN_INACTIVITY_TIMEOUT = process.env.LIMRUN_INACTIVITY_TIMEOUT || '10m';
 const LIMRUN_INSTALL_MODE = (process.env.LIMRUN_INSTALL_MODE || 'auto').trim();
 const INSTANCE_ID_FILE = (process.env.LIMRUN_INSTANCE_ID_FILE || '').trim() || null;
@@ -74,15 +85,26 @@ const INSTANCE_ID_FILE = (process.env.LIMRUN_INSTANCE_ID_FILE || '').trim() || n
 const BOOT_WAIT_SECONDS = Number(process.env.BOOT_WAIT_SECONDS ?? 150);
 const ONION_WAIT_SECONDS = Number(process.env.ONION_WAIT_SECONDS ?? 240);
 const PRIZE_WAIT_SECONDS = Number(process.env.PRIZE_WAIT_SECONDS ?? 360);
+const XMR402_WAIT_SECONDS = Number(process.env.XMR402_WAIT_SECONDS ?? 420);
 const MAX_ONION_ATTEMPTS = Number(process.env.MAX_ONION_ATTEMPTS ?? 4);
 const STABILITY_SECONDS = Number(process.env.STABILITY_SECONDS ?? 8);
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS ?? 2000);
 const SKIP_ONION_SMOKE = process.env.LIMRUN_SKIP_ONION_SMOKE === '1';
 
+const APP_PRIZE_SCREENSHOT_FILE = 'files/prize-won.png';
 const DEVICE_PRIZE_SCREENSHOT_PATH = '/data/local/tmp/trap-prize-won.png';
 const DEVICE_INST_LOG_PATH = '/data/local/tmp/trap-inst.log';
 const DEVICE_INST_EXIT_PATH = '/data/local/tmp/trap-inst.exit';
+
+const APP_XMR402_SCREENSHOT_FILE = 'files/xmr402-swap-won.png';
+const DEVICE_XMR402_SCREENSHOT_PATH = '/data/local/tmp/trap-xmr402-swap-won.png';
+const DEVICE_XMR402_INST_LOG_PATH = '/data/local/tmp/trap-xmr402-inst.log';
+const DEVICE_XMR402_INST_EXIT_PATH = '/data/local/tmp/trap-xmr402-inst.exit';
+
 const VALID_V3_ONION_URL_RE = /^https?:\/\/[a-z2-7]{56}\.onion(?:\/.*)?$/i;
+const VALID_BECH32_BTC_RE = /^(?:bcrt1|tb1|bc1)[ac-hj-np-z02-9]{6,}$/i;
+const VALID_XMR_SUBADDR_RE = /^8[1-9A-HJ-NP-Za-km-z]{94}$/;
+const VALID_HEX_64_RE = /^[0-9a-f]{64}$/i;
 
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
@@ -261,15 +283,16 @@ async function saveScreenshot(client, targetPath) {
   return pngBytes.length;
 }
 
-async function tryPullDevicePngViaBase64(client, remotePath, targetPath) {
-  // Stage app-private `files/prize-won.png` into world-readable `/data/local/tmp/trap-prize-won.png`
-  // so `client.pullFile` can stream full-resolution PNGs of any size without adbShell stdout truncation.
+async function tryPullDevicePngViaBase64(client, appPrivateFile, remotePath, targetPath) {
+  // Stage app-private PNG (e.g. `files/prize-won.png` or `files/xmr402-swap-won.png`) into
+  // world-readable `/data/local/tmp/...` so `client.pullFile` can stream full-resolution PNGs
+  // of any size without adbShell stdout truncation.
   await client
     .adbShell(
       'sh',
       [
         '-c',
-        `if run-as ${PACKAGE} test -s files/prize-won.png 2>/dev/null; then run-as ${PACKAGE} cat files/prize-won.png > "${remotePath}"; chmod 0644 "${remotePath}" 2>/dev/null || true; fi`,
+        `if run-as ${PACKAGE} test -s ${appPrivateFile} 2>/dev/null; then run-as ${PACKAGE} cat ${appPrivateFile} > "${remotePath}"; chmod 0644 "${remotePath}" 2>/dev/null || true; fi`,
       ],
       { timeoutMs: 20_000 },
     )
@@ -293,7 +316,7 @@ async function tryPullDevicePngViaBase64(client, remotePath, targetPath) {
       'sh',
       [
         '-c',
-        `if run-as ${PACKAGE} test -s files/prize-won.png 2>/dev/null; then run-as ${PACKAGE} base64 files/prize-won.png | tr -d '\\r\\n '; elif [ -s "${remotePath}" ]; then base64 "${remotePath}" | tr -d '\\r\\n '; fi`,
+        `if run-as ${PACKAGE} test -s ${appPrivateFile} 2>/dev/null; then run-as ${PACKAGE} base64 ${appPrivateFile} | tr -d '\\r\\n '; elif [ -s "${remotePath}" ]; then base64 "${remotePath}" | tr -d '\\r\\n '; fi`,
       ],
       { timeoutMs: 25_000 },
     )
@@ -361,13 +384,18 @@ function shellSingleQuote(str) {
 
 async function runDetachedInstrumentationAndPoll({
   client,
-  prizeTestClass,
-  totpOnionUrl,
+  testClass,
+  extraArgs = [],
   runnerComponent,
   waitSeconds,
   pollIntervalMs,
   streamedLogLines,
-  prizeScreenshotPath,
+  liveLogMarker,
+  appPrivateScreenshotFile,
+  deviceScreenshotPath,
+  deviceInstLogPath,
+  deviceInstExitPath,
+  targetScreenshotPath,
 }) {
   const cmdParts = [
     'am',
@@ -376,22 +404,22 @@ async function runDetachedInstrumentationAndPoll({
     '-r',
     '-e',
     'class',
-    shellSingleQuote(prizeTestClass),
+    shellSingleQuote(testClass),
   ];
-  if (totpOnionUrl) {
-    cmdParts.push('-e', 'totpOnionUrl', shellSingleQuote(totpOnionUrl));
+  for (let i = 0; i + 1 < extraArgs.length; i += 2) {
+    cmdParts.push('-e', shellSingleQuote(extraArgs[i]), shellSingleQuote(extraArgs[i + 1]));
   }
   cmdParts.push(shellSingleQuote(runnerComponent));
 
   // Limrun's server-side scrcpy adbShell enforces a ~30s per-command execution ceiling,
-  // whereas Tor v3 .onion rendezvous + 3 OpenPGP TOTP rounds can legitimately take 30-120s.
-  // Clean stale prize artifacts and spawn `am instrument` detached via `nohup` in a single
+  // whereas Tor v3 .onion rendezvous + multi-step E2E rounds can legitimately take 30-180s.
+  // Clean stale gate artifacts and spawn `am instrument` detached via `nohup` in a single
   // shell invocation, then poll short <2s status checks until exit.
   const launchScript =
-    `run-as ${PACKAGE} rm -f files/prize-won.png 2>/dev/null || true; ` +
-    `rm -f ${DEVICE_PRIZE_SCREENSHOT_PATH} ${DEVICE_INST_LOG_PATH} ${DEVICE_INST_EXIT_PATH}; ` +
+    `run-as ${PACKAGE} rm -f ${appPrivateScreenshotFile} 2>/dev/null || true; ` +
+    `rm -f ${deviceScreenshotPath} ${deviceInstLogPath} ${deviceInstExitPath}; ` +
     `nohup sh -c ${shellSingleQuote(
-      `${cmdParts.join(' ')} > ${DEVICE_INST_LOG_PATH} 2>&1; printf '%s\\n' "$?" > ${DEVICE_INST_EXIT_PATH}`,
+      `${cmdParts.join(' ')} > ${deviceInstLogPath} 2>&1; printf '%s\\n' "$?" > ${deviceInstExitPath}`,
     )} </dev/null >/dev/null 2>&1 &`;
 
   const startRes = await client.adbShell('sh', ['-c', launchScript], { timeoutMs: 15_000 });
@@ -407,9 +435,13 @@ async function runDetachedInstrumentationAndPoll({
   let liveWindowShotCaptured = false;
   const started = Date.now();
   while ((Date.now() - started) / 1000 < waitSeconds) {
-    if (!liveWindowShotCaptured && streamedLogLines.some((l) => l.includes('PRIZE_WON_JSON='))) {
+    if (
+      !liveWindowShotCaptured &&
+      liveLogMarker &&
+      streamedLogLines.some((l) => l.includes(liveLogMarker))
+    ) {
       try {
-        await saveScreenshot(client, prizeScreenshotPath);
+        await saveScreenshot(client, targetScreenshotPath);
         liveWindowShotCaptured = true;
       } catch {}
     }
@@ -419,7 +451,7 @@ async function runDetachedInstrumentationAndPoll({
         'sh',
         [
           '-c',
-          `if [ -f ${DEVICE_INST_EXIT_PATH} ]; then printf '__TRAP_INST_EXIT__=%s\\n' "$(cat ${DEVICE_INST_EXIT_PATH})"; cat ${DEVICE_INST_LOG_PATH} 2>/dev/null || true; else echo __TRAP_INST_RUNNING__; fi`,
+          `if [ -f ${deviceInstExitPath} ]; then printf '__TRAP_INST_EXIT__=%s\\n' "$(cat ${deviceInstExitPath})"; cat ${deviceInstLogPath} 2>/dev/null || true; else echo __TRAP_INST_RUNNING__; fi`,
         ],
         { timeoutMs: 15_000 },
       )
@@ -440,14 +472,14 @@ async function runDetachedInstrumentationAndPoll({
   }
 
   const tailRes = await client
-    .adbShell('sh', ['-c', `cat ${DEVICE_INST_LOG_PATH} 2>/dev/null || true`], {
+    .adbShell('sh', ['-c', `cat ${deviceInstLogPath} 2>/dev/null || true`], {
       timeoutMs: 15_000,
     })
     .catch(() => ({ stdout: '' }));
   return {
     exitCode: 124,
     stdout: tailRes.stdout || '',
-    stderr: `Detached instrumentation timed out after ${waitSeconds}s`,
+    stderr: `Detached instrumentation (${testClass}) timed out after ${waitSeconds}s`,
     liveWindowShotCaptured,
   };
 }
@@ -455,6 +487,23 @@ async function runDetachedInstrumentationAndPoll({
 function extractLatestPrizeWonPayload(logText) {
   if (!logText) return null;
   const matches = [...logText.matchAll(/TrapPrizeGate\s*:[^\n]*?PRIZE_WON_JSON=(\{[^\r\n]+\})/g)];
+  if (matches.length === 0) return null;
+  const rawJson = matches[matches.length - 1][1];
+  try {
+    return JSON.parse(rawJson);
+  } catch (err) {
+    return {
+      __parseError: err instanceof Error ? err.message : String(err),
+      __raw: rawJson,
+    };
+  }
+}
+
+function extractLatestXmr402SwapWonPayload(logText) {
+  if (!logText) return null;
+  const matches = [
+    ...logText.matchAll(/TrapXmr402Gate\s*:[^\n]*?XMR402_SWAP_WON_JSON=(\{[^\r\n]+\})/g),
+  ];
   if (matches.length === 0) return null;
   const rawJson = matches[matches.length - 1][1];
   try {
@@ -733,6 +782,19 @@ async function main() {
       elapsedSeconds: null,
       passed: false,
     },
+    xmr402SwapGate: {
+      testClass: XMR402_TEST_CLASS,
+      runner: `${TEST_PACKAGE}/${TEST_RUNNER}`,
+      instrumentationPassed: false,
+      onionUrl: null,
+      swapBtcAddress: null,
+      swapXmrSubaddress: null,
+      xmr402Txid: null,
+      proofPrefix: null,
+      prizeBanner: null,
+      elapsedSeconds: null,
+      passed: false,
+    },
     appPid: null,
     unexpectedExit: null,
     artifacts: {},
@@ -741,13 +803,17 @@ async function main() {
   };
 
   const streamedLogLines = [];
+  let gate1DumpLogText = '';
   let latestDumpLogText = '';
   const combinedLogText = () => {
+    const chunks = [];
     const streamed = streamedLogLines.join('\n');
-    if (streamed && latestDumpLogText) {
-      return `${streamed}\n${latestDumpLogText}`;
+    if (streamed) chunks.push(streamed);
+    if (gate1DumpLogText && gate1DumpLogText !== latestDumpLogText) {
+      chunks.push(gate1DumpLogText);
     }
-    return streamed || latestDumpLogText;
+    if (latestDumpLogText) chunks.push(latestDumpLogText);
+    return chunks.join('\n');
   };
 
   const handleUnexpectedAppExit = (logs, info) => {
@@ -790,7 +856,7 @@ async function main() {
       : `trap-gate-${Date.now()}`;
 
     console.log(
-      `== [1/8] Creating Limrun cloud Android instance (Android ${LIMRUN_OS_VERSION}, model=${LIMRUN_MODEL}) ==`,
+      `== [1/9] Creating Limrun cloud Android instance (Android ${LIMRUN_OS_VERSION}, model=${LIMRUN_MODEL}) ==`,
     );
     const createStarted = Date.now();
     const instance = await limrun.androidInstances.create({
@@ -835,7 +901,7 @@ async function main() {
       `  Provisioned ${instanceId} in region=${summary.instance.region || 'auto'} (${summary.instance.createSeconds}s)`,
     );
 
-    console.log('== [2/8] Connecting InstanceClient & inspecting cloud Android device ==');
+    console.log('== [2/9] Connecting InstanceClient & inspecting cloud Android device ==');
     client = wrapResilientInstanceClient(
       await createInstanceClient({
         apiUrl,
@@ -877,7 +943,7 @@ async function main() {
     await client.adbShell('wm', ['dismiss-keyguard']).catch(() => {});
 
     console.log(
-      `== [3/8] Syncing & installing ${path.basename(apkPath)} (${(apkBytes / (1024 * 1024)).toFixed(2)} MiB) + ${path.basename(testApkPath)} (${(testApkBytes / (1024 * 1024)).toFixed(2)} MiB) ==`,
+      `== [3/9] Syncing & installing ${path.basename(apkPath)} (${(apkBytes / (1024 * 1024)).toFixed(2)} MiB) + ${path.basename(testApkPath)} (${(testApkBytes / (1024 * 1024)).toFixed(2)} MiB) ==`,
     );
     const installStarted = Date.now();
     summary.installMethod = await installApkOnInstance({
@@ -921,14 +987,14 @@ async function main() {
       );
     }
 
-    console.log(`== [4/8] Launching ${PACKAGE} under ActivityManager crash/ANR watch ==`);
+    console.log(`== [4/9] Launching ${PACKAGE} under ActivityManager crash/ANR watch ==`);
     await client.launchApp(PACKAGE, {
       mode: 'RelaunchIfRunning',
       onExit: handleUnexpectedAppExit,
     });
 
     console.log(
-      `== [5/8] Waiting up to ${BOOT_WAIT_SECONDS}s for Cefpack engine + ov_tor SOCKS5 + Arti Tor bootstrap ==`,
+      `== [5/9] Waiting up to ${BOOT_WAIT_SECONDS}s for Cefpack engine + ov_tor SOCKS5 + Arti Tor bootstrap ==`,
     );
     const bootLoopStarted = Date.now();
     while ((Date.now() - bootLoopStarted) / 1000 < BOOT_WAIT_SECONDS) {
@@ -1037,7 +1103,7 @@ async function main() {
       summary.failures.length === 0 &&
       !summary.unexpectedExit
     ) {
-      console.log(`== [6/8] Navigating live over Tor to ${ONION_TEST_URL} ==`);
+      console.log(`== [6/9] Navigating live over Tor to ${ONION_TEST_URL} ==`);
       const onionStarted = Date.now();
 
       let tappedCard = false;
@@ -1288,7 +1354,7 @@ async function main() {
 
     if (summary.failures.length === 0 && !summary.unexpectedExit) {
       console.log(
-        `== [7/8] Running mandatory 3-round OpenPGP TOTP .onion Prize Gate (${PRIZE_TEST_CLASS}) ==`,
+        `== [7/9] Running mandatory Gate #1: 3-round OpenPGP TOTP .onion Prize Gate (${PRIZE_TEST_CLASS}) ==`,
       );
       const prizeStarted = Date.now();
       const prizeScreenshotPath = path.join(outDir, 'limrun-prize.png');
@@ -1297,150 +1363,332 @@ async function main() {
       // suppress the earlier launchApp exit listener while instrumentation owns the process.
       suppressExitWatchForInstrumentation = true;
 
-      const instRes = await runDetachedInstrumentationAndPoll({
-        client,
-        prizeTestClass: PRIZE_TEST_CLASS,
-        totpOnionUrl: TOTP_ONION_URL,
-        runnerComponent: `${TEST_PACKAGE}/${TEST_RUNNER}`,
-        waitSeconds: PRIZE_WAIT_SECONDS,
-        pollIntervalMs: POLL_INTERVAL_MS,
-        streamedLogLines,
-        prizeScreenshotPath,
-      });
-      const liveWindowShotCaptured = instRes.liveWindowShotCaptured === true;
+      try {
+        const instRes = await runDetachedInstrumentationAndPoll({
+          client,
+          testClass: PRIZE_TEST_CLASS,
+          extraArgs: TOTP_ONION_URL ? ['totpOnionUrl', TOTP_ONION_URL] : [],
+          runnerComponent: `${TEST_PACKAGE}/${TEST_RUNNER}`,
+          waitSeconds: PRIZE_WAIT_SECONDS,
+          pollIntervalMs: POLL_INTERVAL_MS,
+          streamedLogLines,
+          liveLogMarker: 'PRIZE_WON_JSON=',
+          appPrivateScreenshotFile: APP_PRIZE_SCREENSHOT_FILE,
+          deviceScreenshotPath: DEVICE_PRIZE_SCREENSHOT_PATH,
+          deviceInstLogPath: DEVICE_INST_LOG_PATH,
+          deviceInstExitPath: DEVICE_INST_EXIT_PATH,
+          targetScreenshotPath: prizeScreenshotPath,
+        });
+        const liveWindowShotCaptured = instRes.liveWindowShotCaptured === true;
 
-      summary.totpPrize.elapsedSeconds = Number(
-        ((Date.now() - prizeStarted) / 1000).toFixed(1),
-      );
-
-      const instCombined = `${instRes?.stdout || ''}\n${instRes?.stderr || ''}`;
-      const instOk =
-        instRes?.exitCode === 0 &&
-        /\bOK \(\d+ tests?\)/.test(instCombined) &&
-        !/FAILURES!!!|INSTRUMENTATION_FAILED|INSTRUMENTATION_ABORTED|Process crashed/i.test(
-          instCombined,
+        summary.totpPrize.elapsedSeconds = Number(
+          ((Date.now() - prizeStarted) / 1000).toFixed(1),
         );
-      summary.totpPrize.instrumentationPassed = instOk;
-      if (!instOk) {
-        summary.failures.push(
-          `${PRIZE_TEST_CLASS} did not pass 'OK (1 test)' (exit=${instRes?.exitCode}): ${instCombined
-            .trim()
-            .slice(-600)}`,
-        );
-      }
 
-      // Prefer the frame-accurate screencap written by LiveOnionPgpTotpPrizeTest while
-      // DecryptedPlaintextHardwarePod is open on screen; otherwise use live/current screenshot.
-      let prizePngBytes = await tryPullDevicePngViaBase64(
-        client,
-        DEVICE_PRIZE_SCREENSHOT_PATH,
-        prizeScreenshotPath,
-      );
-      if (!prizePngBytes && liveWindowShotCaptured && fs.existsSync(prizeScreenshotPath)) {
-        prizePngBytes = fs.statSync(prizeScreenshotPath).size;
-      }
-      if (!prizePngBytes) {
-        try {
-          prizePngBytes = await saveScreenshot(client, prizeScreenshotPath);
-        } catch (shotErr) {
-          summary.failures.push(
-            `Failed to capture prize screenshot (${prizeScreenshotPath}): ${
-              shotErr instanceof Error ? shotErr.message : String(shotErr)
-            }`,
+        const instCombined = `${instRes?.stdout || ''}\n${instRes?.stderr || ''}`;
+        const instOk =
+          instRes?.exitCode === 0 &&
+          /\bOK \(\d+ tests?\)/.test(instCombined) &&
+          !/FAILURES!!!|INSTRUMENTATION_FAILED|INSTRUMENTATION_ABORTED|Process crashed/i.test(
+            instCombined,
           );
-        }
-      }
-      if (prizePngBytes) {
-        summary.artifacts.prizeScreenshot = prizeScreenshotPath;
-        console.log(
-          `  Captured TOTP prize screenshot: ${prizeScreenshotPath} (${prizePngBytes} bytes)`,
-        );
-      }
-
-      const postPrizeDump = await client
-        .adbShell('logcat', ['-d', '-v', 'threadtime'], { timeoutMs: 25_000 })
-        .catch(() => ({ stdout: '' }));
-      if (postPrizeDump.stdout) {
-        latestDumpLogText = postPrizeDump.stdout;
-      }
-
-      const prizePayload =
-        extractLatestPrizeWonPayload(latestDumpLogText) ??
-        extractLatestPrizeWonPayload(streamedLogLines.join('\n'));
-      if (!prizePayload) {
-        summary.failures.push(
-          `Missing mandatory 'TrapPrizeGate: PRIZE_WON_JSON=...' logcat record from ${PRIZE_TEST_CLASS}`,
-        );
-      } else if (prizePayload.__parseError) {
-        summary.failures.push(
-          `Malformed PRIZE_WON_JSON emitted by ${PRIZE_TEST_CLASS}: ${prizePayload.__parseError}`,
-        );
-      } else {
-        const wonUrl = String(prizePayload.onionUrl || '').trim();
-        const rounds = Number(prizePayload.roundsCompleted ?? 0);
-        const banner = String(prizePayload.prizeBanner || '').trim();
-        const cert = String(prizePayload.decryptedCertificate || '').trim();
-        const winnerFp = String(prizePayload.winnerFingerprint || '').trim() || null;
-
-        summary.totpPrize.onionUrl = wonUrl || null;
-        summary.totpPrize.roundsCompleted = rounds;
-        summary.totpPrize.winnerFingerprint = winnerFp;
-        summary.totpPrize.prizeBanner = banner || null;
-        summary.totpPrize.decryptedCertificate = cert || null;
-
-        if (!VALID_V3_ONION_URL_RE.test(wonUrl)) {
+        summary.totpPrize.instrumentationPassed = instOk;
+        if (!instOk) {
           summary.failures.push(
-            `PRIZE_WON_JSON onionUrl is not a valid Tor v3 .onion URL: '${wonUrl}'`,
-          );
-        }
-        if (rounds !== 3) {
-          summary.failures.push(
-            `PRIZE_WON_JSON roundsCompleted must equal 3 (got ${JSON.stringify(prizePayload.roundsCompleted)})`,
-          );
-        }
-        if (!banner) {
-          summary.failures.push('PRIZE_WON_JSON prizeBanner is empty');
-        }
-        if (!cert || (banner && !cert.includes(banner))) {
-          summary.failures.push(
-            'PRIZE_WON_JSON decryptedCertificate is empty or does not match won prizeBanner',
+            `${PRIZE_TEST_CLASS} did not pass 'OK (1 test)' (exit=${instRes?.exitCode}): ${instCombined
+              .trim()
+              .slice(-600)}`,
           );
         }
 
-        if (
-          instOk &&
-          VALID_V3_ONION_URL_RE.test(wonUrl) &&
-          rounds === 3 &&
-          banner.length > 0 &&
-          cert.includes(banner) &&
-          Boolean(summary.artifacts.prizeScreenshot)
-        ) {
-          summary.totpPrize.passed = true;
-          console.log('== [PRIZE WON] Trap completed 3/3 OpenPGP TOTP rounds over Tor! ==');
-          console.log(`  Onion Service : ${wonUrl}`);
-          console.log(`  Prize Banner  : ${banner}`);
-          console.log(`  Certificate   : ${cert.replace(/\s*\n\s*/g, ' | ')}`);
-          console.log(`  Screenshot    : ${prizeScreenshotPath}`);
+        // Prefer the frame-accurate screencap written by LiveOnionPgpTotpPrizeTest while
+        // DecryptedPlaintextHardwarePod is open on screen; otherwise use live/current screenshot.
+        let prizePngBytes = await tryPullDevicePngViaBase64(
+          client,
+          APP_PRIZE_SCREENSHOT_FILE,
+          DEVICE_PRIZE_SCREENSHOT_PATH,
+          prizeScreenshotPath,
+        );
+        if (!prizePngBytes && liveWindowShotCaptured && fs.existsSync(prizeScreenshotPath)) {
+          prizePngBytes = fs.statSync(prizeScreenshotPath).size;
         }
-      }
+        if (!prizePngBytes) {
+          try {
+            prizePngBytes = await saveScreenshot(client, prizeScreenshotPath);
+          } catch (shotErr) {
+            summary.failures.push(
+              `Failed to capture prize screenshot (${prizeScreenshotPath}): ${
+                shotErr instanceof Error ? shotErr.message : String(shotErr)
+              }`,
+            );
+          }
+        }
+        if (prizePngBytes) {
+          summary.artifacts.prizeScreenshot = prizeScreenshotPath;
+          console.log(
+            `  Captured TOTP prize screenshot: ${prizeScreenshotPath} (${prizePngBytes} bytes)`,
+          );
+        }
 
-      // ActivityManager force-stops the target app when `am instrument` finishes; relaunch
-      // cleanly so final PID & live stability audit verifies the post-gate browser process.
-      suppressExitWatchForInstrumentation = false;
-      await client.launchApp(PACKAGE, {
-        mode: 'RelaunchIfRunning',
-        onExit: handleUnexpectedAppExit,
-      });
-      for (let waitAttempt = 0; waitAttempt < 10; waitAttempt += 1) {
-        const probePid = await client.adbShell('pidof', [PACKAGE]).catch(() => ({ stdout: '' }));
-        if (probePid.stdout.trim()) {
-          break;
+        const postPrizeDump = await client
+          .adbShell('logcat', ['-d', '-v', 'threadtime'], { timeoutMs: 25_000 })
+          .catch(() => ({ stdout: '' }));
+        if (postPrizeDump.stdout) {
+          gate1DumpLogText = postPrizeDump.stdout;
+          latestDumpLogText = postPrizeDump.stdout;
         }
-        await sleep(500);
+
+        const prizePayload =
+          extractLatestPrizeWonPayload(latestDumpLogText) ??
+          extractLatestPrizeWonPayload(streamedLogLines.join('\n'));
+        if (!prizePayload) {
+          summary.failures.push(
+            `Missing mandatory 'TrapPrizeGate: PRIZE_WON_JSON=...' logcat record from ${PRIZE_TEST_CLASS}`,
+          );
+        } else if (prizePayload.__parseError) {
+          summary.failures.push(
+            `Malformed PRIZE_WON_JSON emitted by ${PRIZE_TEST_CLASS}: ${prizePayload.__parseError}`,
+          );
+        } else {
+          const wonUrl = String(prizePayload.onionUrl || '').trim();
+          const rounds = Number(prizePayload.roundsCompleted ?? 0);
+          const banner = String(prizePayload.prizeBanner || '').trim();
+          const cert = String(prizePayload.decryptedCertificate || '').trim();
+          const winnerFp = String(prizePayload.winnerFingerprint || '').trim() || null;
+
+          summary.totpPrize.onionUrl = wonUrl || null;
+          summary.totpPrize.roundsCompleted = rounds;
+          summary.totpPrize.winnerFingerprint = winnerFp;
+          summary.totpPrize.prizeBanner = banner || null;
+          summary.totpPrize.decryptedCertificate = cert || null;
+
+          if (!VALID_V3_ONION_URL_RE.test(wonUrl)) {
+            summary.failures.push(
+              `PRIZE_WON_JSON onionUrl is not a valid Tor v3 .onion URL: '${wonUrl}'`,
+            );
+          }
+          if (rounds !== 3) {
+            summary.failures.push(
+              `PRIZE_WON_JSON roundsCompleted must equal 3 (got ${JSON.stringify(prizePayload.roundsCompleted)})`,
+            );
+          }
+          if (!banner) {
+            summary.failures.push('PRIZE_WON_JSON prizeBanner is empty');
+          }
+          if (!cert || (banner && !cert.includes(banner))) {
+            summary.failures.push(
+              'PRIZE_WON_JSON decryptedCertificate is empty or does not match won prizeBanner',
+            );
+          }
+
+          if (
+            instOk &&
+            VALID_V3_ONION_URL_RE.test(wonUrl) &&
+            rounds === 3 &&
+            banner.length > 0 &&
+            cert.includes(banner) &&
+            Boolean(summary.artifacts.prizeScreenshot)
+          ) {
+            summary.totpPrize.passed = true;
+            console.log('== [PRIZE WON] Trap completed 3/3 OpenPGP TOTP rounds over Tor! ==');
+            console.log(`  Onion Service : ${wonUrl}`);
+            console.log(`  Prize Banner  : ${banner}`);
+            console.log(`  Certificate   : ${cert.replace(/\s*\n\s*/g, ' | ')}`);
+            console.log(`  Screenshot    : ${prizeScreenshotPath}`);
+          }
+        }
+
+        if (summary.failures.length === 0 && !summary.unexpectedExit) {
+          console.log(
+            `== [8/9] Running mandatory Gate #2: Zero-JS BTC->XMR Swap + XMR402 OutProofV2 Gate (${XMR402_TEST_CLASS}) ==`,
+          );
+          const xmr402Started = Date.now();
+          const xmr402ScreenshotPath = path.join(outDir, 'limrun-xmr402-swap.png');
+
+          const xmrInstRes = await runDetachedInstrumentationAndPoll({
+            client,
+            testClass: XMR402_TEST_CLASS,
+            extraArgs: XMR402_ONION_URL ? ['xmr402OnionUrl', XMR402_ONION_URL] : [],
+            runnerComponent: `${TEST_PACKAGE}/${TEST_RUNNER}`,
+            waitSeconds: XMR402_WAIT_SECONDS,
+            pollIntervalMs: POLL_INTERVAL_MS,
+            streamedLogLines,
+            liveLogMarker: 'XMR402_SWAP_WON_JSON=',
+            appPrivateScreenshotFile: APP_XMR402_SCREENSHOT_FILE,
+            deviceScreenshotPath: DEVICE_XMR402_SCREENSHOT_PATH,
+            deviceInstLogPath: DEVICE_XMR402_INST_LOG_PATH,
+            deviceInstExitPath: DEVICE_XMR402_INST_EXIT_PATH,
+            targetScreenshotPath: xmr402ScreenshotPath,
+          });
+          const xmrLiveShotCaptured = xmrInstRes.liveWindowShotCaptured === true;
+
+          summary.xmr402SwapGate.elapsedSeconds = Number(
+            ((Date.now() - xmr402Started) / 1000).toFixed(1),
+          );
+
+          const xmrInstCombined = `${xmrInstRes?.stdout || ''}\n${xmrInstRes?.stderr || ''}`;
+          const xmrInstOk =
+            xmrInstRes?.exitCode === 0 &&
+            /\bOK \(\d+ tests?\)/.test(xmrInstCombined) &&
+            !/FAILURES!!!|INSTRUMENTATION_FAILED|INSTRUMENTATION_ABORTED|Process crashed/i.test(
+              xmrInstCombined,
+            );
+          summary.xmr402SwapGate.instrumentationPassed = xmrInstOk;
+          if (!xmrInstOk) {
+            summary.failures.push(
+              `${XMR402_TEST_CLASS} did not pass 'OK (1 test)' (exit=${xmrInstRes?.exitCode}): ${xmrInstCombined
+                .trim()
+                .slice(-600)}`,
+            );
+          }
+
+          let xmrPngBytes = await tryPullDevicePngViaBase64(
+            client,
+            APP_XMR402_SCREENSHOT_FILE,
+            DEVICE_XMR402_SCREENSHOT_PATH,
+            xmr402ScreenshotPath,
+          );
+          if (!xmrPngBytes && xmrLiveShotCaptured && fs.existsSync(xmr402ScreenshotPath)) {
+            xmrPngBytes = fs.statSync(xmr402ScreenshotPath).size;
+          }
+          if (!xmrPngBytes) {
+            try {
+              xmrPngBytes = await saveScreenshot(client, xmr402ScreenshotPath);
+            } catch (shotErr) {
+              summary.failures.push(
+                `Failed to capture XMR402 swap screenshot (${xmr402ScreenshotPath}): ${
+                  shotErr instanceof Error ? shotErr.message : String(shotErr)
+                }`,
+              );
+            }
+          }
+          if (xmrPngBytes) {
+            summary.artifacts.xmr402SwapScreenshot = xmr402ScreenshotPath;
+            console.log(
+              `  Captured XMR402 + BTC->XMR swap screenshot: ${xmr402ScreenshotPath} (${xmrPngBytes} bytes)`,
+            );
+          }
+
+          const postXmr402Dump = await client
+            .adbShell('logcat', ['-d', '-v', 'threadtime'], { timeoutMs: 25_000 })
+            .catch(() => ({ stdout: '' }));
+          if (postXmr402Dump.stdout) {
+            latestDumpLogText = postXmr402Dump.stdout;
+          }
+
+          const xmrPayload =
+            extractLatestXmr402SwapWonPayload(latestDumpLogText) ??
+            extractLatestXmr402SwapWonPayload(streamedLogLines.join('\n'));
+          if (!xmrPayload) {
+            summary.failures.push(
+              `Missing mandatory 'TrapXmr402Gate: XMR402_SWAP_WON_JSON=...' logcat record from ${XMR402_TEST_CLASS}`,
+            );
+          } else if (xmrPayload.__parseError) {
+            summary.failures.push(
+              `Malformed XMR402_SWAP_WON_JSON emitted by ${XMR402_TEST_CLASS}: ${xmrPayload.__parseError}`,
+            );
+          } else {
+            const xmrOnionUrl = String(xmrPayload.onionUrl || '').trim();
+            const swapBtcAddress = String(xmrPayload.swapBtcAddress || '').trim();
+            const swapXmrSubaddress = String(xmrPayload.swapXmrSubaddress || '').trim();
+            const xmr402Txid = String(xmrPayload.xmr402Txid || '').trim();
+            const proofPrefix = String(xmrPayload.proofPrefix || '').trim();
+            const xmrBanner = String(xmrPayload.prizeBanner || '').trim();
+
+            summary.xmr402SwapGate.onionUrl = xmrOnionUrl || null;
+            summary.xmr402SwapGate.swapBtcAddress = swapBtcAddress || null;
+            summary.xmr402SwapGate.swapXmrSubaddress = swapXmrSubaddress || null;
+            summary.xmr402SwapGate.xmr402Txid = xmr402Txid || null;
+            summary.xmr402SwapGate.proofPrefix = proofPrefix || null;
+            summary.xmr402SwapGate.prizeBanner = xmrBanner || null;
+
+            if (!VALID_V3_ONION_URL_RE.test(xmrOnionUrl)) {
+              summary.failures.push(
+                `XMR402_SWAP_WON_JSON onionUrl is not a valid Tor v3 .onion URL: '${xmrOnionUrl}'`,
+              );
+            }
+            if (!VALID_BECH32_BTC_RE.test(swapBtcAddress)) {
+              summary.failures.push(
+                `XMR402_SWAP_WON_JSON swapBtcAddress is not a valid Bech32 BTC address: '${swapBtcAddress}'`,
+              );
+            }
+            if (!VALID_XMR_SUBADDR_RE.test(swapXmrSubaddress)) {
+              summary.failures.push(
+                `XMR402_SWAP_WON_JSON swapXmrSubaddress is not a valid 95-char 8... subaddress: '${swapXmrSubaddress}'`,
+              );
+            }
+            if (!VALID_HEX_64_RE.test(xmr402Txid)) {
+              summary.failures.push(
+                `XMR402_SWAP_WON_JSON xmr402Txid is not a 64-hex transaction hash: '${xmr402Txid}'`,
+              );
+            }
+            if (!proofPrefix.startsWith('OutProofV2')) {
+              summary.failures.push(
+                `XMR402_SWAP_WON_JSON proofPrefix must start with 'OutProofV2': '${proofPrefix}'`,
+              );
+            }
+            if (!xmrBanner.includes('OBSIDIAN-MONERO-CITADEL')) {
+              summary.failures.push(
+                `XMR402_SWAP_WON_JSON prizeBanner does not contain 'OBSIDIAN-MONERO-CITADEL': '${xmrBanner}'`,
+              );
+            }
+
+            if (
+              xmrInstOk &&
+              VALID_V3_ONION_URL_RE.test(xmrOnionUrl) &&
+              VALID_BECH32_BTC_RE.test(swapBtcAddress) &&
+              VALID_XMR_SUBADDR_RE.test(swapXmrSubaddress) &&
+              VALID_HEX_64_RE.test(xmr402Txid) &&
+              proofPrefix.startsWith('OutProofV2') &&
+              xmrBanner.includes('OBSIDIAN-MONERO-CITADEL') &&
+              Boolean(summary.artifacts.xmr402SwapScreenshot)
+            ) {
+              summary.xmr402SwapGate.passed = true;
+              console.log(
+                '== [XMR402 + SWAP WON] Trap completed BTC->XMR swap & XMR402 OutProofV2 unlock over Tor! ==',
+              );
+              console.log(`  Onion Service       : ${xmrOnionUrl}`);
+              console.log(`  Swap BTC Deposit    : ${swapBtcAddress}`);
+              console.log(`  Swap XMR Subaddress : ${swapXmrSubaddress}`);
+              console.log(`  XMR402 TxID         : ${xmr402Txid}`);
+              console.log(`  OutProofV2 Prefix   : ${proofPrefix}`);
+              console.log(`  Prize Banner        : ${xmrBanner}`);
+              console.log(`  Screenshot          : ${xmr402ScreenshotPath}`);
+            }
+          }
+        }
+      } finally {
+        // ActivityManager force-stops the target app when `am instrument` finishes; relaunch
+        // cleanly so final PID & live stability audit verifies the post-gate browser process.
+        suppressExitWatchForInstrumentation = false;
+        await client
+          .launchApp(PACKAGE, {
+            mode: 'RelaunchIfRunning',
+            onExit: handleUnexpectedAppExit,
+          })
+          .catch(() => {});
+        for (let waitAttempt = 0; waitAttempt < 10; waitAttempt += 1) {
+          const probePid = await client.adbShell('pidof', [PACKAGE]).catch(() => ({ stdout: '' }));
+          if (probePid.stdout.trim()) {
+            break;
+          }
+          await sleep(500);
+        }
       }
     }
 
-    console.log('== [8/8] Running final forensic crash, tombstone, DropBox & PID audit ==');
+    if (summary.failures.length === 0) {
+      if (!summary.totpPrize.passed) {
+        summary.failures.push(`Gate #1 (${PRIZE_TEST_CLASS}) did not complete with verified PRIZE_WON_JSON`);
+      }
+      if (!summary.xmr402SwapGate.passed) {
+        summary.failures.push(
+          `Gate #2 (${XMR402_TEST_CLASS}) did not complete with verified XMR402_SWAP_WON_JSON`,
+        );
+      }
+    }
+
+    console.log('== [9/9] Running final forensic crash, tombstone, DropBox & PID audit ==');
     try {
       logcatProc?.stop();
     } catch {}
@@ -1540,6 +1788,7 @@ async function main() {
       `ov_tor SOCKS5=${summary.readiness.socksEndpoint}, Arti bootstrapped, ` +
       `${SKIP_ONION_SMOKE ? 'onion smoke skipped' : `isolated ${ONION_EXPECTED_ISOLATION} .onion loaded`}, ` +
       `3/3 OpenPGP TOTP rounds won (PRIZE="${summary.totpPrize.prizeBanner}"), ` +
+      `BTC->XMR swap + XMR402 OutProofV2 won (TXID=${summary.xmr402SwapGate.xmr402Txid}), ` +
       `zero crashes/tombstones/ANRs.`,
   );
   process.exit(0);

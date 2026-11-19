@@ -6,11 +6,12 @@
 # (and runnable directly via `./scripts/pre-push-gate.sh`).
 #
 # Enforces 5 strict stages before code can reach GitHub:
-#   [1/5] Shell & hook syntax (`bash -n`) + Node syntax + Limrun protocol gate self-test (`6/6`)
+#   [1/5] Shell & hook syntax (`bash -n`) + Node syntax + Limrun protocol gate self-test (`7/7`)
 #   [2/5] Monotonic `VERSION` dry-run + deterministic 1024x1024 & neon icon drift checks
 #   [3/5] Zero legacy banned engine references repo-wide + `TrapApplication.kt` child-process
 #         `CefpackEngine.initProcess(this)` `ContextImpl` `ClassCastException` guard
-#   [4/5] Rust workspace + `services/pgp-totp-onion` formatting, Clippy (`-D warnings`), and tests
+#   [4/5] Rust workspace + `services/pgp-totp-onion` + `services/xmr402-swap-onion` formatting,
+#         Clippy (`-D warnings`), and tests
 #   [5/5] Android JVM/Robolectric unit tests, multi-ABI debug + androidTest APK assembly, and
 #         `5/5` `scripts/audit-apk.sh` packaging/ELF/DEX/signature binary audit
 
@@ -305,13 +306,16 @@ if "configureChildProcessCreationParams(" not in src:
 print(f"  [guard] 0 '{banned_token}' matches repo-wide; TrapApplication.kt child-process init verified ({len(init_args)} 'this' call(s))")
 PY
 
-echo "== [pre-push 4/5] Running Rust workspace + services/pgp-totp-onion fmt, clippy, and unit/integration tests =="
+echo "== [pre-push 4/5] Running Rust workspace + hidden-service daemons fmt, clippy, and unit/integration tests =="
 cargo fmt --manifest-path "$REPO_ROOT/Cargo.toml" --all -- --check
 cargo clippy --manifest-path "$REPO_ROOT/Cargo.toml" --workspace --all-targets -- -D warnings
 cargo test --manifest-path "$REPO_ROOT/Cargo.toml" --workspace
 cargo fmt --manifest-path "$REPO_ROOT/services/pgp-totp-onion/Cargo.toml" --all -- --check
 cargo clippy --manifest-path "$REPO_ROOT/services/pgp-totp-onion/Cargo.toml" --locked --all-targets -- -D warnings
 cargo test --manifest-path "$REPO_ROOT/services/pgp-totp-onion/Cargo.toml" --locked
+cargo fmt --manifest-path "$REPO_ROOT/services/xmr402-swap-onion/Cargo.toml" --all -- --check
+cargo clippy --manifest-path "$REPO_ROOT/services/xmr402-swap-onion/Cargo.toml" --locked --all-targets -- -D warnings
+cargo test --manifest-path "$REPO_ROOT/services/xmr402-swap-onion/Cargo.toml" --locked
 
 echo "== [pre-push 5/5] Running Android unit tests, debug + androidTest APK builds, and 5/5 APK audit =="
 "$REPO_ROOT/android/gradlew" --project-dir "$REPO_ROOT/android" \

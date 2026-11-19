@@ -6,10 +6,13 @@
 //! before opening a socket.
 
 use std::{
+    fmt,
     future::Future,
     io::Read,
     net::SocketAddr,
+    pin::Pin,
     sync::{Arc, OnceLock},
+    task::{Context as TaskContext, Poll},
     time::Duration,
 };
 
@@ -20,8 +23,9 @@ use monero_wallet::interface::InterfaceError;
 use ov_tor::is_valid_v3_onion_host;
 use rustls_pki_types::ServerName;
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf},
     net::TcpStream,
+    sync::Mutex as AsyncMutex,
 };
 use tokio_rustls::TlsConnector;
 use url::Url;
@@ -203,6 +207,7 @@ impl TorSocksTransport {
                 body_with_ct,
                 extra_headers,
                 allow_gzip,
+                false,
             );
 
             if is_tls {
@@ -215,12 +220,12 @@ impl TorSocksTransport {
                     .with_context(|| format!("TLS handshake over Tor failed for {host}:{port}"))?;
                 tls_stream.write_all(&req_bytes).await?;
                 tls_stream.flush().await?;
-                read_http11_response(&mut tls_stream, limit).await
+                Ok(read_http11_response(&mut tls_stream, limit).await?.0)
             } else {
                 let mut tcp = tcp;
                 tcp.write_all(&req_bytes).await?;
                 tcp.flush().await?;
-                read_http11_response(&mut tcp, limit).await
+                Ok(read_http11_response(&mut tcp, limit).await?.0)
             }
         })
         .await
@@ -231,13 +236,168 @@ impl TorSocksTransport {
             )
         })?
     }
+
+    async fn post_keepalive_pooled(
+        &self,
+        raw_url: &str,
+        content_type: &str,
+        body: &[u8],
+        max_bytes: Option<usize>,
+        pool: &AsyncMutex<Option<PooledRpcStream>>,
+    ) -> Result<HttpResponse> {
+        let parsed =
+            Url::parse(raw_url.trim()).with_context(|| format!("invalid URL {raw_url:?}"))?;
+        let socks_addr = self.verify_ready_loopback()?;
+        let (host, port, is_tls) = self.verify_url_policy(&parsed)?;
+        let limit = max_bytes
+            .unwrap_or(DEFAULT_MAX_RESPONSE_BYTES)
+            .min(DEFAULT_MAX_RESPONSE_BYTES);
+
+        let req_bytes = build_http11_request(
+            &parsed,
+            &host,
+            port,
+            is_tls,
+            "POST",
+            Some((content_type, body)),
+            None,
+            false,
+            true,
+        );
+
+        let existing = pool.lock().await.take();
+        if let Some(mut stream) = existing {
+            if stream.host == host && stream.port == port && stream.is_tls == is_tls {
+                let reused = tokio::time::timeout(self.request_timeout, async {
+                    stream.io.write_all(&req_bytes).await?;
+                    stream.io.flush().await?;
+                    read_http11_response(&mut stream.io, limit).await
+                })
+                .await;
+
+                if let Ok(Ok((resp, reusable))) = reused {
+                    if reusable {
+                        let mut guard = pool.lock().await;
+                        if guard.is_none() {
+                            *guard = Some(stream);
+                        }
+                    }
+                    return Ok(resp);
+                }
+            }
+        }
+
+        tokio::time::timeout(self.request_timeout, async {
+            let tcp =
+                connect_socks5h_domain(socks_addr, &host, port, self.isolation_user.as_deref())
+                    .await?;
+            let mut io = if is_tls {
+                let connector = tls_connector()?;
+                let server_name = ServerName::try_from(host.clone())
+                    .map_err(|_| anyhow!("invalid TLS SNI server name {host:?}"))?;
+                let tls_stream = connector
+                    .connect(server_name, tcp)
+                    .await
+                    .with_context(|| format!("TLS handshake over Tor failed for {host}:{port}"))?;
+                RpcIoStream::Tls(Box::new(tls_stream))
+            } else {
+                RpcIoStream::Plain(tcp)
+            };
+
+            io.write_all(&req_bytes).await?;
+            io.flush().await?;
+            let (resp, reusable) = read_http11_response(&mut io, limit).await?;
+            if reusable {
+                let mut guard = pool.lock().await;
+                if guard.is_none() {
+                    *guard = Some(PooledRpcStream {
+                        host,
+                        port,
+                        is_tls,
+                        io,
+                    });
+                }
+            }
+            Ok(resp)
+        })
+        .await
+        .map_err(|_| {
+            anyhow!(
+                "Tor HTTP request to {} timed out",
+                parsed.host_str().unwrap_or("")
+            )
+        })?
+    }
 }
 
-/// `monero_daemon_rpc::HttpTransport` adapter backed by [`TorSocksTransport`].
-#[derive(Clone, Debug)]
+enum RpcIoStream {
+    Plain(TcpStream),
+    Tls(Box<tokio_rustls::client::TlsStream<TcpStream>>),
+}
+
+impl AsyncRead for RpcIoStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            RpcIoStream::Plain(s) => Pin::new(s).poll_read(cx, buf),
+            RpcIoStream::Tls(s) => Pin::new(s.as_mut()).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for RpcIoStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        match self.get_mut() {
+            RpcIoStream::Plain(s) => Pin::new(s).poll_write(cx, buf),
+            RpcIoStream::Tls(s) => Pin::new(s.as_mut()).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            RpcIoStream::Plain(s) => Pin::new(s).poll_flush(cx),
+            RpcIoStream::Tls(s) => Pin::new(s.as_mut()).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            RpcIoStream::Plain(s) => Pin::new(s).poll_shutdown(cx),
+            RpcIoStream::Tls(s) => Pin::new(s.as_mut()).poll_shutdown(cx),
+        }
+    }
+}
+
+struct PooledRpcStream {
+    host: String,
+    port: u16,
+    is_tls: bool,
+    io: RpcIoStream,
+}
+
+/// `monero_daemon_rpc::HttpTransport` adapter backed by [`TorSocksTransport`]
+/// with HTTP/1.1 Keep-Alive connection reuse across sequential `monerod` RPCs.
+#[derive(Clone)]
 pub struct MoneroRpcTransport {
     base_url: String,
     inner: TorSocksTransport,
+    pool: Arc<AsyncMutex<Option<PooledRpcStream>>>,
+}
+
+impl fmt::Debug for MoneroRpcTransport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MoneroRpcTransport")
+            .field("base_url", &self.base_url)
+            .field("inner", &self.inner)
+            .finish()
+    }
 }
 
 impl MoneroRpcTransport {
@@ -245,6 +405,7 @@ impl MoneroRpcTransport {
         Self {
             base_url: base_url.into(),
             inner,
+            pool: Arc::new(AsyncMutex::new(None)),
         }
     }
 
@@ -270,9 +431,10 @@ impl HttpTransport for MoneroRpcTransport {
             "application/json"
         };
         let client = self.inner.clone();
+        let pool = self.pool.clone();
         async move {
             let resp = client
-                .post(&full_url, content_type, &body, false, response_size_limit)
+                .post_keepalive_pooled(&full_url, content_type, &body, response_size_limit, &pool)
                 .await
                 .map_err(|e| InterfaceError::InterfaceError(e.to_string()))?;
             if resp.status != 200 {
@@ -406,6 +568,7 @@ fn build_http11_request(
     body_with_ct: Option<(&str, &[u8])>,
     extra_headers: Option<&[(&str, &str)]>,
     allow_gzip: bool,
+    keep_alive: bool,
 ) -> Vec<u8> {
     let mut path_and_query = url.path().to_string();
     if path_and_query.is_empty() {
@@ -437,7 +600,11 @@ fn build_http11_request(
     );
     head.push_str("Accept: */*\r\n");
     head.push_str(&format!("Accept-Encoding: {accept_encoding}\r\n"));
-    head.push_str("Connection: close\r\n");
+    if keep_alive {
+        head.push_str("Connection: keep-alive\r\n");
+    } else {
+        head.push_str("Connection: close\r\n");
+    }
 
     if let Some(hdrs) = extra_headers {
         for (k, v) in hdrs {
@@ -458,7 +625,10 @@ fn build_http11_request(
     }
 }
 
-async fn read_http11_response<S>(stream: &mut S, max_body_bytes: usize) -> Result<HttpResponse>
+async fn read_http11_response<S>(
+    stream: &mut S,
+    max_body_bytes: usize,
+) -> Result<(HttpResponse, bool)>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -504,9 +674,22 @@ where
         .iter()
         .find(|(k, _)| k == "content-length")
         .and_then(|(_, v)| v.parse::<usize>().ok());
+    let server_closes = headers
+        .iter()
+        .any(|(k, v)| k == "connection" && v.to_ascii_lowercase().contains("close"));
 
-    let raw_body = if is_chunked {
-        read_chunked_body(stream, &mut remainder, max_body_bytes).await?
+    let (raw_body, clean_framing) = if is_chunked {
+        let body = read_chunked_body(stream, &mut remainder, max_body_bytes).await?;
+        // Consume trailing CRLF after final `0\r\n` chunk so keep-alive stream stays aligned
+        while remainder.len() < 2 {
+            let n = stream.read(&mut scratch[..2 - remainder.len()]).await?;
+            if n == 0 {
+                break;
+            }
+            remainder.extend_from_slice(&scratch[..n]);
+        }
+        let aligned = remainder.len() == 2 && &remainder[..2] == b"\r\n";
+        (body, aligned)
     } else if let Some(expected_len) = content_length {
         if expected_len > max_body_bytes {
             bail!("HTTP Content-Length ({expected_len}) exceeds limit ({max_body_bytes})");
@@ -524,8 +707,9 @@ where
             }
             out.extend_from_slice(&scratch[..n]);
         }
+        let exact = out.len() == expected_len;
         out.truncate(expected_len);
-        out
+        (out, exact)
     } else {
         let mut out = remainder;
         loop {
@@ -538,7 +722,7 @@ where
             }
             out.extend_from_slice(&scratch[..n]);
         }
-        out
+        (out, false)
     };
 
     let encoding = headers
@@ -555,11 +739,15 @@ where
         raw_body
     };
 
-    Ok(HttpResponse {
-        status,
-        headers,
-        body: decoded_body,
-    })
+    let reusable = clean_framing && !server_closes;
+    Ok((
+        HttpResponse {
+            status,
+            headers,
+            body: decoded_body,
+        },
+        reusable,
+    ))
 }
 
 fn decompress_bounded<R: Read>(reader: R, max_bytes: usize) -> Result<Vec<u8>> {

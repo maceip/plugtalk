@@ -7,7 +7,8 @@
 # runs `release` (attesting artifacts, bumping `VERSION`, tagging `v<version>`, and publishing):
 #   1. `rust-tests`    — monotonic version dry-run, shell/hook/Node syntax + Limrun gate self-test,
 #                        static engine/child-process guards, deterministic icon drift check,
-#                        rustfmt, clippy, workspace + `services/pgp-totp-onion` tests, and coverage
+#                        rustfmt, clippy, workspace + `services/pgp-totp-onion` +
+#                        `services/xmr402-swap-onion` tests, and coverage
 #   2. `android-build` — monotonic `VERSION` bump, multi-ABI `cargo-ndk` build (`arm64-v8a` + `x86_64`),
 #                        JVM/Robolectric Compose & unit tests, debug APK assembly, strict
 #                        `scripts/audit-apk.sh` packaging/DEX/ELF gate, and real Cargo + Gradle +
@@ -16,10 +17,11 @@
 #                             and asserts Cefpack readiness, `ov_tor` loopback SOCKS5 bind, 12s live-PID
 #                             stability, zero Java/native crashes/ANRs, and zero JNI/DEX linkage errors
 #   4. `limrun-device-gate` — provisions an isolated cloud Android 15 phone instance on Limrun
-#                             (`@limrun/api` + `lim` CLI), delta-syncs & installs `app-debug.apk`,
-#                             launches `dev.onionvault/.MainActivity` under ActivityManager crash/ANR
-#                             watch, verifies Cefpack + Arti Tor bootstrap + live `.onion` navigation
-#                             (`iso-duckduckgogg42xj`) + 3-round OpenPGP TOTP `.onion` prize gate,
+#                             (`@limrun/api` + `lim` CLI), delta-syncs & installs `app-debug.apk` +
+#                             `app-debug-androidTest.apk`, launches `dev.onionvault/.MainActivity` under
+#                             ActivityManager crash/ANR watch, verifies Cefpack + Arti Tor bootstrap +
+#                             live `.onion` navigation (`iso-duckduckgogg42xj`) + BOTH live `.onion` E2E
+#                             gates (`LiveOnionPgpTotpPrizeTest` + `LiveOnionXmr402BtcSwapTest`),
 #                             captures screenshots/logcat/UI tree, and tears down cleanly
 #   5. `release`            — (`refs/heads/main` pushes only) attests `app-debug.apk` provenance
 #                             (`actions/attest-build-provenance`) and SPDX 2.3 SBOM
@@ -98,6 +100,7 @@ jobs:
             ~/.cargo/git
             target
             services/pgp-totp-onion/target
+            services/xmr402-swap-onion/target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
@@ -134,23 +137,26 @@ jobs:
           python3 design/icons/trap_icon.py --check
           python3 design/icons/neon/slice_neon.py --check
 
-      - name: Check Rust formatting (workspace and pgp-totp-onion)
+      - name: Check Rust formatting (workspace, pgp-totp-onion, and xmr402-swap-onion)
         run: |
           cargo fmt --all -- --check
           cargo fmt --manifest-path services/pgp-totp-onion/Cargo.toml --all -- --check
+          cargo fmt --manifest-path services/xmr402-swap-onion/Cargo.toml --all -- --check
 
-      - name: Run Clippy (workspace and pgp-totp-onion)
+      - name: Run Clippy (workspace, pgp-totp-onion, and xmr402-swap-onion)
         run: |
           cargo clippy --workspace --all-targets -- -D warnings
           cargo clippy --manifest-path services/pgp-totp-onion/Cargo.toml --locked --all-targets -- -D warnings
+          cargo clippy --manifest-path services/xmr402-swap-onion/Cargo.toml --locked --all-targets -- -D warnings
 
       - name: Type-check workspace
         run: cargo check --workspace --all-targets
 
-      - name: Run workspace and pgp-totp-onion unit and integration tests
+      - name: Run workspace, pgp-totp-onion, and xmr402-swap-onion unit and integration tests
         run: |
           cargo test --workspace -- --nocapture
           cargo test --manifest-path services/pgp-totp-onion/Cargo.toml --locked
+          cargo test --manifest-path services/xmr402-swap-onion/Cargo.toml --locked
 
       - name: Measure Rust test coverage
         run: |
@@ -400,7 +406,7 @@ jobs:
     name: Launch and verify APK on Limrun cloud Android instance
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[skip ci]')
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     needs: android-build
     permissions:
       contents: read
@@ -450,7 +456,7 @@ jobs:
           name: trap-debug-androidtest-apk
           path: apk
 
-      - name: Provision Limrun cloud Android 15 phone and run full runtime, .onion & 3-round OpenPGP TOTP prize gate
+      - name: Provision Limrun cloud Android 15 phone and run full runtime, .onion & dual hidden-service E2E gates (TOTP + XMR402 Swap)
         env:
           LIM_API_KEY: ${{ secrets.LIM_API_KEY }}
           LIMRUN_API_KEY: ${{ secrets.LIMRUN_API_KEY }}
@@ -475,6 +481,7 @@ jobs:
             dist/limrun/limrun-launch.png
             dist/limrun/limrun-onion.png
             dist/limrun/limrun-prize.png
+            dist/limrun/limrun-xmr402-swap.png
             dist/limrun/limrun-summary.json
           if-no-files-found: error
 
@@ -575,6 +582,7 @@ jobs:
             limrun-launch.png \
             limrun-onion.png \
             limrun-prize.png \
+            limrun-xmr402-swap.png \
             limrun-summary.json \
             GPL-3.0.txt \
             LGPL-2.1.txt \
@@ -594,6 +602,7 @@ jobs:
               limrun-launch.png \
               limrun-onion.png \
               limrun-prize.png \
+              limrun-xmr402-swap.png \
               limrun-summary.json \
               GPL-3.0.txt \
               LGPL-2.1.txt \
@@ -649,7 +658,7 @@ jobs:
           - Android JVM / Robolectric Compose UI, screenshot, and JNI parity tests
           - Strict APK DEX/ELF/asset packaging audit (\`scripts/audit-apk.sh\`)
           - Live Android 15 emulator launch, Cefpack Chromium 156 readiness, and \`ov_tor\` SOCKS5 runtime gate (\`scripts/emulator-gate.sh\`)
-          - Live Limrun cloud Android 15 phone launch, Arti Tor bootstrap, and isolated \`.onion\` UI smoke gate (\`scripts/limrun-gate.sh\`)
+          - Live Limrun cloud Android 15 phone launch, Arti Tor bootstrap, isolated \`.onion\` UI smoke, 3-round OpenPGP TOTP \`.onion\` prize gate, and zero-JS \`BTC -> XMR\` swap + \`XMR402\` \`OutProofV2\` \`.onion\` gate (\`scripts/limrun-gate.sh\`)
           - Sigstore-backed GitHub Build Provenance & SPDX 2.3 SBOM Attestations
 
           ### Verify Downloaded APK & SBOM Attestation
@@ -669,6 +678,7 @@ jobs:
             dist/limrun-launch.png \
             dist/limrun-onion.png \
             dist/limrun-prize.png \
+            dist/limrun-xmr402-swap.png \
             dist/limrun-summary.json \
             dist/GPL-3.0.txt \
             dist/LGPL-2.1.txt \

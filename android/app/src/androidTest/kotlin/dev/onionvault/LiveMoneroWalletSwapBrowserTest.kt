@@ -120,7 +120,7 @@ class LiveMoneroWalletSwapBrowserTest {
                 assertTrue("Cefpack engine must be ready", TrapApplication.isEngineReady)
 
                 OvNative.nativeSetRequireBiometric(false)
-                OvNative.nativeXmrDeleteWallet()
+                activity.resetXmrWalletForTest()
 
                 // 1. Wait for MetaToolsBrowserShell and real Arti Tor SOCKS5h bootstrap.
                 composeRule.waitUntil(timeoutMillis = 15_000L) {
@@ -149,6 +149,11 @@ class LiveMoneroWalletSwapBrowserTest {
                 }
                 val browser = activity.activeCefpackSessionForTest()!!
                 enforceZeroJsCdp(activity, browser)
+
+                activity.resetXmrWalletForTest()
+                composeRule.waitUntil(timeoutMillis = 5_000L) {
+                    !activity.currentUiStateForTest().xmr.status.hasWallet
+                }
 
                 composeRule.waitForIdle()
                 SystemClock.sleep(300L)

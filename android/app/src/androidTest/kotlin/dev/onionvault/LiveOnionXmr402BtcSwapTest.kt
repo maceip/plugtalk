@@ -3,12 +3,14 @@ package dev.onionvault
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
+import android.util.Base64
 import android.util.Log
 import android.view.PixelCopy
 import android.view.SurfaceView
@@ -82,6 +84,8 @@ class LiveOnionXmr402BtcSwapTest {
     companion object {
         const val TAG = "TrapXmr402Gate"
         const val APP_XMR402_SCREENSHOT_FILENAME = "xmr402-swap-won.png"
+        const val APP_REMOTE_BLADE_SCREENSHOT_FILENAME = "xmr402-remote-blade.png"
+        const val APP_WALLET_QR_SCREENSHOT_FILENAME = "xmr402-wallet-qr.png"
         const val DEVICE_XMR402_SCREENSHOT_PATH = "/data/local/tmp/trap-xmr402-swap-won.png"
         const val EXPECTED_PRIZE_BANNER =
             "PRIZE: OBSIDIAN-MONERO-CITADEL :: ZERO-JS XMR402 + BTC-SWAP CHAMPION [SEAL-402XMR]"
@@ -111,6 +115,9 @@ class LiveOnionXmr402BtcSwapTest {
             ?.toLongOrNull()
             ?.coerceIn(500L, 15_000L)
             ?: 2_000L
+        val captureErgonomicShots = args.getString("captureErgonomicShots")
+            ?.trim()
+            ?.equals("true", ignoreCase = true) == true
 
         val baseOnionUrl = rawOnionUrl.trim().trimEnd('/')
         val vaultUrl = "$baseOnionUrl/vault"
@@ -125,6 +132,8 @@ class LiveOnionXmr402BtcSwapTest {
 
         CrashReporter.clear(appContext)
         runCatching { File(appContext.filesDir, APP_XMR402_SCREENSHOT_FILENAME).delete() }
+        runCatching { File(appContext.filesDir, APP_REMOTE_BLADE_SCREENSHOT_FILENAME).delete() }
+        runCatching { File(appContext.filesDir, APP_WALLET_QR_SCREENSHOT_FILENAME).delete() }
         wakeDisplay(instrumentation)
 
         val prefs = TrapPreferences(appContext)
@@ -155,7 +164,7 @@ class LiveOnionXmr402BtcSwapTest {
                 assertTrue("Cefpack engine must be ready", TrapApplication.isEngineReady)
 
                 OvNative.nativeSetRequireBiometric(false)
-                OvNative.nativeXmrDeleteWallet()
+                activity.resetXmrWalletForTest()
 
                 val policy = OvNative.parseUrlPolicy(OvNative.nativeCheckUrlPolicy(vaultUrl, true))
                 assertTrue(
@@ -191,12 +200,15 @@ class LiveOnionXmr402BtcSwapTest {
                 val browser = activity.activeCefpackSessionForTest()!!
                 enforceZeroJsCdp(activity, browser)
 
-                // 2. Create fresh 25-word Monero wallet (0 XMR) via RemoteMode.MoneroWallet quick blade.
-                composeRule.onNodeWithTag("side_remote_collapsed_face").performClick()
+                // Ensure any startup XMR status refresh is settled in a clean 0-wallet UI state.
+                activity.resetXmrWalletForTest()
                 composeRule.waitUntil(timeoutMillis = 5_000L) {
-                    composeRule.onAllNodesWithTag("remote_monero_wallet").fetchSemanticsNodes().isNotEmpty()
+                    !activity.currentUiStateForTest().xmr.status.hasWallet
                 }
-                composeRule.onNodeWithTag("remote_monero_wallet").performClick()
+                composeRule.waitForIdle()
+
+                // 2. Create fresh 25-word Monero wallet (0 XMR) via RemoteMode.MoneroWallet quick blade.
+                openRemoteMoneroBladeReliably()
                 composeRule.waitUntil(timeoutMillis = 5_000L) {
                     composeRule.onAllNodesWithTag("remote_xmr_create_wallet").fetchSemanticsNodes().isNotEmpty()
                 }
@@ -246,7 +258,7 @@ class LiveOnionXmr402BtcSwapTest {
                     composeRule.onNodeWithTag("xmr402_use_page_daemon_button")
                         .performScrollTo()
                         .performClick()
-                    composeRule.waitUntil(timeoutMillis = 60_000L) {
+                    composeRule.waitUntil(timeoutMillis = 120_000L) {
                         val xmrUi = activity.currentUiStateForTest().xmr
                         !xmrUi.syncing && xmrUi.status.syncEndpoint.contains(":18081")
                     }
@@ -313,14 +325,7 @@ class LiveOnionXmr402BtcSwapTest {
                 awaitSwapOrderCompletedDom(activity, browser, timeoutMs = 90_000L)
 
                 // 6. Sync wallet over Tor (<xmr402OnionHost>:18081) and assert unlocked balance == 1.0 XMR (1_000_000_000_000 atomic).
-                composeRule.onNodeWithTag("side_remote_collapsed_face").performClick()
-                composeRule.waitUntil(timeoutMillis = 5_000L) {
-                    composeRule.onAllNodesWithTag("remote_monero_wallet").fetchSemanticsNodes().isNotEmpty() ||
-                        composeRule.onAllNodesWithTag("remote_xmr_sync").fetchSemanticsNodes().isNotEmpty()
-                }
-                if (composeRule.onAllNodesWithTag("remote_monero_wallet").fetchSemanticsNodes().isNotEmpty()) {
-                    composeRule.onNodeWithTag("remote_monero_wallet").performClick()
-                }
+                openRemoteMoneroBladeReliably()
                 composeRule.waitUntil(timeoutMillis = 5_000L) {
                     composeRule.onAllNodesWithTag("remote_xmr_sync").fetchSemanticsNodes().isNotEmpty()
                 }
@@ -350,6 +355,12 @@ class LiveOnionXmr402BtcSwapTest {
                     TAG,
                     "Synced 1.0 XMR swap payout over Tor (height=${fundedStatus.syncedHeight}/${fundedStatus.daemonHeight})",
                 )
+
+                if (captureErgonomicShots) {
+                    composeRule.waitForIdle()
+                    SystemClock.sleep(350L)
+                    captureAppFileScreenshot(instrumentation, activity, APP_REMOTE_BLADE_SCREENSHOT_FILENAME)
+                }
 
                 if (composeRule.onAllNodesWithTag("remote_close_button").fetchSemanticsNodes().isNotEmpty()) {
                     composeRule.onNodeWithTag("remote_close_button").performClick()
@@ -406,6 +417,43 @@ class LiveOnionXmr402BtcSwapTest {
                 SystemClock.sleep(600L)
                 captureWonScreenshot(instrumentation, activity)
 
+                if (captureErgonomicShots) {
+                    openRemoteMoneroBladeReliably()
+                    composeRule.waitUntil(timeoutMillis = 5_000L) {
+                        composeRule.onAllNodesWithTag("remote_open_full_xmr_wallet")
+                            .fetchSemanticsNodes()
+                            .isNotEmpty()
+                    }
+                    composeRule.onNodeWithTag("remote_open_full_xmr_wallet").performClick()
+                    composeRule.waitUntil(timeoutMillis = 5_000L) {
+                        composeRule.onAllNodesWithTag("xmr_wallet_sheet")
+                            .fetchSemanticsNodes()
+                            .isNotEmpty()
+                    }
+                    if (composeRule.onAllNodesWithTag("xmr_dismiss_new_seed_button")
+                            .fetchSemanticsNodes()
+                            .isNotEmpty()
+                    ) {
+                        composeRule.onNodeWithTag("xmr_dismiss_new_seed_button").performClick()
+                        composeRule.waitForIdle()
+                    }
+                    composeRule.waitUntil(timeoutMillis = 5_000L) {
+                        composeRule.onAllNodesWithTag("xmr_receive_qr")
+                            .fetchSemanticsNodes()
+                            .isNotEmpty()
+                    }
+                    composeRule.waitForIdle()
+                    SystemClock.sleep(400L)
+                    captureAppFileScreenshot(instrumentation, activity, APP_WALLET_QR_SCREENSHOT_FILENAME)
+                    if (composeRule.onAllNodesWithTag("sheet_close_button")
+                            .fetchSemanticsNodes()
+                            .isNotEmpty()
+                    ) {
+                        composeRule.onNodeWithTag("sheet_close_button").performClick()
+                        composeRule.waitForIdle()
+                    }
+                }
+
                 val wonPayload = JSONObject()
                     .put("onionUrl", vaultUrl)
                     .put("swapBtcAddress", swapBtcAddress)
@@ -421,9 +469,41 @@ class LiveOnionXmr402BtcSwapTest {
             prefs.requireBiometric = previousBiometric
             if (OvNative.isLoaded) {
                 runCatching { OvNative.nativeXmrDeleteWallet() }
+                runCatching { OvNative.nativeXmrSetDaemonEndpointJson("", "monerod_onion") }
                 runCatching { OvNative.nativeSetRequireBiometric(previousBiometric) }
             }
         }
+    }
+
+    private fun openRemoteMoneroBladeReliably(timeoutMs: Long = 10_000L) {
+        val deadline = SystemClock.uptimeMillis() + timeoutMs
+        while (SystemClock.uptimeMillis() < deadline) {
+            if (composeRule.onAllNodesWithTag("remote_monero_blade")
+                    .fetchSemanticsNodes()
+                    .isNotEmpty()
+            ) {
+                return
+            }
+            if (composeRule.onAllNodesWithTag("remote_monero_wallet")
+                    .fetchSemanticsNodes()
+                    .isNotEmpty()
+            ) {
+                runCatching { composeRule.onNodeWithTag("remote_monero_wallet").performClick() }
+            } else if (composeRule.onAllNodesWithTag("remote_switch_to_menu")
+                    .fetchSemanticsNodes()
+                    .isNotEmpty()
+            ) {
+                runCatching { composeRule.onNodeWithTag("remote_switch_to_menu").performClick() }
+            } else if (composeRule.onAllNodesWithTag("side_remote_collapsed_face")
+                    .fetchSemanticsNodes()
+                    .isNotEmpty()
+            ) {
+                runCatching { composeRule.onNodeWithTag("side_remote_collapsed_face").performClick() }
+            }
+            SystemClock.sleep(250L)
+            composeRule.waitForIdle()
+        }
+        composeRule.onNodeWithTag("remote_monero_blade").assertIsDisplayed()
     }
 
     private fun navigateViaCrtAddressPod(targetUrl: String) {
@@ -865,42 +945,54 @@ class LiveOnionXmr402BtcSwapTest {
         return ""
     }
 
-    private fun captureWonScreenshot(
+    private fun captureAppFileScreenshot(
         instrumentation: android.app.Instrumentation,
         activity: MainActivity,
-    ) {
+        filename: String,
+    ): ByteArray {
         var bitmap = captureActivityWindowComposite(activity)
         if (bitmap == null) {
             bitmap = runCatching { instrumentation.uiAutomation.takeScreenshot() }.getOrNull()
         }
-        assertNotNull("Failed to capture unlocked XMR402 prize screenshot", bitmap)
+        assertNotNull("Failed to capture screenshot $filename", bitmap)
         try {
             val out = ByteArrayOutputStream()
             bitmap!!.compress(Bitmap.CompressFormat.PNG, 100, out)
             val pngBytes = out.toByteArray()
-            assertTrue("Encoded XMR402 prize PNG must be non-empty", pngBytes.size > 512)
-
-            FileOutputStream(File(activity.filesDir, APP_XMR402_SCREENSHOT_FILENAME)).use { fos ->
+            assertTrue("Encoded PNG $filename must be non-empty", pngBytes.size > 512)
+            FileOutputStream(File(activity.filesDir, filename)).use { fos ->
                 fos.write(pngBytes)
                 fos.fd.sync()
             }
-            runCatching {
-                val pfds = instrumentation.uiAutomation.executeShellCommandRw(
-                    "dd of=$DEVICE_XMR402_SCREENSHOT_PATH bs=65536",
-                )
-                ParcelFileDescriptor.AutoCloseOutputStream(pfds[1]).use { stdin ->
-                    stdin.write(pngBytes)
-                    stdin.flush()
-                }
-                ParcelFileDescriptor.AutoCloseInputStream(pfds[0]).use { stdout ->
-                    val buf = ByteArray(1024)
-                    while (stdout.read(buf) > 0) {
-                        // Drain dd summary
-                    }
-                }
-            }
+            return pngBytes
         } finally {
             bitmap?.recycle()
+        }
+    }
+
+    private fun captureWonScreenshot(
+        instrumentation: android.app.Instrumentation,
+        activity: MainActivity,
+    ) {
+        val pngBytes = captureAppFileScreenshot(
+            instrumentation = instrumentation,
+            activity = activity,
+            filename = APP_XMR402_SCREENSHOT_FILENAME,
+        )
+        runCatching {
+            val pfds = instrumentation.uiAutomation.executeShellCommandRw(
+                "dd of=$DEVICE_XMR402_SCREENSHOT_PATH bs=65536",
+            )
+            ParcelFileDescriptor.AutoCloseOutputStream(pfds[1]).use { stdin ->
+                stdin.write(pngBytes)
+                stdin.flush()
+            }
+            ParcelFileDescriptor.AutoCloseInputStream(pfds[0]).use { stdout ->
+                val buf = ByteArray(1024)
+                while (stdout.read(buf) > 0) {
+                    // Drain dd summary
+                }
+            }
         }
     }
 
@@ -925,52 +1017,92 @@ class LiveOnionXmr402BtcSwapTest {
         canvas.drawColor(Color.rgb(13, 15, 18))
         val mainHandler = Handler(Looper.getMainLooper())
 
-        var drewWebpage = false
-        val liveBrowser = activity.activeCefpackSessionForTest()
-        if (liveBrowser != null) {
-            val cefBmpRef = AtomicReference<Bitmap?>(null)
-            val cefLatch = CountDownLatch(1)
-            activity.runOnUiThread {
-                runCatching {
-                    liveBrowser.captureBitmap { captured ->
-                        val copy = captured?.let { bmp ->
-                            if (!bmp.isRecycled) bmp.copy(Bitmap.Config.ARGB_8888, false) else null
+        val ui = activity.currentUiStateForTest()
+        val modalOpen = ui.xmr.walletSheetOpen || ui.xmr.swapSheetOpen || ui.xmr.xmr402SheetOpen
+
+        if (!ui.isStartPage && !modalOpen) {
+            var drewWebpage = false
+            val liveBrowser = activity.activeCefpackSessionForTest()
+            if (liveBrowser != null) {
+                val cdpBmpRef = AtomicReference<Bitmap?>(null)
+                val cdpLatch = CountDownLatch(1)
+                activity.runOnUiThread {
+                    runCatching {
+                        liveBrowser.executeDevToolsMethod(
+                            "Page.captureScreenshot",
+                            "{\"format\":\"png\"}",
+                        ) { ok, json ->
+                            if (ok && !json.isNullOrBlank()) {
+                                val decoded = runCatching {
+                                    val b64 = JSONObject(json).optString("data", "")
+                                    if (b64.isNotEmpty()) {
+                                        val bytes = Base64.decode(b64, Base64.DEFAULT)
+                                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                    } else {
+                                        null
+                                    }
+                                }.getOrNull()
+                                cdpBmpRef.set(decoded)
+                            }
+                            cdpLatch.countDown()
                         }
-                        cefBmpRef.set(copy)
-                        cefLatch.countDown()
-                    }
-                }.onFailure { cefLatch.countDown() }
-            }
-            cefLatch.await(5, TimeUnit.SECONDS)
-            cefBmpRef.get()?.let { cefBmp ->
-                val dstRect = android.graphics.Rect(0, 0, w, h)
-                canvas.drawBitmap(cefBmp, null, dstRect, null)
-                cefBmp.recycle()
-                drewWebpage = true
-            }
-        }
-        if (!drewWebpage) {
-            for ((sv, loc) in surfaceViews) {
-                if (sv.width <= 0 || sv.height <= 0 || !sv.holder.surface.isValid) continue
-                val svBmp = Bitmap.createBitmap(sv.width, sv.height, Bitmap.Config.ARGB_8888)
-                val svLatch = CountDownLatch(1)
-                val svResult = AtomicReference(PixelCopy.ERROR_UNKNOWN)
-                runCatching {
-                    PixelCopy.request(
-                        sv,
-                        svBmp,
-                        { res ->
-                            svResult.set(res)
-                            svLatch.countDown()
-                        },
-                        mainHandler,
-                    )
-                }.onFailure { svLatch.countDown() }
-                svLatch.await(5, TimeUnit.SECONDS)
-                if (svResult.get() == PixelCopy.SUCCESS) {
-                    canvas.drawBitmap(svBmp, loc[0].toFloat(), loc[1].toFloat(), null)
+                    }.onFailure { cdpLatch.countDown() }
                 }
-                svBmp.recycle()
+                cdpLatch.await(5, TimeUnit.SECONDS)
+                cdpBmpRef.get()?.let { cdpBmp ->
+                    val svRect = surfaceViews.firstOrNull()?.let { (sv, loc) ->
+                        android.graphics.Rect(loc[0], loc[1], loc[0] + sv.width, loc[1] + sv.height)
+                    } ?: android.graphics.Rect(0, 0, w, h)
+                    canvas.drawBitmap(cdpBmp, null, svRect, null)
+                    cdpBmp.recycle()
+                    drewWebpage = true
+                }
+            }
+            if (!drewWebpage && liveBrowser != null) {
+                val cefBmpRef = AtomicReference<Bitmap?>(null)
+                val cefLatch = CountDownLatch(1)
+                activity.runOnUiThread {
+                    runCatching {
+                        liveBrowser.captureBitmap { captured ->
+                            val copy = captured?.let { bmp ->
+                                if (!bmp.isRecycled) bmp.copy(Bitmap.Config.ARGB_8888, false) else null
+                            }
+                            cefBmpRef.set(copy)
+                            cefLatch.countDown()
+                        }
+                    }.onFailure { cefLatch.countDown() }
+                }
+                cefLatch.await(5, TimeUnit.SECONDS)
+                cefBmpRef.get()?.let { cefBmp ->
+                    val dstRect = android.graphics.Rect(0, 0, w, h)
+                    canvas.drawBitmap(cefBmp, null, dstRect, null)
+                    cefBmp.recycle()
+                    drewWebpage = true
+                }
+            }
+            if (!drewWebpage) {
+                for ((sv, loc) in surfaceViews) {
+                    if (sv.width <= 0 || sv.height <= 0 || !sv.holder.surface.isValid) continue
+                    val svBmp = Bitmap.createBitmap(sv.width, sv.height, Bitmap.Config.ARGB_8888)
+                    val svLatch = CountDownLatch(1)
+                    val svResult = AtomicReference(PixelCopy.ERROR_UNKNOWN)
+                    runCatching {
+                        PixelCopy.request(
+                            sv,
+                            svBmp,
+                            { res ->
+                                svResult.set(res)
+                                svLatch.countDown()
+                            },
+                            mainHandler,
+                        )
+                    }.onFailure { svLatch.countDown() }
+                    svLatch.await(5, TimeUnit.SECONDS)
+                    if (svResult.get() == PixelCopy.SUCCESS) {
+                        canvas.drawBitmap(svBmp, loc[0].toFloat(), loc[1].toFloat(), null)
+                    }
+                    svBmp.recycle()
+                }
             }
         }
 
@@ -991,20 +1123,24 @@ class LiveOnionXmr402BtcSwapTest {
         winLatch.await(5, TimeUnit.SECONDS)
 
         if (winResult.get() == PixelCopy.SUCCESS) {
-            val pixels = IntArray(w * h)
-            winBmp.getPixels(pixels, 0, w, 0, 0, w, h)
-            for (i in pixels.indices) {
-                val c = pixels[i]
-                val r = (c ushr 16) and 0xFF
-                val g = (c ushr 8) and 0xFF
-                val b = c and 0xFF
-                if (r in 10..16 && g in 12..18 && b in 15..21) {
-                    pixels[i] = 0x00000000
+            if (!ui.isStartPage && !modalOpen) {
+                val pixels = IntArray(w * h)
+                winBmp.getPixels(pixels, 0, w, 0, 0, w, h)
+                for (i in pixels.indices) {
+                    val c = pixels[i]
+                    val r = (c ushr 16) and 0xFF
+                    val g = (c ushr 8) and 0xFF
+                    val b = c and 0xFF
+                    if (r in 10..16 && g in 12..18 && b in 15..21) {
+                        pixels[i] = 0x00000000
+                    }
                 }
+                val chromaBmp = Bitmap.createBitmap(pixels, w, h, Bitmap.Config.ARGB_8888)
+                canvas.drawBitmap(chromaBmp, 0f, 0f, null)
+                chromaBmp.recycle()
+            } else {
+                canvas.drawBitmap(winBmp, 0f, 0f, null)
             }
-            val chromaBmp = Bitmap.createBitmap(pixels, w, h, Bitmap.Config.ARGB_8888)
-            canvas.drawBitmap(chromaBmp, 0f, 0f, null)
-            chromaBmp.recycle()
         }
         winBmp.recycle()
 

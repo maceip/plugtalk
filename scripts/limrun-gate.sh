@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Limrun cloud Android runtime, UI smoke & 3-round OpenPGP TOTP .onion prize gate wrapper (`dev.onionvault`).
+# Limrun cloud Android runtime, UI smoke & dual live .onion E2E gates wrapper (`dev.onionvault`).
 #
 # Usage:
 #   LIM_API_KEY=lim_... ./scripts/limrun-gate.sh [path/to/app-debug.apk] [output-dir] [path/to/app-debug-androidTest.apk]
@@ -12,6 +12,7 @@
 #   LIMRUN_MODEL                  Device form factor ('phone' default, or 'tablet').
 #   LIMRUN_BASE_URL               Optional API endpoint override (used by local test harness).
 #   TOTP_ONION_URL                Optional override for the live 3-round OpenPGP TOTP .onion URL.
+#   XMR402_ONION_URL              Optional override for the live XMR402 + BTC->XMR Swap .onion URL.
 
 set -euo pipefail
 
@@ -86,6 +87,7 @@ LIMRUN_INSTANCE_ID_FILE="$INSTANCE_ID_FILE" \
 for required_file in \
     "${OUT_DIR}/limrun-launch.png" \
     "${OUT_DIR}/limrun-prize.png" \
+    "${OUT_DIR}/limrun-xmr402-swap.png" \
     "${OUT_DIR}/limrun-logcat.txt" \
     "${OUT_DIR}/limrun-summary.json"; do
     if [[ ! -s "$required_file" ]]; then

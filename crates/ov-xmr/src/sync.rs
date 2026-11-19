@@ -43,7 +43,7 @@ use crate::{
 pub const LWS_FORBIDDEN_ERROR_MSG: &str = "LWS server returned 403 Forbidden (account pending admin approval); switch to .onion monerod mode or use a self-hosted LWS";
 
 /// Blocks fetched per `contiguous_scannable_blocks` RPC request over Tor.
-const BLOCK_SCAN_CHUNK: u64 = 50;
+const BLOCK_SCAN_CHUNK: u64 = 16;
 
 /// Maximum blocks scanned in a single `sync()` UI invocation before returning a persisted checkpoint.
 const MAX_BLOCKS_PER_SYNC_PASS: u64 = 500;
@@ -189,8 +189,10 @@ async fn sync_via_monerod_onion(
     let mut birthday_pending = meta.birthday_pending;
 
     if birthday_pending {
-        restore_height = if tip <= 10_000 {
+        restore_height = if tip <= 100 {
             1.min(tip)
+        } else if tip <= 10_000 {
+            tip.saturating_sub(25).max(1)
         } else {
             tip.saturating_sub(5)
         };

@@ -122,6 +122,7 @@ class MainActivity : FragmentActivity() {
 
     private var torPollingJob: Job? = null
     private var stateSyncJob: Job? = null
+    private var xmrStatusJob: Job? = null
 
     private var viewportSourceRect: Rect? = null
     private var fullViewportWidthPx: Int = 0
@@ -2934,7 +2935,8 @@ class MainActivity : FragmentActivity() {
 
     private fun refreshXmrStatus() {
         if (!OvNative.isLoaded) return
-        lifecycleScope.launch {
+        xmrStatusJob?.cancel()
+        xmrStatusJob = lifecycleScope.launch {
             val status = withContext(Dispatchers.IO) {
                 val json = runCatching { OvNative.nativeXmrStatusJson() }.getOrDefault("")
                 OvNative.parseXmrStatus(json)
@@ -3201,6 +3203,7 @@ class MainActivity : FragmentActivity() {
     private fun deleteXmrWallet() {
         if (!OvNative.isLoaded) return
         authenticateBiometricIfRequired(subtitle = "Authenticate to delete Monero wallet from device") {
+            xmrStatusJob?.cancel()
             lifecycleScope.launch {
                 val (deleted, statusSnap) = withContext(Dispatchers.IO) {
                     val ok = runCatching { OvNative.nativeXmrDeleteWallet() }.getOrDefault(false)
@@ -3631,6 +3634,43 @@ class MainActivity : FragmentActivity() {
     @VisibleForTesting
     internal fun cdpControllerForTest(): CdpDomPgpController? =
         if (controllersReady) cdpController else null
+
+    @VisibleForTesting
+    internal fun resetXmrWalletForTest() {
+        if (!OvNative.isLoaded) return
+        xmrStatusJob?.cancel()
+        runCatching { OvNative.nativeXmrDeleteWallet() }
+        runCatching { OvNative.nativeXmrSetDaemonEndpointJson("", "monerod_onion") }
+        val statusSnap = OvNative.parseXmrStatus(
+            runCatching { OvNative.nativeXmrStatusJson() }.getOrDefault(""),
+        )
+        runOnUiThread {
+            uiState = uiState.copy(
+                xmr = uiState.xmr.copy(
+                    status = statusSnap,
+                    creatingOrRestoring = false,
+                    syncing = false,
+                    sending = false,
+                    paying402 = false,
+                    provingTxid = null,
+                    revealedMnemonic = null,
+                    newlyCreatedMnemonic = null,
+                    lastTxid = null,
+                    lastFeeXmr = null,
+                    lastTxProof = null,
+                    activeSwapTabMap = emptyMap(),
+                    adHocSwapByTab = emptyMap(),
+                    challengesByTab = emptyMap(),
+                    dismissed402TabIds = emptySet(),
+                    active402Challenge = null,
+                    xmr402SheetOpen = false,
+                    walletSheetOpen = false,
+                    swapSheetOpen = false,
+                    error = null,
+                ),
+            )
+        }
+    }
 
     @VisibleForTesting
     internal fun loadZeroJsDocumentForTest(

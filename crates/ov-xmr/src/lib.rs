@@ -434,6 +434,30 @@ impl XmrService {
             }
         }
 
+        // Exact conservation of Pedersen commitments for 0-conf (`height == 0`) outgoing
+        // transactions whose change output has not yet been scanned in a mined block:
+        // `change_atomic = sum(inputs_spent_by_tx) - amount_atomic - fee_atomic` (locked until 10 confs).
+        for t in &txs {
+            if t.direction == "out"
+                && t.height == 0
+                && !outputs.iter().any(|o| o.txid.eq_ignore_ascii_case(&t.txid))
+            {
+                let spent_by_tx: u64 = outputs
+                    .iter()
+                    .filter(|o| {
+                        o.spent_in_txid
+                            .as_deref()
+                            .is_some_and(|stx| stx.eq_ignore_ascii_case(&t.txid))
+                    })
+                    .map(|o| o.amount_atomic)
+                    .fold(0u64, u64::saturating_add);
+                let pending_change = spent_by_tx
+                    .saturating_sub(t.amount_atomic)
+                    .saturating_sub(t.fee_atomic);
+                total_balance = total_balance.saturating_add(pending_change);
+            }
+        }
+
         let sub_items: Vec<XmrSubaddressItem> = subs
             .iter()
             .map(|s| {
@@ -555,7 +579,7 @@ impl XmrService {
             };
 
             let (restore_height, birthday_pending, synced_height, daemon_height) = match tip_opt {
-                Some(tip) if tip <= 10_000 => (1.min(tip), false, 0, tip),
+                Some(tip) if tip <= 100 => (1.min(tip), false, 0, tip),
                 Some(tip) => (tip, false, tip, tip),
                 None => (0, true, 0, 0),
             };
