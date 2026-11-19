@@ -39,4 +39,19 @@ fi
 test -s "${OUT_DIR}/homescreen-sync.json"
 test -s "${OUT_DIR}/assets/homescreen-preview.webp"
 
-echo "Synced Compose @Preview homescreen & semantics manifest -> ${OUT_DIR}"
+SPRITES_SRC="${REPO_ROOT}/android/app/src/main/res/drawable-nodpi"
+SPRITES_DST="${OUT_DIR}/assets/sprites"
+mkdir -p "${SPRITES_DST}"
+
+for sprite in \
+    bg_trap_street_zine.webp \
+    pod_crt_pewter_tv.webp \
+    pod_pewter_back_key.webp \
+    pod_red_switchblade.webp \
+    pod_tor_purple_orb.webp \
+    pod_zk_tor_remote.webp; do
+    cp -f "${SPRITES_SRC}/${sprite}" "${SPRITES_DST}/${sprite}"
+    test -s "${SPRITES_DST}/${sprite}"
+done
+
+echo "Synced Compose @Preview homescreen, hardware sprites & semantics manifest -> ${OUT_DIR}"

@@ -79,7 +79,13 @@ jobs:
             site/generated/assets/state-side-remote.webp \
             site/generated/assets/state-tor-circuit.webp \
             site/generated/assets/state-pgp-keyring.webp \
-            site/generated/assets/state-monero-wallet.webp; do
+            site/generated/assets/state-monero-wallet.webp \
+            site/generated/assets/sprites/bg_trap_street_zine.webp \
+            site/generated/assets/sprites/pod_crt_pewter_tv.webp \
+            site/generated/assets/sprites/pod_pewter_back_key.webp \
+            site/generated/assets/sprites/pod_red_switchblade.webp \
+            site/generated/assets/sprites/pod_tor_purple_orb.webp \
+            site/generated/assets/sprites/pod_zk_tor_remote.webp; do
             test -s "${required}" || {
               echo "::error::Missing or empty Pages asset: ${required}"
               exit 1

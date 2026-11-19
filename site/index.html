@@ -3,188 +3,217 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Trap Android Homescreen — Live Jetpack Compose @Preview Component Specification</title>
+  <title>Trap — Android Homescreen &amp; Full-Screen Browser</title>
   <meta
     name="description"
-    content="Interactive, CI-synced Jetpack Compose @Preview reference of the Trap Android zero-JS Tor browser homescreen with high-contrast hardware component callouts, gesture maps, and Compose Semantics geometry."
+    content="Synced Jetpack Compose @Preview Android homescreen with high-contrast component callouts, followed by the full-screen edge-to-edge Trap Tor and OpenPGP browser."
   />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
-    href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700;800&family=Space+Grotesk:wght@600;700&display=swap"
+    href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&family=Space+Grotesk:wght@600;700&display=swap"
     rel="stylesheet"
   />
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
-  <header class="topbar">
-    <div class="topbar-inner">
-      <div class="brand-lockup">
-        <span class="brand-stencil">TRAP</span>
-        <span class="brand-meta">ANDROID HOMESCREEN // COMPOSE @PREVIEW SPEC</span>
-      </div>
+  <h1 class="sr-only">Trap Android Homescreen and Full-Screen Browser</h1>
 
-      <div class="sync-telemetry" aria-label="Compose Preview synchronization telemetry">
-        <span class="telemetry-chip telemetry-chip--verified">
-          <span class="telemetry-dot" aria-hidden="true"></span>
-          <span>@Preview BrowserChromePreview()</span>
-        </span>
-        <span class="telemetry-chip" id="sync-version-chip">v0.1.43</span>
-        <span class="telemetry-chip" id="sync-viewport-chip">412×915dp</span>
-        <a
-          class="topbar-link"
-          id="repo-header-link"
-          href="https://github.com/maceip/trap"
-          target="_blank"
-          rel="noopener noreferrer"
-        >GitHub Repo ↗</a>
-      </div>
-    </div>
-  </header>
+  <main id="trap-page">
+    <!-- Stage 1: Synced Compose @Preview Phone Mock + High-Contrast Prose Callouts -->
+    <section class="phone-showcase" id="phone-showcase" aria-label="Android homescreen component callouts">
+      <div class="diagram-stage" id="diagram-stage">
+        <svg class="leader-svg" id="leader-svg" aria-hidden="true"></svg>
 
-  <main class="page-shell">
-    <section class="hero-header" aria-labelledby="page-title">
-      <h1 class="hero-title" id="page-title">
-        Trap Android Homescreen — Synced Compose @Preview &amp; Component Callouts
-      </h1>
-      <p class="hero-lead">
-        Rendered directly from the live Kotlin Jetpack Compose
-        <code>@Preview BrowserChromePreview()</code> tree via Robolectric Native Skia
-        (<code>HomescreenPagesSyncTest.kt</code>) on every push to <code>main</code>.
-        Every leader line and wireframe box below is driven by live Compose Semantics
-        <code>getUnclippedBoundsInRoot()</code> coordinates — hover or click any callout
-        (or press keys <code>1</code>–<code>7</code>, <code>B</code> for wireframes) to inspect
-        each hardware pod.
-      </p>
-    </section>
+        <div class="callout-column" id="callouts-left"></div>
 
-    <div class="controls-bar" role="region" aria-label="Preview state and overlay controls">
-      <div class="state-tabs" id="state-tabs" role="tablist" aria-label="Compose Preview states"></div>
-
-      <div class="overlay-actions">
-        <button
-          type="button"
-          class="utility-btn"
-          id="toggle-bounds-btn"
-          aria-pressed="false"
-        >Show All Bounds (B)</button>
-        <button
-          type="button"
-          class="utility-btn"
-          id="reset-selection-btn"
-        >Reset View (Esc)</button>
-      </div>
-    </div>
-
-    <section class="diagram-stage" id="diagram-stage" aria-label="Annotated Android homescreen diagram">
-      <svg class="leader-svg" id="leader-svg" aria-hidden="true"></svg>
-
-      <div class="callout-column" id="callouts-left" aria-label="Left component callouts 01 to 04"></div>
-
-      <div class="phone-column" id="phone-stage">
-        <div class="phone-chassis">
-          <div class="phone-viewport" id="phone-viewport">
-            <img
-              class="phone-image"
-              id="preview-image"
-              src="./generated/assets/homescreen-preview.webp"
-              alt="Synced Jetpack Compose Preview of the Trap Android homescreen"
-              width="824"
-              height="1830"
-            />
-            <div class="viewport-overlay" id="viewport-overlay"></div>
+        <div class="phone-column" id="phone-stage">
+          <div class="phone-chassis" id="phone-chassis">
+            <div class="phone-viewport" id="phone-viewport">
+              <img
+                class="phone-image"
+                id="preview-image"
+                src="./generated/assets/homescreen-preview.webp"
+                alt="Synced Jetpack Compose Preview of the Trap Android homescreen"
+                width="824"
+                height="1830"
+              />
+              <div class="viewport-overlay" id="viewport-overlay"></div>
+            </div>
           </div>
         </div>
-        <div class="phone-caption" aria-live="polite">
-          <strong id="phone-caption-title">@Preview BrowserChromePreview()</strong>
-          <span id="phone-caption-desc">
-            Live resting Android homescreen with all 7 Compose Semantics callout anchors active.
-          </span>
+
+        <div class="callout-column" id="callouts-right"></div>
+      </div>
+    </section>
+
+    <!-- Stage 2: 100vw x 100vh Edge-to-Edge Full-Screen Interactive Trap Browser -->
+    <section class="fullscreen-browser" id="fullscreen-browser" aria-label="Full-screen Trap browser">
+      <div class="fs-viewport" id="fs-viewport">
+        <div class="fs-start-surface" id="fs-start-surface">
+          <img
+            class="fs-start-zine"
+            id="fs-start-zine"
+            src="./generated/assets/sprites/bg_trap_street_zine.webp"
+            alt="Trap street-zine start surface"
+            draggable="false"
+          />
+        </div>
+
+        <div class="fs-page-scroll" id="fs-page-scroll" hidden>
+          <div class="fs-page-zoom" id="fs-page-zoom">
+            <div class="fs-page-content" id="fs-page-content"></div>
+          </div>
         </div>
       </div>
 
-      <div class="callout-column" id="callouts-right" aria-label="Right component callouts 05 to 07"></div>
-    </section>
+      <!-- 12dp Brushed-Steel Perimeter Rails (100% Hit-Test Passthrough) -->
+      <div class="fs-steel-rails" id="fs-steel-rails" aria-hidden="true">
+        <div class="fs-rail fs-rail--left">
+          <div class="fs-rail-wall"></div>
+          <div class="fs-rail-bar"></div>
+        </div>
+        <div class="fs-rail fs-rail--right">
+          <div class="fs-rail-bar"></div>
+          <div class="fs-rail-wall"></div>
+        </div>
+        <div class="fs-load-pulse" id="fs-load-pulse"></div>
+      </div>
 
-    <section class="spec-section" id="global-behaviors" aria-labelledby="behaviors-heading">
-      <h2 class="section-heading" id="behaviors-heading">
-        Whole-Shell Runtime Behaviors (Scroll Retraction, Picture-in-Picture &amp; Sync Pipeline)
-      </h2>
-      <p class="section-sub">
-        Trap eliminates conventional top/bottom browser toolbars so 100% of the screen belongs to the
-        zero-JS hidden service document while keeping hardware controls one thumb-motion away.
-      </p>
+      <!-- Floating Hardware Pod Cluster -->
+      <div class="fs-pods-layer" id="fs-pods-layer">
+        <!-- Cast-Pewter Back / Forward Switch -->
+        <button
+          type="button"
+          class="fs-pod fs-back-pod"
+          id="fs-back-pod"
+          aria-label="Back on tap, hold to go forward"
+        >
+          <span class="fs-back-glow" id="fs-back-glow" aria-hidden="true"></span>
+          <img
+            src="./generated/assets/sprites/pod_pewter_back_key.webp"
+            alt=""
+            draggable="false"
+          />
+        </button>
 
-      <div class="behavior-strip">
-        <article class="behavior-panel" id="panel-scroll-retraction">
-          <h3>110ms Mechanical Scroll Retraction</h3>
-          <p>
-            Scrolling downward on any webpage retracts the pod cluster in <code>110ms</code>:
-            <code>crt_address_pod</code> tucks <code>+96dp</code> down, left-hand pods scale to
-            <code>0.78×</code>, and right-bezel pods slide <code>+50..58dp</code> outward. Tapping any
-            retracted pod restores full scale before firing actions.
-          </p>
-        </article>
+        <!-- 3D Knurled Tor Circuit Orb -->
+        <button
+          type="button"
+          class="fs-pod fs-tor-orb"
+          id="fs-tor-orb"
+          aria-label="Tor circuit status on tap, hold to rotate identity"
+        >
+          <img
+            src="./generated/assets/sprites/pod_tor_purple_orb.webp"
+            alt=""
+            draggable="false"
+          />
+          <span class="fs-orb-beacon" id="fs-orb-beacon" aria-hidden="true"></span>
+        </button>
 
-        <article class="behavior-panel" id="panel-pip-mode">
-          <h3>Zero-White Scaled Picture-in-Picture</h3>
-          <p>
-            Minimizing an eligible tab enters Android PiP with <code>seamlessResizeEnabled</code>,
-            <code>0.88</code> window translucency, proportional zoom scaling
-            (<code>pipWidth / fullViewportWidth</code>), cached dark <code>#0D0F12</code> fallback frame,
-            and 3 <code>RemoteAction</code> controls: <code>Back</code>, <code>Reload/Stop</code>, and
-            <code>Text Search</code> (expanding into zero-JS <code>FindInPageHardwarePod</code>).
-          </p>
-        </article>
+        <!-- Recessed 5:4 Pewter CRT Address & Directory Monitor -->
+        <div
+          class="fs-pod fs-crt-pod"
+          id="fs-crt-pod"
+          role="button"
+          tabindex="0"
+          aria-label="Open .onion address bar and directory on tap, swipe horizontally to switch tabs, pull up for tab switcher"
+        >
+          <img
+            src="./generated/assets/sprites/pod_crt_pewter_tv.webp"
+            alt=""
+            draggable="false"
+          />
+          <div class="fs-crt-glass">
+            <span class="fs-crt-readout" id="fs-crt-readout">search / .onion</span>
+          </div>
+        </div>
 
-        <article class="behavior-panel" id="panel-continuous-sync">
-          <h3>Continuous Compose @Preview Sync</h3>
-          <p>
-            <code>.github/workflows/pages.yml</code> executes
-            <code>HomescreenPagesSyncTest.kt</code> on every push to <code>main</code>, rendering
-            <code>OnionVaultPreviews.kt</code> with native Skia and exporting exact
-            <code>getUnclippedBoundsInRoot()</code> coordinates to
-            <code>generated/homescreen-sync.json</code>.
-          </p>
-        </article>
+        <!-- +20deg Translucent Red OpenPGP Switchblade -->
+        <div
+          class="fs-pod fs-pgp-pod"
+          id="fs-pgp-pod"
+          role="button"
+          tabindex="0"
+          aria-label="Single click for new tab, double click for OpenPGP keyring, drag upward to verify or decrypt"
+        >
+          <span class="fs-pgp-led" id="fs-pgp-led" aria-hidden="true"></span>
+          <img
+            class="fs-pgp-sprite"
+            id="fs-pgp-sprite"
+            src="./generated/assets/sprites/pod_red_switchblade.webp"
+            alt=""
+            draggable="false"
+          />
+        </div>
+
+        <!-- +20deg ZK "TOR" 2x5 LED Side Remote -->
+        <button
+          type="button"
+          class="fs-pod fs-remote-pod"
+          id="fs-remote-pod"
+          aria-label="Expand hardware remote"
+        >
+          <img
+            src="./generated/assets/sprites/pod_zk_tor_remote.webp"
+            alt=""
+            draggable="false"
+          />
+          <span class="fs-remote-leds" id="fs-remote-leds" aria-hidden="true"></span>
+        </button>
+      </div>
+
+      <!-- Expanded CRT Address Editor + 11-Site Trusted .onion Directory -->
+      <div class="fs-crt-overlay" id="fs-crt-overlay" hidden>
+        <div class="fs-scrim" id="fs-crt-scrim"></div>
+        <div class="fs-crt-editor-stack">
+          <div class="fs-directory-sheet" id="fs-directory-sheet"></div>
+          <form class="fs-crt-input-well" id="fs-crt-form" autocomplete="off">
+            <input
+              type="text"
+              class="fs-crt-input"
+              id="fs-crt-input"
+              placeholder="Enter v3 .onion address or search DuckDuckGo over Tor…"
+              spellcheck="false"
+              autocapitalize="off"
+            />
+            <button type="submit" class="fs-well-btn fs-well-btn--go" id="fs-crt-go-btn">Go</button>
+            <button type="button" class="fs-well-btn" id="fs-crt-close-btn">Close</button>
+          </form>
+        </div>
+      </div>
+
+      <!-- Expanded Upright Hardware Side Remote Drawer -->
+      <aside class="fs-remote-drawer" id="fs-remote-drawer" hidden aria-label="Hardware remote">
+        <div class="fs-drawer-header">
+          <strong class="fs-drawer-title" id="fs-drawer-title">Hardware Remote</strong>
+          <button type="button" class="fs-drawer-close" id="fs-drawer-close">✕</button>
+        </div>
+        <div class="fs-drawer-body" id="fs-drawer-body"></div>
+      </aside>
+
+      <!-- Zero-JS Find-in-Page Hardware Pod -->
+      <div class="fs-find-pod" id="fs-find-pod" hidden>
+        <input
+          type="text"
+          class="fs-find-input"
+          id="fs-find-input"
+          placeholder="Search text in page…"
+          spellcheck="false"
+        />
+        <span class="fs-find-count" id="fs-find-count">0/0</span>
+        <button type="button" class="fs-well-btn" id="fs-find-prev" aria-label="Previous match">▲</button>
+        <button type="button" class="fs-well-btn" id="fs-find-next" aria-label="Next match">▼</button>
+        <button type="button" class="fs-well-btn" id="fs-find-close" aria-label="Close text search">✕</button>
+      </div>
+
+      <!-- Hardware Modal Host (Tabs, OpenPGP Keyring, Monero Wallet, Clearnet Consent, Plaintext Result) -->
+      <div class="fs-modal-layer" id="fs-modal-layer" hidden>
+        <div class="fs-scrim" id="fs-modal-scrim"></div>
+        <div class="fs-modal-sheet" id="fs-modal-sheet" role="dialog" aria-modal="true"></div>
       </div>
     </section>
-
-    <section class="spec-section" id="component-matrix" aria-labelledby="matrix-heading">
-      <h2 class="section-heading" id="matrix-heading">
-        Complete Homescreen Component &amp; Security Invariant Matrix
-      </h2>
-      <p class="section-sub">
-        Live-measured Compose Semantics tags, Kotlin source files, and cryptographic / transport
-        invariants for all seven homescreen elements.
-      </p>
-
-      <div class="table-wrap">
-        <table class="spec-table" id="spec-table">
-          <thead>
-            <tr>
-              <th scope="col">#</th>
-              <th scope="col">Component &amp; Source</th>
-              <th scope="col">Compose Tag &amp; Bounds</th>
-              <th scope="col">Primary Function</th>
-              <th scope="col">Security &amp; Transport Invariant</th>
-            </tr>
-          </thead>
-          <tbody id="spec-table-body"></tbody>
-        </table>
-      </div>
-    </section>
-
-    <footer class="page-footer">
-      <span id="footer-sync-meta">
-        Synced from @Preview BrowserChromePreview() · w412dp-h915dp-xhdpi
-      </span>
-      <span>
-        <a href="https://github.com/maceip/trap/releases/latest" id="latest-release-link" target="_blank" rel="noopener noreferrer">Latest Signed APK &amp; SBOM Release ↗</a>
-        &nbsp;·&nbsp;
-        <a href="https://github.com/maceip/cefpack" id="cefpack-repo-link" target="_blank" rel="noopener noreferrer">maceip/cefpack Chromium 156 Engine ↗</a>
-      </span>
-    </footer>
   </main>
 
   <script src="./app.js"></script>
