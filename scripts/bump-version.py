@@ -30,6 +30,7 @@ WORKSPACE_CRATES = frozenset(
         "ov-core",
         "ov-pgp",
         "ov-tor",
+        "ov-xmr",
     }
 )
 
