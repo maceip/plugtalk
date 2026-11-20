@@ -208,6 +208,7 @@ const showcaseState = {
   manifest: FALLBACK_MANIFEST,
   hoveredId: null,
   lockedId: null,
+  mobileSnappedId: "crt-address-pod",
   animRaf: null,
   // Interpolated morph state for smooth 60fps contour & leader animation
   morphProgress: 0, // 0 = resting contour, 1 = expanded @Preview contour
@@ -219,6 +220,10 @@ const showcaseState = {
   currentContour: null,
   currentAnchors: {}
 };
+
+function isMobileShowcase() {
+  return window.innerWidth <= 1120;
+}
 
 async function loadSyncManifest() {
   try {
@@ -253,7 +258,7 @@ function getComponentById(id) {
 }
 
 function getActiveHighlightId() {
-  return showcaseState.hoveredId || showcaseState.lockedId;
+  return showcaseState.hoveredId || showcaseState.lockedId || (isMobileShowcase() ? showcaseState.mobileSnappedId : null);
 }
 
 function lerp(a, b, t) {
@@ -480,6 +485,10 @@ function renderPhoneShowcase() {
     });
 
     const toggleExpand = () => {
+      if (isMobileShowcase()) {
+        showcaseState.mobileSnappedId = comp.id;
+        card.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+      }
       const next = showcaseState.lockedId === comp.id ? null : comp.id;
       startPreviewTransition(next);
     };
@@ -499,6 +508,51 @@ function renderPhoneShowcase() {
     }
   }
 
+  if (ordered.length > 0) {
+    showcaseState.mobileSnappedId = ordered[0].id;
+  }
+
+  // Track which horizontal callout card is snapped into center on mobile touch screens
+  const deckEl = document.getElementById("callout-deck");
+  if (deckEl) {
+    let deckRaf = null;
+    deckEl.addEventListener(
+      "scroll",
+      () => {
+        if (!isMobileShowcase()) return;
+        if (deckRaf) return;
+        deckRaf = requestAnimationFrame(() => {
+          deckRaf = null;
+          const deckRect = deckEl.getBoundingClientRect();
+          const deckCenterX = deckRect.left + deckRect.width * 0.5;
+          let bestId = showcaseState.mobileSnappedId;
+          let bestDist = Infinity;
+          for (const comp of ordered) {
+            const el = document.getElementById(`callout-${comp.id}`);
+            if (!el) continue;
+            const r = el.getBoundingClientRect();
+            const dist = Math.abs(r.left + r.width * 0.5 - deckCenterX);
+            if (dist < bestDist) {
+              bestDist = dist;
+              bestId = comp.id;
+            }
+          }
+          if (bestId && bestId !== showcaseState.mobileSnappedId) {
+            showcaseState.mobileSnappedId = bestId;
+            if (showcaseState.lockedId && showcaseState.lockedId !== bestId) {
+              startPreviewTransition(null);
+            } else {
+              syncShowcaseVisuals();
+            }
+          } else {
+            drawLeaderLines();
+          }
+        });
+      },
+      { passive: true }
+    );
+  }
+
   // Render interactive hit-targets on the phone mock (smaller/specific pods on top of full-bleed viewport)
   const hitOrder = [
     "start-zine-viewport",
@@ -516,7 +570,7 @@ function renderPhoneShowcase() {
     g.id = `hit-${comp.id}`;
     appendContourSvgElements(g, comp.contourDp, "contour-hit");
     g.addEventListener("mouseenter", () => {
-      if (!showcaseState.lockedId) {
+      if (!showcaseState.lockedId && !isMobileShowcase()) {
         showcaseState.hoveredId = comp.id;
         syncShowcaseVisuals();
       }
@@ -529,6 +583,14 @@ function renderPhoneShowcase() {
     });
     g.addEventListener("click", (e) => {
       e.stopPropagation();
+      if (isMobileShowcase()) {
+        showcaseState.mobileSnappedId = comp.id;
+        document.getElementById(`callout-${comp.id}`)?.scrollIntoView({
+          behavior: "smooth",
+          inline: "center",
+          block: "nearest"
+        });
+      }
       const next = showcaseState.lockedId === comp.id ? null : comp.id;
       startPreviewTransition(next);
     });
@@ -630,11 +692,6 @@ function drawLeaderLines() {
   const viewport = document.getElementById("phone-viewport");
   if (!svg || !stage || !viewport) return;
 
-  if (window.innerWidth <= 1120) {
-    svg.innerHTML = "";
-    return;
-  }
-
   const stageRect = stage.getBoundingClientRect();
   const vpRect = viewport.getBoundingClientRect();
   if (stageRect.width <= 0 || vpRect.width <= 0) return;
@@ -642,6 +699,81 @@ function drawLeaderLines() {
   svg.setAttribute("viewBox", `0 0 ${stageRect.width} ${stageRect.height}`);
   const focusedId = getActiveHighlightId();
   const fragment = document.createDocumentFragment();
+
+  if (isMobileShowcase()) {
+    const mobileId = showcaseState.lockedId || showcaseState.mobileSnappedId;
+    const comp = getComponentById(mobileId);
+    const cardEl = comp ? document.getElementById(`callout-${comp.id}`) : null;
+    if (comp && cardEl) {
+      const cardRect = cardEl.getBoundingClientRect();
+      const rootW = showcaseState.manifest.viewport?.widthDp || 412;
+      const rootH = showcaseState.manifest.viewport?.heightDp || 915;
+
+      const activeContour =
+        showcaseState.morphComponentId === comp.id && showcaseState.currentContour
+          ? showcaseState.currentContour
+          : showcaseState.lockedId === comp.id
+            ? comp.expandedContourDp || comp.contourDp
+            : comp.contourDp;
+
+      const startX = cardRect.left + cardRect.width * 0.5 - stageRect.left;
+      const startY = cardRect.top - stageRect.top;
+
+      const targetDpX =
+        activeContour.shape === "dual-rails"
+          ? 7
+          : activeContour.subFocus
+            ? activeContour.subFocus.cx
+            : activeContour.cx;
+      const targetDpY =
+        activeContour.shape === "dual-rails"
+          ? rootH - 18
+          : activeContour.subFocus
+            ? activeContour.subFocus.cy + activeContour.subFocus.r
+            : Math.min(rootH - 8, activeContour.cy + activeContour.height * 0.5);
+
+      const targetX = vpRect.left - stageRect.left + (targetDpX / rootW) * vpRect.width;
+      const targetY = vpRect.top - stageRect.top + (targetDpY / rootH) * vpRect.height;
+      const midY = targetY + (startY - targetY) * 0.55;
+
+      const d = `M ${startX.toFixed(1)} ${startY.toFixed(1)} L ${startX.toFixed(1)} ${midY.toFixed(
+        1
+      )} L ${targetX.toFixed(1)} ${midY.toFixed(1)} L ${targetX.toFixed(1)} ${targetY.toFixed(1)}`;
+
+      const g = document.createElementNS(SVG_NS, "g");
+      g.setAttribute("class", "leader-group is-active");
+
+      const halo = document.createElementNS(SVG_NS, "path");
+      halo.setAttribute("class", "leader-halo");
+      halo.setAttribute("d", d);
+      g.appendChild(halo);
+
+      const line = document.createElementNS(SVG_NS, "path");
+      line.setAttribute("class", "leader-line");
+      line.setAttribute("d", d);
+      g.appendChild(line);
+
+      const port = document.createElementNS(SVG_NS, "circle");
+      port.setAttribute("class", "leader-port");
+      port.setAttribute("cx", startX.toFixed(1));
+      port.setAttribute("cy", startY.toFixed(1));
+      port.setAttribute("r", "4");
+      g.appendChild(port);
+
+      const rimJoint = document.createElementNS(SVG_NS, "circle");
+      rimJoint.setAttribute("class", "leader-rim-joint");
+      rimJoint.setAttribute("cx", targetX.toFixed(1));
+      rimJoint.setAttribute("cy", targetY.toFixed(1));
+      rimJoint.setAttribute("r", "4.4");
+      g.appendChild(rimJoint);
+
+      fragment.appendChild(g);
+    }
+
+    svg.innerHTML = "";
+    svg.appendChild(fragment);
+    return;
+  }
 
   const ordered = getOrderedComponents();
   const leftLaneIds = ordered.filter((c) => c.side === "left").map((c) => c.id);

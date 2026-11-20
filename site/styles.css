@@ -94,8 +94,21 @@ body {
   max-width: 1480px;
   display: grid;
   grid-template-columns: minmax(280px, 1fr) minmax(300px, 382px) minmax(280px, 1fr);
+  grid-template-areas: "left phone right";
   gap: 1.25rem 3rem;
   align-items: center;
+}
+
+.callout-deck {
+  display: contents;
+}
+
+.callout-column--left {
+  grid-area: left;
+}
+
+.callout-column--right {
+  grid-area: right;
 }
 
 .leader-svg {
@@ -231,6 +244,7 @@ body {
 /* Phone Hardware Frame & Animated Dual-Layer @Preview Stack */
 
 .phone-column {
+  grid-area: phone;
   position: relative;
   z-index: 18;
   display: flex;
@@ -1370,44 +1384,145 @@ mark.trap-find-hit.is-current {
 }
 
 /* ==========================================================================
-   Responsive Layout
+   Responsive & Mobile Touch Layout
    ========================================================================== */
 
 @media (max-width: 1120px) {
-  .diagram-stage {
-    grid-template-columns: 1fr;
-    max-width: 580px;
-    gap: 1.2rem;
+  .phone-showcase {
+    height: 100vh;
+    height: 100dvh;
+    min-height: 580px;
+    padding: 0.75rem 0 0.85rem;
+    overflow: hidden;
   }
 
-  .leader-svg {
-    display: none;
+  .diagram-stage {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    align-items: stretch;
+    height: 100%;
+    max-width: 100%;
+    gap: 0.6rem;
   }
 
   .phone-column {
-    order: -1;
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 0 1rem;
   }
 
   .phone-chassis {
-    max-width: 344px;
+    height: 100%;
+    max-height: 66dvh;
+    width: auto;
+    max-width: min(86vw, 336px);
+    aspect-ratio: 412 / 915;
+    padding: 8px;
+    border-radius: 25px;
+  }
+
+  .phone-viewport {
+    height: 100%;
+    border-radius: 18px;
+  }
+
+  .callout-deck {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    gap: 0.7rem;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    padding: 0.25rem 8vw 0.15rem;
+    scrollbar-width: none;
+    position: relative;
+    z-index: 16;
+  }
+
+  .callout-deck::-webkit-scrollbar {
+    display: none;
+  }
+
+  .callout-column {
+    display: contents;
+  }
+
+  .callout-card {
+    flex: 0 0 84vw;
+    max-width: 390px;
+    scroll-snap-align: center;
+    scroll-snap-stop: always;
+    padding: 0.72rem 0.9rem;
+  }
+
+  .callout-heading {
+    font-size: 0.92rem;
+    margin-bottom: 0.24rem;
+  }
+
+  .callout-copy {
+    font-size: 0.82rem;
+    line-height: 1.42;
   }
 }
 
-@media (max-width: 640px) {
-  .phone-showcase {
-    padding: 1.25rem 1rem;
+@media (max-width: 768px) {
+  .fs-crt-input,
+  .fs-find-input,
+  .hs-input,
+  .hs-textarea {
+    font-size: 16px;
+  }
+
+  .fs-remote-drawer {
+    right: 12px;
+    bottom: 14px;
+    width: min(292px, calc(100vw - 24px));
+  }
+}
+
+@media (max-width: 430px) {
+  .fs-back-pod {
+    left: 14px;
+    bottom: 148px;
+    transform: scale(0.88);
+  }
+
+  .fs-tor-orb {
+    left: 6px;
+    bottom: 42px;
+    transform: scale(0.88);
   }
 
   .fs-crt-pod {
-    bottom: 118px;
+    bottom: 112px;
+    transform: translateX(calc(-50% - 2px)) scale(0.88);
+    transform-origin: 50% 100%;
   }
 
   .fs-pgp-pod {
-    bottom: 210px;
-    right: 10px;
+    right: 8px;
+    bottom: 196px;
+    transform: rotate(20deg) scale(0.88);
+    transform-origin: 100% 100%;
   }
 
   .fs-remote-pod {
-    right: 14px;
+    right: 12px;
+    bottom: 14px;
+    transform: rotate(20deg) scale(0.88);
+    transform-origin: 100% 100%;
+  }
+
+  .fs-pods-layer.is-retracted .fs-crt-pod {
+    transform: translateX(calc(-50% - 2px)) translateY(90px) scale(0.88);
+  }
+
+  .fs-swap-hud {
+    bottom: 248px;
   }
 }
